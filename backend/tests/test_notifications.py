@@ -394,7 +394,9 @@ def test_pnl_alerts_fire_once_per_band_and_reset_when_the_position_closes():
     assert pnl_alerts() == [], "구간(±3%) 안에서 오르내리면 조용하다 — 예전처럼 1%p 급변마다 알리지 않는다"
     beat(3.2)
     alerts = pnl_alerts()
-    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +3.20%" and alerts[0]["data"]["direction"] == "up"
+    # 옛 실행기(수수료 반영 값 없음)는 평단 대비 가격 — 제목에 그렇다고 밝힌다.
+    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +3.20%(수수료 전)" and alerts[0]["data"]["direction"] == "up"
+    assert alerts[0]["data"]["fees_included"] is False
     assert alerts[0]["body"].startswith("수익이 +3%를 넘었어요") and alerts[0]["session_id"] == sid
     assert alerts[0]["data"]["band"] == 3.0
     beat(2.8); beat(3.4); beat(4.9)
@@ -418,3 +420,30 @@ def test_pnl_alerts_fire_once_per_band_and_reset_when_the_position_closes():
     view = next(it for it in [*rows.get("active", []), *rows.get("recent", [])] if it["session_id"] == sid)
     assert view["in_position"] is False and view["position_qty"] == 0 and view["entry_price"] == 0
     assert view["final_entry_price"] == 100.0 and view["final_position_qty"] == 3.0 and view["final_unrealized_pct"] == -2.4
+
+
+def test_pnl_alerts_follow_the_runners_fee_inclusive_pnl():
+    """실행기 0.20.13+ 는 수수료 반영 평가손익을 보낸다 — 알림 구간 · 제목도 실행기 화면의 그 숫자로(2026-10-18)."""
+    token, user = _signup()
+    key = _runner_key(token)
+    r = client.post("/api/runner/start", json={"symbol": "LTCUSDT", "macro": {**_MACRO, "symbol": "LTCUSDT"}}, headers=key)
+    assert r.status_code == 200, r.text
+    sid = r.json()["session_id"]
+
+    def beat(gross, net):
+        r = client.post("/api/runner/heartbeat", json={
+            "session_id": sid, "in_position": True, "entry_price": 100.0, "last_price": round(100 * (1 + gross / 100), 2),
+            "position_qty": 3.0, "unrealized_pct": gross, "realized_pnl": 0.0,
+            "unrealized_net": round(3.0 * gross - 0.6, 4), "unrealized_net_pct": net, "realized_net": 0.0,
+        }, headers=key)
+        assert r.status_code == 200, r.text
+
+    def pnl_alerts():
+        return [it for it in _personal(token)["items"] if it["kind"] == "agent" and it["data"].get("event") == "pnl"]
+
+    beat(3.1, 2.9)
+    assert pnl_alerts() == [], "가격은 +3% 를 넘었어도 수수료를 빼면 아직 +2.9% — 실행기 화면도 +2.9%"
+    beat(3.25, 3.05)
+    alerts = pnl_alerts()
+    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +3.05%"
+    assert alerts[0]["data"]["fees_included"] is True and alerts[0]["data"]["pct"] == 3.05

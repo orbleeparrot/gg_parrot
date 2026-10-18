@@ -44,3 +44,78 @@ def test_stopped_session_reports_realized_over_invested():
     user, sid = _session(invested_usdt=50.0, realized_pnl=-2.5, status="stopped", in_position=False)
     view = runner.get_owned_session(user.id, sid)
     assert abs(view["return_pct"] + 5.0) < 1e-9
+
+
+# --- 수수료 반영 손익(실행기 0.20.13+) — 실행기 화면과 웹이 같은 숫자 -------------------------
+# 2026-10-18: KRW-SAND 실행기 '평가손익' +1.23% · 웹 +1.33%. 실행기는 사고팔 때 수수료(업비트 0.05% × 2)를 뺀
+# 값을 보이는데, 서버는 수수료 전(평단 대비 가격)만 받아 같은 이름으로 다른 숫자를 냈다.
+
+def _beat(user, sid, **net):
+    runner.heartbeat(user, sid, {"in_position": True, "position_qty": 1000, "entry_price": 83.0, "last_price": 83.9,
+                                 "unrealized_pct": 1.0843, "realized_pnl": 0.0, **net})
+    return runner.get_owned_session(user.id, sid)
+
+
+def test_heartbeat_keeps_the_runners_fee_inclusive_pnl_and_counts_returns_with_it():
+    user, sid = _session(symbol="KRW-SAND")
+    # 83,900 - 83,000 - 매수 수수료 41.5 - 팔 때 수수료 41.95 = 816.55, 실행기 % 는 투입금(수수료 포함) 83,041.5 기준.
+    view = _beat(user, sid, unrealized_net=816.55, unrealized_net_pct=0.9833, realized_net=0.0)
+    assert view["unrealized_net"] == 816.55 and view["unrealized_net_pct"] == 0.9833 and view["realized_net"] == 0.0
+    assert view["fees_included"] is True
+    assert abs(view["unrealized_usdt"] - 816.55) < 1e-9
+    assert abs(view["return_pct"] - 816.55 / 83_000 * 100) < 1e-3, "총수익률도 수수료 반영 값으로"
+    assert view["unrealized_pct"] == 1.0843, "손절 · 익절까지의 거리용 평단 대비 가격은 그대로"
+
+
+def test_old_runner_without_net_values_falls_back_to_gross_and_says_so():
+    user, sid = _session(symbol="KRW-SAND")
+    view = _beat(user, sid)
+    assert view["unrealized_net_pct"] is None and view["realized_net"] is None
+    assert view["fees_included"] is False
+    assert abs(view["return_pct"] - 1.0843) < 1e-9
+
+
+def test_net_values_are_never_mixed_with_gross_ones():
+    """평가는 수수료 반영인데 실현은 모르면(수수료를 모르는 체결) 둘 다 수수료 전 — 섞으면 어느 쪽 숫자도 아니다."""
+    user, sid = _session(symbol="KRW-SAND")
+    view = _beat(user, sid, unrealized_net=816.55, unrealized_net_pct=0.9833, realized_net=None)
+    assert view["fees_included"] is False
+    assert abs(view["return_pct"] - 1.0843) < 1e-9
+    # 진입 수수료를 몰라 평가손익을 못 낸 경우(null)도 마찬가지
+    view = _beat(user, sid, unrealized_net=None, unrealized_net_pct=None, realized_net=12.0)
+    assert view["fees_included"] is False
+
+
+def test_flat_session_counts_realized_net_over_invested():
+    user, sid = _session(symbol="KRW-SAND", invested_usdt=83_000.0)
+    runner.heartbeat(user, sid, {"in_position": False, "position_qty": 0, "entry_price": 0, "last_price": 84.0,
+                                 "unrealized_pct": 0.0, "realized_pnl": 1_000.0,
+                                 "unrealized_net": 0.0, "unrealized_net_pct": 0.0, "realized_net": 917.0})
+    view = runner.get_owned_session(user.id, sid)
+    assert view["fees_included"] is True
+    assert abs(view["return_pct"] - 917.0 / 83_000 * 100) < 1e-3
+    assert abs(view["final_return_pct"] - 917.0 / 83_000 * 100) < 1e-3
+
+
+def test_stop_report_keeps_the_last_fee_inclusive_position_and_realized():
+    user, sid = _session(symbol="KRW-SAND")
+    _beat(user, sid, unrealized_net=816.55, unrealized_net_pct=0.9833, realized_net=0.0)
+    runner.mark_stopped(user, sid, "stopped", "청산 완료 후 종료", snapshot={
+        "in_position": False, "position_qty": 0, "entry_price": 0, "last_price": 83.9, "unrealized_pct": 0.0,
+        "realized_pnl": 900.0, "realized_net": 816.55, "unrealized_net": 0.0, "unrealized_net_pct": 0.0})
+    view = runner.get_owned_session(user.id, sid)
+    assert view["final_unrealized_net_pct"] == 0.9833 and view["final_unrealized_net"] == 816.55
+    assert view["final_unrealized_pct"] == 1.0843
+    assert view["realized_net"] == 816.55 and view["realized_pnl"] == 900.0
+    with get_session() as db:
+        assert runner.realized_pnl_text(db.get(RunSession, sid)) == "+817 KRW"
+
+
+def test_stop_report_from_an_old_runner_leaves_net_values_unknown():
+    user, sid = _session(symbol="KRW-SAND")
+    _beat(user, sid)
+    runner.mark_stopped(user, sid, "stopped", "청산 완료 후 종료", snapshot={
+        "in_position": False, "position_qty": 0, "entry_price": 0, "last_price": 83.9, "realized_pnl": 900.0})
+    view = runner.get_owned_session(user.id, sid)
+    assert view["final_unrealized_net_pct"] is None and view["realized_net"] is None
+    assert view["fees_included"] is False and abs(view["final_return_pct"] - 900.0 / 83_000 * 100) < 1e-3

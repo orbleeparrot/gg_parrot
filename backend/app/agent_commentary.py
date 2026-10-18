@@ -247,7 +247,8 @@ def session_facts(row: RunSession) -> dict:
         "last_hb_ms": _iso_ms(row.last_heartbeat_at) or 0, "last_price": float(row.last_price or 0.0),
         "in_position": bool(row.in_position), "entry_price": float(row.entry_price or 0.0),
         "position_qty": float(row.position_qty or 0.0), "unrealized_pct": float(row.unrealized_pct or 0.0),
-        "realized_pnl": float(row.realized_pnl or 0.0), "note": row.note or "", "stopping": row.stop_mode in {"stop_only", "close_and_stop"},
+        "realized_pnl": float(row.realized_pnl or 0.0), "realized_net": getattr(row, "realized_net", None),
+        "note": row.note or "", "stopping": row.stop_mode in {"stop_only", "close_and_stop"},
         "position_uncertain": bool(getattr(row, "position_uncertain", False)),
         "boot_grace_until_ms": _PROCESS_STARTED_MS + BOOT_GRACE_MS,
     }
@@ -904,7 +905,9 @@ def _say_end(facts: dict, now_ms: int) -> dict:
         subs.append(_sub(note[:120]))
     if facts["in_position"]:
         subs.append(_sub(" · 거래소에서 포지션을 확인해 주세요", "포지션 보유 중"))
-    realized = facts["realized_pnl"]
+    # 실행기 화면의 '실현손익'과 같은 수수료 반영 값 — 옛 실행기면 수수료 전 값.
+    net = facts.get("realized_net")
+    realized = float(net) if net is not None else facts["realized_pnl"]
     return _say("end", "end", facts.get("stopped_ms") or now_ms, "critical" if error else "calm",
                 "실행이 오류로 끝났어요" if error else "실행이 끝났어요", tone="risk" if error else "",
                 nums=f"누적 실현 {money_text(realized, symbol, signed=True)}",

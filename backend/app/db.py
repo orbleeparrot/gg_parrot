@@ -519,6 +519,14 @@ class RunSession(SQLModel, table=True):
     final_entry_price: float = 0.0
     final_position_qty: float = 0.0
     final_unrealized_pct: float = 0.0
+    # 수수료 반영 손익(실행기 0.20.13+) — 실행기 화면의 '평가손익 · 지금 정리하면'·'실현손익'과 같은 값.
+    # 위 realized_pnl·unrealized_pct 는 수수료 전(평단 대비 가격)이라 업비트에서도 0.1%p 씩 달랐다(2026-10-18).
+    # 실행기가 모르면(수수료를 모르는 체결) · 보내지 않으면(옛 실행기) None — 웹은 수수료 전 값을 '수수료 전'이라 밝혀 보인다.
+    unrealized_net: Optional[float] = None
+    unrealized_net_pct: Optional[float] = None
+    realized_net: Optional[float] = None
+    final_unrealized_net: Optional[float] = None
+    final_unrealized_net_pct: Optional[float] = None
     # 서버 신호(v8+) 세션의 드라이버 상태(JSON, paper.state_json 과 같은 형식). 체크포인트마다 갱신,
     # 재기동 복구에 쓴다. 구버전 실행기 세션은 빈 문자열.
     state_json: str = ""
@@ -1330,6 +1338,11 @@ def _migrate() -> None:
             "final_entry_price": "ALTER TABLE runsession ADD COLUMN final_entry_price REAL DEFAULT 0",
             "final_position_qty": "ALTER TABLE runsession ADD COLUMN final_position_qty REAL DEFAULT 0",
             "final_unrealized_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_pct REAL DEFAULT 0",
+            "unrealized_net": "ALTER TABLE runsession ADD COLUMN unrealized_net REAL",
+            "unrealized_net_pct": "ALTER TABLE runsession ADD COLUMN unrealized_net_pct REAL",
+            "realized_net": "ALTER TABLE runsession ADD COLUMN realized_net REAL",
+            "final_unrealized_net": "ALTER TABLE runsession ADD COLUMN final_unrealized_net REAL",
+            "final_unrealized_net_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_net_pct REAL",
             "state_json": "ALTER TABLE runsession ADD COLUMN state_json TEXT DEFAULT ''",
             "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
             "pinned": "ALTER TABLE runsession ADD COLUMN pinned BOOLEAN DEFAULT FALSE",
@@ -1535,6 +1548,11 @@ _PG_ADDED_COLUMNS = {
         "final_entry_price": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_position_qty": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_unrealized_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
+        "unrealized_net": "DOUBLE PRECISION",
+        "unrealized_net_pct": "DOUBLE PRECISION",
+        "realized_net": "DOUBLE PRECISION",
+        "final_unrealized_net": "DOUBLE PRECISION",
+        "final_unrealized_net_pct": "DOUBLE PRECISION",
         "state_json": "TEXT DEFAULT ''",
         "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "pinned": "BOOLEAN NOT NULL DEFAULT FALSE",

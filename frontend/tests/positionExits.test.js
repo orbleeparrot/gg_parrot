@@ -80,13 +80,44 @@ test("평가손익 금액 · 부호 표기 · 실행 시간", () => {
 });
 
 // 투입금 대비 총수익률 (2026-09-22): 구동 중 큰 숫자는 서버 return_pct, 진입가 대비 %는 보조로.
-import { headlineReturn } from "../src/lib/positionExits.js";
+import { headlineReturn, positionPnl, realizedPnl } from "../src/lib/positionExits.js";
 
-test("headlineReturn prefers total return over invested capital and keeps entry-based pct as a note", () => {
-  const live = headlineReturn({ in_position: true, unrealized_pct: 1.2, realized_pnl: 0.4, invested_usdt: 40, return_pct: 2.2 });
-  assert.deepEqual(live, { pct: 2.2, label: "투입금 대비 총수익률", note: "진입가 대비 +1.20% · 투입 40 USDT" });
-  const flat = headlineReturn({ in_position: false, unrealized_pct: 0, realized_pnl: 0.8, invested_usdt: 40, return_pct: 2.0 });
-  assert.deepEqual(flat, { pct: 2.0, label: "투입금 대비 총수익률", note: "실현 +0.80 USDT · 투입 40 USDT" });
+// 2026-10-18: KRW-SAND 실행기 '평가손익' +1.23% · 웹 +1.33% — 웹이 수수료 전(평단 대비 가격)을 같은 이름으로 보였다.
+const SAND = { symbol: "KRW-SAND", in_position: true, entry_price: 82.8, last_price: 83.9, position_qty: 1000, position_side: "long",
+  unrealized_pct: 1.33, unrealized_net: 1018.6, unrealized_net_pct: 1.23, realized_pnl: 0, realized_net: 0,
+  invested_usdt: 82_800, return_pct: 1.2302, fees_included: true };
+
+test("positionPnl uses the runner's fee-inclusive pnl and says so when it has to fall back", () => {
+  assert.deepEqual(positionPnl(SAND), { pct: 1.23, money: 1018.6, feesIncluded: true });
+  const old = { ...SAND, unrealized_net: null, unrealized_net_pct: null };
+  const fallback = positionPnl(old);
+  assert.equal(fallback.pct, 1.33);
+  assert.equal(fallback.feesIncluded, false);
+  assert.ok(Math.abs(fallback.money - 1100) < 1e-6, "수수료 전은 가격 차이 × 수량");
+  const finalPos = { final_unrealized_pct: 3.42, final_unrealized_net_pct: 3.31, final_unrealized_net: 31.2 };
+  assert.deepEqual(positionPnl(finalPos, { final: true }), { pct: 3.31, money: 31.2, feesIncluded: true });
+  assert.deepEqual(positionPnl({ final_unrealized_pct: 3.42 }, { final: true }), { pct: 3.42, money: null, feesIncluded: false });
+  assert.deepEqual(realizedPnl({ realized_pnl: 1000, realized_net: 917 }), { money: 917, feesIncluded: true });
+  assert.deepEqual(realizedPnl({ realized_pnl: 1000 }), { money: 1000, feesIncluded: false });
+});
+
+test("headlineReturn shows the runner's pnl while holding and total return when flat", () => {
+  assert.deepEqual(headlineReturn(SAND), {
+    pct: 1.23, money: 1018.6, label: "평가손익", note: "평단 대비 +1.33% · 투입 82,800 KRW",
+  });
+  // 앞서 실현한 손익이 있으면 총수익률은 따로 다른 숫자라 보조 문구에 함께
+  const second = headlineReturn({ ...SAND, realized_net: 412, return_pct: 1.73 });
+  assert.equal(second.pct, 1.23);
+  assert.equal(second.note, "평단 대비 +1.33% · 총수익률 +1.73% · 투입 82,800 KRW");
+  // 옛 실행기 — 평단 대비 가격을 '수수료 전'이라고 밝힘
+  const old = headlineReturn({ ...SAND, unrealized_net: null, unrealized_net_pct: null, realized_net: null, fees_included: false });
+  assert.equal(old.pct, 1.33);
+  assert.equal(old.label, "평가손익 · 수수료 전");
+  const flat = headlineReturn({ in_position: false, unrealized_pct: 0, realized_pnl: 0.8, realized_net: 0.7, invested_usdt: 40, return_pct: 1.75, fees_included: true });
+  assert.deepEqual(flat, { pct: 1.75, money: null, label: "투입금 대비 총수익률", note: "실현 +0.70 USDT · 투입 40 USDT" });
+  const flatOld = headlineReturn({ in_position: false, unrealized_pct: 0, realized_pnl: 0.8, invested_usdt: 40, return_pct: 2.0, fees_included: false });
+  assert.deepEqual(flatOld, { pct: 2.0, money: null, label: "투입금 대비 총수익률 · 수수료 전", note: "실현 +0.80 USDT · 투입 40 USDT" });
   const legacy = headlineReturn({ in_position: true, unrealized_pct: 1.2, realized_pnl: 0, invested_usdt: 0, return_pct: null });
-  assert.deepEqual(legacy, { pct: 1.2, label: "평가손익", note: "" });
+  assert.equal(legacy.pct, 1.2);
+  assert.equal(legacy.note, "평단 대비 +1.20%");
 });

@@ -812,6 +812,8 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         _track_invested(row)
         row.realized_pnl = float(snapshot.get("realized_pnl", 0.0) or 0.0)
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
+        for field in NET_PNL_FIELDS:
+            setattr(row, field, _net_value(snapshot.get(field)))
         # 실행기는 매 heartbeat 에 note(기본 "") 를 보낸다 — 서버가 쓴 마커(청산 실패·루프 오류)는 덮어쓰지 않는다.
         # 마커는 runner_engine 이 청산 성공 ack 등에서 스스로 지운다.
         if "note" in snapshot and row.note not in _SERVER_NOTE_MARKERS:
@@ -850,6 +852,32 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
     return result
 
 
+NET_PNL_FIELDS = ("unrealized_net", "unrealized_net_pct", "realized_net")
+
+
+def _net_value(value) -> Optional[float]:
+    """실행기가 보낸 수수료 반영 값 — 보내지 않았거나(옛 실행기) 모르거나(null) 숫자가 아니면 None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def position_pnl_pct(row: RunSession) -> tuple[float, bool]:
+    """알림 · 웹이 '평가손익'으로 보이는 % 와 수수료 반영 여부.
+
+    실행기(0.20.13+)가 보낸 수수료 반영 값(실행기 화면의 '평가손익 · 지금 정리하면')이 있으면 그 값,
+    없으면 평단 대비 가격(수수료 전). 손절 · 익절까지의 거리는 늘 평단 대비 가격(unrealized_pct)으로 잰다.
+    """
+    net = getattr(row, "unrealized_net_pct", None)
+    if net is not None:
+        return float(net), True
+    return float(row.unrealized_pct or 0.0), False
+
+
 def _pnl_band(pct: float) -> float:
     hit = max((band for band in PNL_ALERT_BANDS if abs(pct) >= band), default=0.0)
     return math.copysign(hit, pct) if hit else 0.0
@@ -866,7 +894,7 @@ def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_posi
         return False
     if not previously_in_position:
         row.pnl_alert_pct = 0.0
-    pct = float(row.unrealized_pct or 0.0)
+    pct, fees_included = position_pnl_pct(row)
     band = _pnl_band(pct)
     last = float(row.pnl_alert_pct or 0.0)
     if not band or (last and (band > 0) == (last > 0) and abs(band) <= abs(last)):
@@ -876,9 +904,9 @@ def _alert_pnl_move(db, row: RunSession, previous_pct: float, previously_in_posi
     body = (f"{'수익' if band > 0 else '손실'}이 {band:+g}%를 넘었어요 · "
             f"평단 {row.entry_price:,.{quote_digits}f} → 현재가 {row.last_price:,.{quote_digits}f}")
     notifications_mod.notify(
-        db, row.user_id, "agent", f"{row.symbol} 평가손익 {pct:+.2f}%", body, "/agents",
+        db, row.user_id, "agent", f"{row.symbol} 평가손익 {pct:+.2f}%{'' if fees_included else '(수수료 전)'}", body, "/agents",
         session_id=row.id,
-        data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "band": band,
+        data={"event": "pnl", "symbol": row.symbol, "pct": round(pct, 2), "band": band, "fees_included": fees_included,
               "direction": direction, "entry_price": row.entry_price, "last_price": row.last_price},
         activity={"event_name": "session.pnl_observed", "details": {"observed_value": pct, "threshold": band,
                   "price": row.last_price, "verification": "server_observation_not_exchange_fill"}},
@@ -908,6 +936,8 @@ def mark_stopped(
             row.final_entry_price = row.entry_price
             row.final_position_qty = row.position_qty
             row.final_unrealized_pct = row.unrealized_pct
+            row.final_unrealized_net = row.unrealized_net
+            row.final_unrealized_net_pct = row.unrealized_net_pct
         row.status = "error" if status == "error" else "stopped"
         if note:
             row.note = str(note)[:200]
@@ -923,6 +953,9 @@ def mark_stopped(
                     if not math.isfinite(value):
                         raise HTTPException(status_code=422, detail="최종 포지션 값이 올바르지 않아요.")
                     setattr(row, field, value)
+            for field in NET_PNL_FIELDS:
+                if field in snapshot:
+                    setattr(row, field, _net_value(snapshot[field]))
             _track_invested(row)  # 종료 직전 스냅샷의 포지션도 투입금에 반영
         elif status == "stopped" and note in {"청산 완료 후 종료", "포지션 없이 종료"}:
             # v5 explicitly reports these outcomes without a final snapshot.
@@ -942,7 +975,7 @@ def mark_stopped(
                 "operation_id": f"session:{row.id}",
                 "details": {"status": row.status, "reason": row.note,
                             "in_position": row.in_position, "position_uncertain": row.position_uncertain,
-                            "realized_pnl": row.realized_pnl, "ack_source": "runner",
+                            "realized_pnl": row.realized_pnl, "realized_net": row.realized_net, "ack_source": "runner",
                             "verification": "runner_reported_not_exchange_verified"},
                 "message": ("오류 종료" if row.status == "error" else "종료")
                 + (f" · {row.note}" if row.note else "")
@@ -957,7 +990,7 @@ def mark_stopped(
                 + (" · 포지션 보유 중" if row.in_position else ""),
                 "/agents", session_id=row.id,
                 data={"event": "error" if row.status == "error" else "stop",
-                      "symbol": row.symbol, "realized_pnl": row.realized_pnl},
+                      "symbol": row.symbol, "realized_pnl": row.realized_pnl, "realized_net": row.realized_net},
                 activity={"event_key": f"session:{row.id}:stopped", "event_name": "session.stopped",
                           "occurred_at": row.stopped_at},
             )
@@ -1219,19 +1252,34 @@ def _is_connected(row: RunSession) -> bool:
     return (datetime.now(timezone.utc) - hb).total_seconds() <= STALE_SECONDS
 
 
+def _pnl_parts(row: RunSession) -> tuple[float, float, bool]:
+    """(누적 실현손익, 지금 포지션의 평가손익 금액, 수수료 반영 여부).
+
+    실행기(0.20.13+)가 수수료 반영 값을 다 보냈으면 그 값 — 실행기 화면의 숫자와 같다. 하나라도 모르면
+    둘 다 수수료 전(실현은 realized_pnl, 평가는 진입가 대비 %를 보유 금액에 곱해 되계산) — 섞으면 어느 쪽 숫자도 아니다.
+    """
+    holding = bool(row.in_position) and float(row.position_qty or 0.0) > 0 and float(row.entry_price or 0.0) > 0
+    realized_net = getattr(row, "realized_net", None)
+    unrealized_net = getattr(row, "unrealized_net", None) if holding else 0.0
+    if realized_net is not None and unrealized_net is not None:
+        return float(realized_net), float(unrealized_net), True
+    held = float(row.position_qty or 0.0) * float(row.entry_price or 0.0) if holding else 0.0
+    return float(row.realized_pnl or 0.0), held * float(row.unrealized_pct or 0.0) / 100.0, False
+
+
 def session_returns(row: RunSession) -> dict:
-    """투입금 대비 수익률. 평가손익(USDT)은 실행기가 보낸 진입가 대비 %를 현재 보유 금액에 곱해 되계산한다."""
+    """투입금 대비 수익률과 평가손익 금액 — 수수료 반영 값이 있으면 그 값(_pnl_parts)."""
     invested = float(getattr(row, "invested_usdt", 0.0) or 0.0)
-    held = float(row.position_qty or 0.0) * float(row.entry_price or 0.0) if row.in_position else 0.0
-    unrealized = held * float(row.unrealized_pct or 0.0) / 100.0
-    realized = float(row.realized_pnl or 0.0)
+    realized, unrealized, fees_included = _pnl_parts(row)
     if invested <= 0:
-        return {"invested_usdt": 0.0, "unrealized_usdt": unrealized, "total_return_pct": None, "final_return_pct": None}
+        return {"invested_usdt": 0.0, "unrealized_usdt": unrealized, "total_return_pct": None, "final_return_pct": None,
+                "fees_included": fees_included}
     return {
         "invested_usdt": round(invested, 4),
         "unrealized_usdt": round(unrealized, 4),
         "total_return_pct": round((realized + unrealized) / invested * 100.0, 4),
         "final_return_pct": round(realized / invested * 100.0, 4),
+        "fees_included": fees_included,
     }
 
 
@@ -1242,14 +1290,13 @@ def _track_invested(row: RunSession) -> None:
 
 
 def total_return_pct(row: RunSession) -> Optional[float]:
-    """투입금 대비 총수익률(%) = (누적 실현손익 + 지금 포지션의 평가손익) / 투입금. 투입금이 0 이면 None."""
+    """투입금 대비 총수익률(%) = (누적 실현손익 + 지금 포지션의 평가손익) / 투입금. 투입금이 0 이면 None.
+    수수료 반영 값이 있으면 그 값으로 센다(_pnl_parts)."""
     invested = float(getattr(row, "invested_usdt", 0.0) or 0.0)
     if invested <= 0:
         return None
-    unrealized = 0.0
-    if row.in_position and row.position_qty > 0 and row.entry_price > 0:
-        unrealized = row.position_qty * row.entry_price * float(row.unrealized_pct or 0.0) / 100.0
-    return round((float(row.realized_pnl or 0.0) + unrealized) / invested * 100.0, 4)
+    realized, unrealized, _ = _pnl_parts(row)
+    return round((realized + unrealized) / invested * 100.0, 4)
 
 
 def realized_pnl_text(row: RunSession) -> str:
@@ -1261,10 +1308,16 @@ def realized_pnl_text(row: RunSession) -> str:
     RunSession 에는 거래소 칸이 없다. 국내 매크로는 스키마(validate_symbol)가 ``KRW-*`` 형식만
     허용하고 바이낸스 종목은 그 접두사를 쓸 수 없으므로, 종목명으로 가르는 것이 거래소로
     가르는 것과 같다. 자릿수는 화면과 맞춘다(원화 0자리 · USDT 2자리).
+
+    2026-10-18: 실행기(0.20.13+)가 수수료 반영 실현손익을 보내면 그 값(실행기 화면과 같다), 아니면 수수료 전
+    값에 그렇다고 붙인다.
     """
+    net = getattr(row, "realized_net", None)
+    value = float(net) if net is not None else float(row.realized_pnl or 0.0)
+    note = "(수수료 전)" if net is None and value else ""
     if str(row.symbol or "").upper().startswith("KRW-"):
-        return f"{row.realized_pnl:+,.0f} KRW"
-    return f"{row.realized_pnl:+.2f} USDT"
+        return f"{value:+,.0f} KRW{note}"
+    return f"{value:+.2f} USDT{note}"
 
 
 def _strategy_levels(row: RunSession, macro: Optional[dict]) -> dict:
@@ -1362,6 +1415,12 @@ def _session_view(row: RunSession) -> dict:
         "final_entry_price": getattr(row, "final_entry_price", 0.0) or 0.0,
         "final_position_qty": getattr(row, "final_position_qty", 0.0) or 0.0,
         "final_unrealized_pct": getattr(row, "final_unrealized_pct", 0.0) or 0.0,
+        # 수수료 반영 손익(실행기 0.20.13+, 모르면 null) — 웹 '평가손익' · '실현손익'은 이 값을 먼저 쓴다.
+        "unrealized_net": getattr(row, "unrealized_net", None),
+        "unrealized_net_pct": getattr(row, "unrealized_net_pct", None),
+        "realized_net": getattr(row, "realized_net", None),
+        "final_unrealized_net": getattr(row, "final_unrealized_net", None),
+        "final_unrealized_net_pct": getattr(row, "final_unrealized_net_pct", None),
         **session_returns(row),
         "note": row.note,
         "started_at": row.started_at,

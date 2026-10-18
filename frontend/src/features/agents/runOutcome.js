@@ -1,5 +1,5 @@
 // 실행 종료 결과와 종료 확인 문구 — 화면 컴포넌트가 아니라 순수 함수로 두어 테스트한다.
-import { exitRules } from "../../lib/positionExits.js";
+import { GROSS_TAG, exitRules, positionPnl, realizedPnl } from "../../lib/positionExits.js";
 import { formatQuoteAmount, practiceModeLabel } from "../../lib/exchanges.js";
 import { quoteOf } from "../../lib/format.js";
 
@@ -124,9 +124,14 @@ export function describeRunOutcome(session) {
 
   // 표정은 화면의 큰 숫자를 따른다: 청산했으면 총 실현손익, 포지션이 남았으면 그 평가손익의 부호.
   // 손실이면 critical(화남), 이익이면 signal(환호), 0이면 calm. 포지션이 남은 채 이익·0이면 warning(남은 포지션 경고).
+  // 손익은 실행기 화면과 같은 수수료 반영 값, 옛 실행기면 수수료 전 값에 그렇다고 붙인다(positionPnl · realizedPnl).
   const finalQty = Number(s.final_position_qty) || 0;
-  const resultPct = keptPosition ? Number(s.unrealized_pct) || 0 : finalQty > 0 ? Number(s.final_unrealized_pct) || 0 : null;
-  const resultSign = keptPosition ? Math.sign(Number(s.unrealized_pct) || 0) : Math.sign(Number(s.realized_pnl) || 0);
+  const resultPnl = keptPosition ? positionPnl(s) : finalQty > 0 ? positionPnl(s, { final: true }) : null;
+  const resultPct = resultPnl ? resultPnl.pct : null;
+  const realized = realizedPnl(s);
+  const realizedTag = !realized.feesIncluded && realized.money !== 0 ? ` · ${GROSS_TAG}` : "";
+  const returnTag = s.fees_included === false ? ` · ${GROSS_TAG}` : "";
+  const resultSign = keptPosition ? Math.sign(resultPct || 0) : Math.sign(realized.money);
   if (!stopping && !uncertain && !failed) {
     if (resultSign < 0) avatar = "critical";
     else if (keptPosition) avatar = "warning";
@@ -147,7 +152,7 @@ export function describeRunOutcome(session) {
     { label: "투입금", value: hasReturn ? formatQuoteAmount(s.invested_usdt, s.symbol) : "—", numeric: true },
     { label: `평단${positionLabel}`, value: positionEntry > 0 ? PRICE.format(positionEntry) : "—", numeric: true },
     { label: `수량${positionLabel}`, value: positionQty > 0 ? `${QTY.format(positionQty)} ${baseAsset(s.symbol)}`.trim() : "—", numeric: true },
-    { label: "마지막 평가손익", value: resultPct !== null ? formatSignedPct(resultPct) : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
+    { label: "마지막 평가손익", value: resultPnl ? `${formatSignedPct(resultPct)}${resultPnl.feesIncluded ? "" : ` · ${GROSS_TAG}`}` : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
     { label: "종목·환경", value: `${s.symbol || "—"} · ${marketLabel(s)} · ${s.testnet ? practiceModeLabel(s.symbol, s.mode) : "메인넷(실거래)"}` },
     { label: "종료 방식", value: stopModeLabel(s.stop_mode) },
     { label: "마지막 가격", value: Number(s.last_price) ? PRICE.format(Number(s.last_price)) : "—", numeric: true },
@@ -158,7 +163,7 @@ export function describeRunOutcome(session) {
       label: "남은 포지션",
       numeric: !!s.in_position,
       value: s.in_position
-        ? `${QTY.format(Number(s.position_qty) || 0)} @ ${PRICE.format(Number(s.entry_price) || 0)} · 평가 ${formatSignedPct(s.unrealized_pct)}`
+        ? `${QTY.format(Number(s.position_qty) || 0)} @ ${PRICE.format(Number(s.entry_price) || 0)} · 평가 ${formatSignedPct(positionPnl(s).pct)}${positionPnl(s).feesIncluded ? "" : ` · ${GROSS_TAG}`}`
         : "없음",
     },
   ];
@@ -173,14 +178,16 @@ export function describeRunOutcome(session) {
     // 큰 숫자는 '투입금 대비 총수익률'(서버 return_pct) — 시작 자금이 아니라 실제로 들어간 최대 금액이 분모.
     // 투입금이 없는 옛 세션은 예전처럼 실현손익 절대값만.
     pnl: stopping
-      ? { value: null, text: "집계 중", tone: "flat", sub: "" }
+      ? { value: null, text: "집계 중", tone: "flat", sub: "", label: "총 실현손익" }
       : hasReturn
         ? { value: Number(s.return_pct), text: formatSignedPct(s.return_pct), tone: toneOf(s.return_pct),
-            sub: `${formatSignedMoney(s.realized_pnl, s.symbol)} · 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}`,
+            label: `투입금 대비 총수익률${returnTag}`,
+            sub: `${formatSignedMoney(realized.money, s.symbol)} · 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}`,
             // 결과 화면이 번 돈 · 투입금을 따로 크게 그린다.
-            money: formatSignedMoney(s.realized_pnl, s.symbol), moneyTone: toneOf(s.realized_pnl),
+            money: formatSignedMoney(realized.money, s.symbol), moneyTone: toneOf(realized.money),
             invested: formatQuoteAmount(s.invested_usdt, s.symbol) }
-        : { value: Number(s.realized_pnl) || 0, text: formatSignedMoney(s.realized_pnl, s.symbol), tone: toneOf(s.realized_pnl), sub: "" },
+        : { value: realized.money, text: formatSignedMoney(realized.money, s.symbol), tone: toneOf(realized.money), sub: "",
+            label: `총 실현손익${realizedTag}` },
     rows,
   };
 }

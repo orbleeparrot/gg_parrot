@@ -51,13 +51,16 @@ function Highlight({ text, query }) {
 }
 
 // 검색 — 코인 이름·심볼·별칭. 고르면 칸에 코인 이름이 남고 오른쪽 X 가 메인 순위로 돌려보낸다.
-function CoinSearch({ exchange, lists, selectedLabel, keyword, onPickCoin, onPickKeyword, onClear, onQueryChange }) {
+// 고른 코인은 검색칸(168px)에 로고 + 티커로 — 긴 한글 이름('엑스알피(리플) XRP')은 잘리므로 전체 이름은 title · aria 로,
+// 화면에는 아래 코인 정보가 크게 보여 준다. 검색어도 길면 잘리고 title 로 전체를 보여 준다(2026-10-18).
+function CoinSearch({ exchange, lists, selectedCoin, keyword, onPickCoin, onPickKeyword, onClear, onQueryChange }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const boxRef = useRef(null);
   const listId = useId();
-  const showing = selectedLabel || keyword || "";
+  const showing = selectedCoin?.base || keyword || "";
+  const fullLabel = selectedCoin ? `${coinName(selectedCoin)} ${selectedCoin.base}` : keyword ? `‘${keyword}’ 들어간 글` : "";
   useEffect(() => { setQuery(""); setOpen(false); }, [showing]);
   useEffect(() => {
     const close = (event) => { if (!boxRef.current?.contains(event.target)) setOpen(false); };
@@ -82,10 +85,12 @@ function CoinSearch({ exchange, lists, selectedLabel, keyword, onPickCoin, onPic
   const meta = EXCHANGE_META[exchange];
   return (
     <div className="ct-search" ref={boxRef}>
-      <label className="ct-search-field">
-        <MagnifyingGlassIcon size={18} aria-hidden="true" />
+      <label className="ct-search-field" title={!query && !open && fullLabel ? fullLabel : undefined}>
+        {selectedCoin && !query && !open ? <CoinIcon symbol={selectedCoin.symbol} size={18} alt="" />
+          : <MagnifyingGlassIcon size={18} aria-hidden="true" />}
         <input type="search" value={value} autoComplete="off" spellCheck={false} role="combobox"
-          aria-expanded={open && !!trimmed} aria-controls={listId} aria-autocomplete="list" aria-label="코인 검색"
+          aria-expanded={open && !!trimmed} aria-controls={listId} aria-autocomplete="list"
+          aria-label={fullLabel ? `코인 검색 — 지금: ${fullLabel}` : "코인 검색"}
           placeholder={`${EXCHANGE_META[exchange].name}에서 검색`}
           onFocus={(event) => { if (showing && !query) event.target.select(); }}
           onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(0); onQueryChange?.(event.target.value); }}
@@ -97,7 +102,7 @@ function CoinSearch({ exchange, lists, selectedLabel, keyword, onPickCoin, onPic
           }} />
         {value ? (
           <button type="button" className="ct-clear" onClick={() => { setQuery(""); setOpen(false); onClear(); }}
-            aria-label={selectedLabel ? "선택한 코인 닫고 코인 순위로 돌아가기" : "검색어 지우기"}>
+            aria-label={selectedCoin ? "선택한 코인 닫고 코인 순위로 돌아가기" : "검색어 지우기"}>
             <XIcon size={14} aria-hidden="true" />
           </button>
         ) : null}
@@ -364,7 +369,7 @@ export default function CoinBoard({
           )}
         </div>
         <CoinSearch exchange={exchange} lists={lists} keyword={keyword}
-          selectedLabel={selected ? `${coinName(selected)} ${selected.base}` : ""}
+          selectedCoin={selected}
           onPickCoin={onCoin} onPickKeyword={onKeyword} onClear={onClearSelection} onQueryChange={onSearchActive} />
       </header>
       {!coin ? (

@@ -80,7 +80,8 @@
 .ct-ex-static img { width: 18px; height: 18px; border-radius: 5px; }
 
 .ct-search { position: relative; flex: 0 0 168px; min-width: 0; max-width: 168px; }
-.ct-search-field { box-sizing: border-box; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 12px; border: 1.5px solid rgb(var(--c-field-line)); border-radius: 10px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); }
+.ct-search-field { box-sizing: border-box; display: flex; min-width: 0; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 12px; border: 1.5px solid rgb(var(--c-field-line)); border-radius: 10px; background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500)); }
+.ct-search-field .coin-icon { flex: none; }
 .ct-search-field:focus-within { background: rgb(var(--c-slate-50)); border-color: rgb(var(--c-brand-line)); }
 .ct-search-field input { flex: 1; min-width: 0; height: 100%; border: 0; outline: 0; background: transparent; color: rgb(var(--c-slate-900)); font: inherit; font-size: 14px; font-weight: 600; text-overflow: ellipsis; }
 .ct-search-field input::placeholder { color: rgb(var(--c-slate-500)); }
@@ -266,6 +267,8 @@
   .ct-rank-scroll { margin-left: calc(-1 * var(--rk-pad)); margin-right: calc(-1 * (var(--rk-pad) + 14px)); }
   /* 고른 코인 정보는 줄 안쪽 여백이 없으니 넓힌 만큼 안쪽을 채워 필터 끝에 맞춘다. 아래 앞뒤 순위표는 위 순위표처럼. */
   .ct-rank-scroll > .ct-coin { padding-inline: var(--rk-pad); }
+  /* 소식 목록도 스크롤 막대 자리(14px)만큼 오른쪽으로 넓혀 글 · 코인 칩 끝이 위 탭 끝과 맞게(막대는 오른쪽 여백에 뜬다) */
+  .ct-side-list { margin-right: -14px; }
   .ct-coin .ct-near .ct-table { margin-inline: calc(-1 * var(--rk-pad)); }
 }
 @container ct-page (max-width: 767px) {

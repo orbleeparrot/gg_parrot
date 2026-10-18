@@ -221,6 +221,10 @@ def main():
                         assert (head["sort"]["top"], head["sort"]["h"]) == (head["tabs"]["top"], head["tabs"]["h"]) and head["sort"]["h"] == 44, head
                         assert head["turn"] == head["sort"]["right"], head
                         assert head["divider"] - head["turn"] == head["sideContent"] - head["divider"] - 1, head  # 1 = 세로선
+                        # 소식 글 · 코인 칩 오른쪽 끝도 위 탭 끝과 같다
+                        feed = page.evaluate("""() => [Math.round(document.querySelector('.ct-side-tabs').getBoundingClientRect().right),
+                          Math.round(document.querySelector('.ct-post').getBoundingClientRect().right)]""")
+                        assert feed[0] == feed[1], feed
                     page.locator(".ct-sort .seg-item").nth(1).click()
                     expect(page.locator(".ct-row")).to_have_count(20)
                     row = page.evaluate("""() => { const e = document.querySelector('.ct-row'), b = e.querySelector('.ct-row-name b');
@@ -240,7 +244,11 @@ def main():
                     page.keyboard.press("Enter")
                     expect(page.locator(".ct-coin h3")).to_contain_text("엑스알피(리플)")
                     expect(page.locator("#ct-side-title")).to_contain_text("엑스알피(리플) 소식")
-                    expect(page.locator(".ct-search input")).to_have_value("엑스알피(리플) XRP")
+                    # 고른 코인은 검색칸(168px)에 로고 + 티커 — 전체 이름은 title · aria(잘리지 않게, 2026-10-18).
+                    expect(page.locator(".ct-search input")).to_have_value("XRP")
+                    expect(page.locator(".ct-search-field")).to_have_attribute("title", "엑스알피(리플) XRP")
+                    expect(page.locator(".ct-search input")).to_have_attribute("aria-label", "코인 검색 — 지금: 엑스알피(리플) XRP")
+                    assert page.evaluate("(() => { const i = document.querySelector('.ct-search input'); return i.scrollWidth <= i.clientWidth; })()")
                     # 커뮤니티 글이 없는 코인은 뉴스 탭이 먼저 열린다.
                     expect(page.get_by_role("tab", name="국내 뉴스", exact=False)).to_have_attribute("aria-selected", "true")
                     expect(page.get_by_text("해외 대비")).to_be_visible()

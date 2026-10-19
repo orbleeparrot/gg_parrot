@@ -4,11 +4,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { build } from "esbuild";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
-import { renderComponent, textOf } from "./renderHelper.js";
+import { readFileSync } from "node:fs";
+import { importBundle, renderComponent, textOf } from "./renderHelper.js";
 
 const SOURCE = readFileSync(new URL("../src/pages/StudioPro.jsx", import.meta.url), "utf8");
 
@@ -22,9 +19,7 @@ async function loadPage(path) {
     banner: { js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);' },
     logLevel: "silent",
   });
-  const file = join(mkdtempSync(join(tmpdir(), "ggp-page-")), "bundle.mjs");
-  writeFileSync(file, result.outputFiles[0].text);
-  return import(pathToFileURL(file).href);
+  return importBundle(result.outputFiles[0].text, "ggp-page-");
 }
 
 test("프로 빌더에 코치 패널이 있다", async () => {

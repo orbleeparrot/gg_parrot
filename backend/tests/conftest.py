@@ -7,6 +7,7 @@
 값을 박아 두면 SQLite 로 고정된다. SQLite 도 개발용 app.db 가 아니라 세션마다 새
 임시 파일을 써서, 이전 실행이 남긴 행이 순서 의존 실패를 만들지 않게 한다.
 """
+import atexit
 import os
 import tempfile
 import pytest
@@ -17,6 +18,18 @@ for _key in ("DATABASE_URL", "DATABASE_SESSION_URL", "OPENAI_API_KEY", "GEMINI_A
 _TMP = tempfile.NamedTemporaryFile(prefix="ggp-test-", suffix=".db", delete=False)
 _TMP.close()
 os.environ["SQLITE_PATH"] = _TMP.name
+
+
+def _remove_test_db(path: str = _TMP.name) -> None:
+    # 2026-10-19: 지우지 않아 pytest 한 번마다 DB 파일이 /tmp 에 남았다(932개 · 1.8GB).
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        try:
+            os.remove(path + suffix)
+        except OSError:
+            pass
+
+
+atexit.register(_remove_test_db)
 os.environ["POSITION_NEWS_EMBEDDED_ENABLED"] = "false"
 # 뉴스의 거래소 이름 보강은 업비트 · 빗썸 종목 목록을 부른다 — 테스트는 네트워크를 쓰지 않는다(켜는 테스트는 목록을 가짜로 바꾼다).
 os.environ["NEWS_EXCHANGE_NAMES_ENABLED"] = "false"

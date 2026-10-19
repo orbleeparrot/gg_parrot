@@ -19,3 +19,8 @@ export function nextMarqueeExchange(current, lists, order = MARQUEE_EXCHANGES) {
 export function shownMarqueeExchange(current, lists, order = MARQUEE_EXCHANGES) {
   return lists?.[current]?.length ? current : nextMarqueeExchange(current, lists, order);
 }
+
+// 띠 왼쪽 거래소 목록에 보여 줄 거래소 — 목록을 받은 거래소만(빈 거래소를 고르면 다음 거래소가 떠서 헷갈린다).
+export function marqueeChoices(lists, order = MARQUEE_EXCHANGES) {
+  return order.filter((name) => lists?.[name]?.length);
+}

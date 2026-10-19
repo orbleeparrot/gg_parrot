@@ -1164,16 +1164,6 @@ def admin_client_errors(
     return client_errors.report(db, days)
 
 
-@app.get("/api/admin/pilot")
-def admin_pilot(
-    admin: User = Depends(auth_mod.require_admin),
-    db: Session = Depends(request_session),
-) -> dict:
-    """관리자 대시보드 — 파일럿 테스터 실전 매크로 성과(계정별 합계 · 세션별 손익, 15초 캐시)."""
-    from . import pilot_report
-    return pilot_report.report(db)
-
-
 @app.get("/api/admin/news")
 def admin_news(
     admin: User = Depends(auth_mod.require_admin),

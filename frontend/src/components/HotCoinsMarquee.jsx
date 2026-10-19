@@ -1,14 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fmtPrice } from "../lib/format.js";
 import useHotCoins from "../hooks/useHotCoins.js";
+import SelectMenu from "./SelectMenu.jsx";
 import { EXCHANGE_META, formatPrice } from "../features/coinTrends/trendsFormat.js";
 import {
-  MARQUEE_EXCHANGES, MARQUEE_HOLD_MS, MARQUEE_STILL_MS, nextMarqueeExchange, shownMarqueeExchange,
+  MARQUEE_EXCHANGES, MARQUEE_HOLD_MS, MARQUEE_STILL_MS, marqueeChoices, nextMarqueeExchange, shownMarqueeExchange,
 } from "../lib/marqueeRotation.js";
 
 // 하단 '오늘의 경주마' 띠 — 업비트 → 빗썸 → 바이낸스를 차례로 돌린다. 한 거래소의 TOP10 이 한 바퀴 다 지나가면
 // 5초 뒤 다음 거래소로 넘어간다(마우스를 올려 멈춘 동안은 넘기지 않는다). 국내는 코인동향 경주마와 같은 목록(원화).
+// 왼쪽 칸의 거래소를 누르면 위로 목록이 열리고, 고르면 그 거래소부터 다시 차례로 돈다(기억하지 않음, 2026-10-19 시안 B).
 const LOGO_SRC = { upbit: "/exchanges/upbit.png", bithumb: "/exchanges/bithumb.png", binance: "/exchanges/binance.svg" };
 
 const priceText = (coin, krw) => (krw ? `${formatPrice(coin.last_price, "KRW")}원` : `$${fmtPrice(coin.last_price)}`);
@@ -75,6 +77,19 @@ export default function HotCoinsMarquee() {
     pausedRef.current = false;
     if (waitingRef.current) advance();
   };
+  // 고른 거래소로 바로 넘어가 처음부터 한 바퀴 — 기다리던 '다음 거래소'는 버린다.
+  const choose = (name) => {
+    clearTimeout(holdRef.current);
+    holdRef.current = 0;
+    waitingRef.current = false;
+    setCurrent(name);
+  };
+
+  // 목록은 받은 거래소가 바뀔 때만 새로 만든다 — 시세를 다시 받을 때마다 바뀌면 열린 목록의 키보드 위치가 처음으로 돌아간다.
+  const choiceKey = marqueeChoices(lists).join(",");
+  const choices = useMemo(() => (choiceKey ? choiceKey.split(",") : []).map((name) => [name, (
+    <span key={name} className="marquee-ex-option"><img src={LOGO_SRC[name]} alt="" width="16" height="16" />{EXCHANGE_META[name].name}</span>
+  )]), [choiceKey]);
 
   // 띠가 흐르지 않는(움직임 줄이기) 환경은 시간으로 넘긴다.
   useEffect(() => {
@@ -101,9 +116,17 @@ export default function HotCoinsMarquee() {
   return (
     <div className="site-marquee fixed bottom-0 inset-x-0 z-20 border-t border-slate-200 glass pb-[env(safe-area-inset-bottom)]">
       <div className="flex items-center">
-        <div className="shrink-0 px-4 h-11 t-label font-bold text-slate-900 border-r border-slate-200 flex items-center gap-1">
-          <img src={LOGO_SRC[exchange]} alt={EXCHANGE_META[exchange]?.name || ""} title={`${EXCHANGE_META[exchange]?.name || ""} 기준`}
-            width="16" height="16" className="w-4 h-4 rounded-full shrink-0 mr-1" />
+        {/* 거래소를 고르는 동안(목록 위 포함) 마우스가 올라가 있으면 다음 거래소로 넘기지 않는다. */}
+        <div className="shrink-0 pl-2 pr-4 h-11 t-label font-bold text-slate-900 border-r border-slate-200 flex items-center gap-1.5"
+          onMouseEnter={pause} onMouseLeave={resume}>
+          <SelectMenu className="marquee-ex" value={exchange} onChange={choose} label="오늘의 경주마 거래소"
+            options={choices}
+            trigger={(
+              <span className="marquee-ex-option">
+                <img src={LOGO_SRC[exchange]} alt={EXCHANGE_META[exchange]?.name || ""} width="16" height="16" />
+                <span className="hidden sm:inline">{EXCHANGE_META[exchange]?.name}</span>
+              </span>
+            )} />
           <span className="hidden sm:inline">오늘의 경주마</span>
           <span className="sm:hidden">급등</span>
         </div>

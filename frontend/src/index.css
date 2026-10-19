@@ -612,6 +612,15 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; }
 }
 
 /* '오늘의 경주마' marquee — seamless loop of a duplicated track. */
+/* 하단 띠 거래소 고르기 — 공용 SelectMenu 를 띠 높이에 맞춰 납작하게, 띠가 화면 맨 아래라 목록은 위로 연다(2026-10-19 시안 B). */
+.marquee-ex .select-menu-trigger { height: 32px; gap: 6px; padding: 0 10px 0 8px; border: 0; border-radius: 8px; background: transparent; font-size: 14px; }
+.marquee-ex .select-menu-trigger:focus { background: transparent; }
+.marquee-ex .select-menu-trigger:hover, .marquee-ex.is-open .select-menu-trigger { background: rgb(var(--c-slate-200)); }
+.marquee-ex .select-menu-list { top: auto; bottom: calc(100% + 8px); min-width: 180px; }
+.marquee-ex-option { display: inline-flex; align-items: center; gap: 10px; }
+.marquee-ex-option img { flex: none; width: 16px; height: 16px; border-radius: 999px; }
+.marquee-ex .select-menu-trigger .marquee-ex-option { gap: 6px; }
+
 @keyframes ggp-marquee {
   from { transform: translateX(0); }
   to { transform: translateX(-50%); }

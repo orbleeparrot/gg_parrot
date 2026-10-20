@@ -19,7 +19,6 @@ import {
 } from "../lib/memberList.js";
 import { AdminBlock, AdminKpis, AdminScroll, AdminTable, AdminTerms, ErrorBlock, RangePicker, Skeleton, StatusPill, TabNav } from "../components/admin/AdminBlocks.jsx";
 import { MemberActionDialogs, MemberRowActions } from "../components/admin/MemberActions.jsx";
-import PilotReport from "../components/admin/PilotReport.jsx";
 import {
   BarChart, Donut, FunnelChart, HBarChart, HeatCell, Legend, LineChart, SERIES, StackedChart, bucketHours,
 } from "../components/admin/AdminCharts.jsx";
@@ -29,14 +28,12 @@ const TABS = [
   { key: "users", label: "사용자 지표" },
   { key: "signups", label: "가입 · 전환 · 유지" },
   { key: "macros", label: "매크로 지표" },
-  { key: "pilot", label: "파일럿 성과" },
   { key: "news", label: "뉴스 수집 현황" },
   { key: "costs", label: "API 비용" },
   { key: "errors", label: "화면 오류" },
   { key: "members", label: "회원 관리" },
 ];
 const RANGED = new Set(["users", "signups", "macros"]);
-const POLL_MS = { pilot: 15_000 };
 const RANGES = [7, 30, 90];
 const COST_MONTHS = 6;
 // Gemini 용도는 6개인데 계열색은 s1~s5 뿐이라 여섯 번째는 하늘색(s2)의 반투명으로 만든다 — 라이트·다크 어느 쪽에서도
@@ -47,7 +44,6 @@ const FETCHERS = {
   signups: (days, o) => api.adminSignups(days, o),
   macros: (days, o) => api.adminMacros(days, o),
   news: (_days, o) => api.adminNews(o),
-  pilot: (_days, o) => api.adminPilot(o),
   costs: (_days, o) => api.adminCosts(COST_MONTHS, o),
   errors: (_days, o) => api.adminClientErrors(7, o),
   members: (_days, o, query) => api.adminMembers(query || {}, o),
@@ -87,9 +83,7 @@ function useAdminData(tab, days, enabled, query = null, includeInternal = false)
     }
     // query 는 key 에 녹아 있다 — 조회 조건이 바뀌면 key 가 바뀌고, 폴러는 key 로만 다시 선다.
   }, [tab, days, key]); // eslint-disable-line react-hooks/exhaustive-deps
-  // 파일럿 성과는 실행 중인 세션의 평가손익을 지켜보는 화면이라 15초(서버 캐시와 같은 주기)로 받는다.
-  const every = POLL_MS[tab] || 60_000;
-  const refresh = useAdaptivePolling(load, { intervalMs: every, maxIntervalMs: every, enabled, pollKey: key });
+  const refresh = useAdaptivePolling(load, { intervalMs: 60_000, maxIntervalMs: 60_000, enabled, pollKey: key });
   const current = view.key === key
     ? view
     : { data: cacheRef.current.get(key) || null, error: "", loading: !cacheRef.current.has(key) };
@@ -145,7 +139,7 @@ export default function AdminDashboard() {
           {ranged ? <RangePicker value={days} options={RANGES} onChange={setDays} /> : null}
           {data ? (
             <span className={`adm-stamp${stale ? " is-stale" : ""}`} role="status">
-              {stale ? "갱신 실패 · 마지막 값 " : ""}{fmtStamp(data.generated_at, tab === "pilot" ? "15초" : "1분")}
+              {stale ? "갱신 실패 · 마지막 값 " : ""}{fmtStamp(data.generated_at, "1분")}
               {stale ? <button type="button" onClick={refresh}>다시 시도</button> : null}
             </span>
           ) : null}
@@ -167,7 +161,6 @@ export default function AdminDashboard() {
       {data && tab === "users" ? <UsersTab data={data} days={days} /> : null}
       {data && tab === "signups" ? <SignupsTab data={data} days={days} /> : null}
       {data && tab === "macros" ? <MacrosTab data={data} days={days} /> : null}
-      {data && tab === "pilot" ? <PilotReport data={data} /> : null}
       {data && tab === "news" ? <NewsTab data={data} /> : null}
       {data && tab === "costs" ? <CostsTab data={data} /> : null}
       {data && tab === "errors" ? <ErrorsTab data={data} /> : null}

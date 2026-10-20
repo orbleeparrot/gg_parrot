@@ -200,7 +200,7 @@ def main():
                     assert len(subs) == 2 and subs[0] == subs[1], subs
                     marquee = page.locator(".site-marquee")
                     expect(marquee.locator("img")).to_have_attribute("alt", "업비트")
-                    expect(marquee.locator("button").first).to_contain_text("3,512원")
+                    expect(marquee.locator(".ggp-marquee-track button").first).to_contain_text("3,512원")
                     no_overflow(page)
                     two_columns = page.evaluate("getComputedStyle(document.querySelector('.ct-board')).gridTemplateColumns.split(' ').length > 1")
                     if two_columns:
@@ -291,6 +291,22 @@ def main():
                     hot = [call for call in fixture.calls if call.startswith("/api/hot-coins")]
                     assert any("exchange=upbit" in call for call in hot) and any("exchange=bithumb" in call for call in hot), hot
                     assert any("exchange=" not in call for call in hot), hot
+                    # 왼쪽 거래소를 누르면 목록이 위로 열리고(띠가 화면 맨 아래), 고르면 그 거래소로 바로 넘어간다(2026-10-19 시안 B).
+                    # 띠는 767px 이하(휴대폰)에선 원래 숨는다.
+                    if marquee.is_visible():
+                        marquee.get_by_role("combobox", name="오늘의 경주마 거래소").click()
+                        options = marquee.get_by_role("option")
+                        expect(options).to_have_count(3)
+                        expect(options.nth(0)).to_have_attribute("aria-selected", "true")
+                        menu = page.evaluate("""() => { const t = document.querySelector('.marquee-ex .select-menu-trigger').getBoundingClientRect(),
+                            l = document.querySelector('.marquee-ex .select-menu-list').getBoundingClientRect();
+                          return { bottom: Math.round(l.bottom), triggerTop: Math.round(t.top), left: Math.round(l.left), top: Math.round(l.top), right: Math.round(l.right) }; }""")
+                        assert menu["bottom"] <= menu["triggerTop"] and menu["top"] >= 0 and menu["left"] >= 0 and menu["right"] <= width, menu
+                        page.screenshot(path=str(OUTPUT / f"marquee-menu-{width}-{theme}.png"), animations="disabled")
+                        options.nth(2).click()
+                        expect(options).to_have_count(0)
+                        expect(marquee.locator(".select-menu-trigger img")).to_have_attribute("alt", "바이낸스")
+                        expect(marquee.locator(".ggp-marquee-track button").first).to_contain_text("TIA")
                     no_overflow(page)
                     page.screenshot(path=str(OUTPUT / f"global-{width}-{theme}.png"), full_page=True, animations="disabled")
                     checks.append(f"{width}-{theme}")

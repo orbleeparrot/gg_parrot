@@ -220,6 +220,19 @@ def test_서버가_판단하는_세션은_로컬_보고를_받지_않는다(no_d
     _stop(key, sid)
 
 
+def test_화면이_누가_판단했는지_알_수_있다(local_on, no_driver):
+    """숫자가 멈췄을 때 '서버가 계산해 주던 값' 인지 '실행기가 올린 사본' 인지 갈린다."""
+    token = _signup()
+    key = _key(token)
+    local_sid = _start(key, RSI, decides="local").json()["session_id"]
+    server_sid = _start(key, A).json()["session_id"]
+    body = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    seen = {s["session_id"]: s["decides_locally"] for s in body["active"]}
+    assert seen[local_sid] is True and seen[server_sid] is False
+    _stop(key, local_sid)
+    _stop(key, server_sid)
+
+
 # --- 전략 상태 비추기 ---------------------------------------------------------
 def test_실행기가_올린_전략_상태를_비춘다(local_on, no_driver):
     """마이페이지 차트의 가격선이 이걸 읽는다 — 없으면 화면이 멈춘다."""

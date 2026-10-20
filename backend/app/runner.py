@@ -1460,6 +1460,9 @@ def _session_view(row: RunSession) -> dict:
         "runner_version": getattr(row, "runner_version", ""),
         # 실행기에 묶여 있던 판단 엔진 세대. 빈 값은 "판단을 서버에 맡긴 실행기".
         "engine_version": getattr(row, "engine_version", ""),
+        # 이 세션의 매수 · 매도를 누가 판단했는가. True 면 화면의 숫자는 **실행기가 올린 사본**
+        # 이고, 실행기가 멈추면 숫자도 멈춘다(connected · heartbeat_kst 와 함께 읽어야 한다).
+        "decides_locally": bool(getattr(row, "decides_locally", False)),
         "macro_origin": getattr(row, "macro_origin", "") or "",
         "macro_origin_label": macro_signing.ORIGIN_LABELS.get(getattr(row, "macro_origin", "") or "", ""),
         "macro_digest": getattr(row, "macro_digest", "") or "",

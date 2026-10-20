@@ -20,7 +20,7 @@ from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
-from sqlalchemy import BigInteger, delete
+from sqlalchemy import BigInteger, delete, func
 from sqlmodel import Field, SQLModel, select
 
 from . import feed_index
@@ -203,14 +203,20 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
                 finish_work(SCOPE, token, retry_seconds=retry_seconds)
 
 
-def get_exchange_notices(exchange: str, symbol_base: str | None = None, *, limit: int = 20, cursor=None) -> dict:
-    """한 거래소의 공지 한 쪽(최신순). 코인을 고르면 그 코인 티커가 적힌 공지만."""
+def get_exchange_notices(exchange: str, symbol_base: str | None = None, *, q: str = "", limit: int = 20, cursor=None) -> dict:
+    """한 거래소의 코인 공지 한 쪽(최신순). 코인을 고르면 그 코인 티커가 적힌 공지만.
+
+    티커가 없는 공지(점검 · 고객센터 · 회사 홍보)는 소식 칸에 내지 않는다(2026-10-20 시안 B) — 저장은 해 둔다.
+    """
     if exchange != "bithumb":
         return {"items": [], "total": 0, "next_cursor": None,
                 "collection": {"status": "not_configured", "exchange": exchange}}
     now_ms = int(time.time() * 1000)
     notice = ExchangeNotice
-    conditions = [notice.exchange == exchange, notice.published_ms >= now_ms - RETENTION_SECONDS * 1000]
+    conditions = [notice.exchange == exchange, notice.published_ms >= now_ms - RETENTION_SECONDS * 1000,
+                  notice.asset_symbols_json != "[]"]
+    if q.strip():
+        conditions.append(func.lower(notice.title).like(feed_index.like_pattern(q.strip().lower()), escape="\\"))
     if symbol_base:
         conditions.append(feed_index.mentioning(FEED, notice.id, [symbol_base]))
     with get_session() as db:
@@ -218,13 +224,14 @@ def get_exchange_notices(exchange: str, symbol_base: str | None = None, *, limit
         if cursor:
             statement = statement.where(feed_index.before(notice.published_ms, notice.id, tuple(cursor)))
         rows = db.exec(statement.order_by(notice.published_ms.desc(), notice.id.desc()).limit(limit + 1)).all()
+        total = None if cursor else db.exec(select(func.count()).select_from(notice).where(*conditions)).one()
         state = db.get(ExchangeNoticeState, exchange)
     more, rows = len(rows) > limit, rows[:limit]
     items = [{"id": row.id, "exchange": row.exchange, "title": row.title, "url": row.url,
               "categories": json.loads(row.categories_json), "published": row.published,
               "asset_symbols": json.loads(row.asset_symbols_json), "content_type": "official",
               "source": "빗썸 공지", "language": "ko", "region": "kr"} for row in rows]
-    return {"items": items, "next_cursor": feed_index.encode_cursor(rows[-1].published_ms, rows[-1].id) if more else None,
+    return {"items": items, "total": total, "next_cursor": feed_index.encode_cursor(rows[-1].published_ms, rows[-1].id) if more else None,
             "collection": {"status": state.status if state else "pending", "exchange": exchange,
                            "last_success_ms": state.last_success_ms if state else 0}}
 

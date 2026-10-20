@@ -816,7 +816,7 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
     notices = {"items":[], "collection":{"status":"not_configured"}, "message":"공식 공지는 별도 소스 연결 전입니다."}
     if "notices" in wanted and region == "kr":
         try:
-            notices = exchange_notices.get_exchange_notices(exchange, selected, limit=min(limit, 50), cursor=position)
+            notices = exchange_notices.get_exchange_notices(exchange, selected, q=q, limit=min(limit, 50), cursor=position)
         except Exception:
             notices = {"items":[], "collection":{"status":"error"}, "message":"저장된 공지를 확인하지 못했어요."}
     if "rankings" not in wanted:

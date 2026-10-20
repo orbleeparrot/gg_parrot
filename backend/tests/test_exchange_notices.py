@@ -87,11 +87,15 @@ def test_fetch_follows_only_the_documented_redirect_to_the_notice_server(monkeyp
 def test_collect_stores_links_and_pages_newest_first(monkeypatch):
     monkeypatch.setattr(notices, "fetch_bithumb", lambda: SAMPLE)
     assert notices.collect_once(now_ms=NOW)["status"] == "ready"
-    page = notices.get_exchange_notices("bithumb", limit=2)
-    assert [item["title"][:5] for item in page["items"]] == ["콘크리트(", "셀레스티아"]
+    # 티커 없는 공지(고객센터 점검)는 저장만 하고 소식 칸엔 내지 않는다(시안 B).
+    page = notices.get_exchange_notices("bithumb", limit=1)
+    assert [item["title"][:5] for item in page["items"]] == ["콘크리트("] and page["total"] == 2
     assert page["collection"]["status"] == "ready" and page["next_cursor"]
-    rest = notices.get_exchange_notices("bithumb", limit=2, cursor=feed_index.decode_cursor(page["next_cursor"]))
-    assert [item["id"] for item in rest["items"]] == ["bithumb:1655273"] and rest["next_cursor"] is None
+    rest = notices.get_exchange_notices("bithumb", limit=1, cursor=feed_index.decode_cursor(page["next_cursor"]))
+    assert [item["id"] for item in rest["items"]] == ["bithumb:1655275"] and rest["next_cursor"] is None and rest["total"] is None
+    with database.get_session() as db:
+        assert db.get(notices.ExchangeNotice, "bithumb:1655273") is not None
+    assert [item["id"] for item in notices.get_exchange_notices("bithumb", q="입출금")["items"]] == ["bithumb:1655275"]
     assert [item["id"] for item in notices.get_exchange_notices("bithumb", "TIA")["items"]] == ["bithumb:1655275"]
     item = page["items"][0]
     assert item["content_type"] == "official" and item["categories"] == ["마켓 추가"] and item["asset_symbols"] == ["CT"]
@@ -119,7 +123,7 @@ def test_failed_fetch_keeps_stored_notices_and_backs_off(monkeypatch):
     monkeypatch.setattr(notices, "fetch_bithumb", boom)
     assert notices.collect_once(now_ms=NOW)["status"] == "error"
     page = notices.get_exchange_notices("bithumb")
-    assert len(page["items"]) == 3 and page["collection"]["status"] == "error"
+    assert len(page["items"]) == 2 and page["collection"]["status"] == "error"
     with database.get_session() as db:
         lease = db.get(public_news.PublicNewsLease, notices.SCOPE)
     assert lease.next_run_ms >= int(time.time() * 1000) + 100_000  # 60초 × 2
@@ -137,4 +141,4 @@ def test_trends_route_serves_notices_for_bithumb_and_marks_upbit_not_connected(m
     upbit = client.get("/api/trends?region=kr&exchange=upbit&sections=notices").json()
     assert upbit["notices"]["items"] == [] and upbit["notices"]["collection"]["status"] == "not_configured"
     assert client.get("/api/trends?region=kr&sections=rumors").status_code == 422
-    assert json.dumps(data, ensure_ascii=False).count("feed.bithumb.com/notice/") == 3
+    assert json.dumps(data, ensure_ascii=False).count("feed.bithumb.com/notice/") == 2 and data["notices"]["total"] == 2

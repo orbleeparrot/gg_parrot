@@ -507,6 +507,10 @@ class RunSession(SQLModel, table=True):
     pinned: bool = False
     # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
     runner_version: str = ""
+    # 이 세션의 매수 · 매도 판단을 **실행기가 직접** 하는가. True 면 서버는 드라이버를 돌리지
+    # 않고 실행기가 올리는 상태를 비추기만 한다 — 우리 서버가 멈춰도 사용자의 매매 시점이
+    # 밀리지 않게. False 면 지금까지처럼 서버가 판단하고 명령을 내려보낸다.
+    decides_locally: bool = False
     # 그 실행기에 묶여 있던 판단 엔진의 세대(engine.version.ENGINE_VERSION). 판단을 서버에
     # 맡기는 실행기는 보내지 않아 빈 문자열이다. 실행기가 스스로 판단하게 되면, "왜 내 봇만
     # 다른 자리에서 샀나" 를 이 값 없이는 답할 수 없다.
@@ -1416,6 +1420,7 @@ def _migrate() -> None:
     added.setdefault("runsession", {}).update({
         "runner_version": "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''",
         "engine_version": "ALTER TABLE runsession ADD COLUMN engine_version TEXT DEFAULT ''",
+        "decides_locally": "ALTER TABLE runsession ADD COLUMN decides_locally BOOLEAN DEFAULT FALSE",
         # 옛 행은 빈 값으로 남는다 — 그 세션은 testnet 플래그로만 읽는다(모드를 아무도 보내지 않았다).
         "mode": "ALTER TABLE runsession ADD COLUMN mode TEXT DEFAULT ''",
     })
@@ -1547,6 +1552,7 @@ _PG_ADDED_COLUMNS = {
         "user_macro_id": "INTEGER",
         "runner_version": "TEXT DEFAULT ''",
         "engine_version": "TEXT DEFAULT ''",
+        "decides_locally": "BOOLEAN DEFAULT FALSE",
         "mode": "TEXT DEFAULT ''",
         "macro_origin": "TEXT DEFAULT ''",
         "macro_digest": "TEXT DEFAULT ''",

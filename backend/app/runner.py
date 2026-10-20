@@ -299,6 +299,16 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
 DOMESTIC_BUNDLE_DETAIL = "독립 봇 압축파일은 바이낸스 전용이에요. 업비트·빗썸은 매크로 파일(.ggm.json)을 내려받아 매크로 실행기에 넣어 주세요."
 
 
+# 실행기가 스스로 판단하는 길을 서버가 열어 두는가. 꺼 두면 실행기가 요청해도 서버가 판단한다 —
+# 거래 흐름을 바꾸는 전환이라 코드가 다 들어간 뒤에도 운영에서 한 번 더 켜야 한다.
+LOCAL_DECISIONS_ENABLED = os.environ.get("RUNNER_LOCAL_DECISIONS", "").strip().lower() in ("1", "true", "yes")
+
+
+def wants_local_decisions(payload: dict) -> bool:
+    """실행기가 '내가 판단하겠다' 고 말했는가. 서버 스위치가 꺼져 있으면 무엇을 말하든 거짓."""
+    return LOCAL_DECISIONS_ENABLED and str((payload or {}).get("decides") or "").strip().lower() == "local"
+
+
 ENGINE_REQUIRED_DETAIL = (
     "이 매크로는 더 새로운 판단 엔진이 필요해요. 실행기를 업데이트해 주세요."
 )
@@ -661,6 +671,8 @@ def start_session(user: User, payload: dict) -> dict:
     runner_version = str(payload.get("runner_version") or "").strip()[:12]
     # 실행기에 묶여 있는 판단 엔진의 세대. 지금 배포된 실행기는 보내지 않는다(빈 문자열).
     engine_version = str(payload.get("engine_version") or "").strip()[:12]
+    # 실행기가 스스로 판단하는 세션인가 — 그렇다면 서버는 드라이버를 돌리지 않고 비추기만 한다.
+    decides_locally = wants_local_decisions(payload)
     if market not in ("spot", "futures"):
         market = "futures" if (side == "short" or leverage > 1) else "spot"
     # 실행 중인 매크로 원문 — 마이페이지 실시간 차트에 전략 보조지표를 그리는 데 쓴다.
@@ -767,6 +779,7 @@ def start_session(user: User, payload: dict) -> dict:
             last_heartbeat_at=now,
             runner_version=runner_version,
             engine_version=engine_version,
+            decides_locally=decides_locally,
             macro_origin=macro_origin,
             macro_digest=macro_digest,
         )
@@ -804,10 +817,14 @@ def start_session(user: User, payload: dict) -> dict:
             "macro_origin": macro_origin,
             "macro_origin_label": macro_signing.ORIGIN_LABELS.get(macro_origin, macro_origin),
             "macro_digest": macro_digest,
+            # 이 세션의 판단을 누가 하는가. 실행기는 이 값을 보고 로컬 엔진을 켠다 —
+            # 서버가 거절했는데 실행기가 혼자 판단하면 서버 명령과 겹쳐 두 번 산다.
+            "decides": "local" if decides_locally else "server",
         }
     notify_sessions_changed(user.id)
-    if signal_runner:
+    if signal_runner and not decides_locally:
         # v8+: 서버 측 전략 드라이버를 이벤트 루프에 올린다(웜업·구독·틱 루프는 runner_engine 이 맡는다).
+        # 실행기가 스스로 판단하는 세션에는 띄우지 않는다 — 양쪽이 동시에 판단하면 같은 신호로 두 번 산다.
         runner_engine.schedule_start(result["session_id"])
     from .agent_features.position_news.runtime import request_collection
     request_collection()
@@ -860,7 +877,11 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         _alert_pnl_move(db, row, previous_pct, previously_in_position)
         action = row.stop_mode if row.stop_mode in _STOP_MODES else "continue"
         commands: list = []
-        if supports_signals(row.runner_version):
+        if row.decides_locally:
+            # 판단은 실행기가 한다 — 서버는 비추기만. 실행기가 올린 체결과 전략 상태를 기록한다.
+            runner_engine.record_local_fills(db, row, snapshot.pop("local_fills", None))
+            runner_engine.store_local_state(row, snapshot.pop("strategy_state", None))
+        elif supports_signals(row.runner_version):
             # ack 반영 → 만료 → 주문이 안 나간 진입은 서버 전략도 되돌림 → 보낼 명령 → 포지션 유무 대조(경고만).
             now_ms = runner_engine._now_ms()
             commands = runner_engine.exchange_commands(db, row, acks or [], now_ms, previous_qty=previous_qty)

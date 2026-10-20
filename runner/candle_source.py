@@ -230,7 +230,7 @@ class ClosedCandleStream:
     def warmup(self, count: int) -> List[Candle]:
         """지표를 세울 과거 봉. 받은 마지막 봉까지 소비한 것으로 친다."""
         candles = self.source.recent_closed(count)
-        self.last_t = candles[-1].t
+        self.last_t = int(candles[-1][0])
         return candles
 
     def poll(self, lookback: int = 3) -> List[Candle]:
@@ -242,9 +242,9 @@ class ClosedCandleStream:
         """
         candles = self.source.recent_closed(max(1, int(lookback)))
         if self.last_t is None:
-            self.last_t = candles[-1].t
+            self.last_t = int(candles[-1][0])
             return []
-        fresh = [c for c in candles if c.t > self.last_t]
+        fresh = [c for c in candles if int(c[0]) > self.last_t]
         if fresh:
-            self.last_t = fresh[-1].t
+            self.last_t = int(fresh[-1][0])
         return fresh

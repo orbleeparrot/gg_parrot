@@ -528,6 +528,91 @@ def upsert_command(db, row: RunSession, cmd: dict, now_ms: int, *, rollback_stat
     return item, True
 
 
+#: 한 heartbeat 에 받아 주는 로컬 체결 수의 상한. 그리드 급락이 한 틱에 수십 칸을 지나도 넉넉하고,
+#: 망가진(또는 악의적인) 실행기가 한 번에 수천 줄을 밀어 넣는 것은 막는다.
+MAX_LOCAL_FILLS = 60
+
+
+def _report_num(value) -> float:
+    """실행기가 올린 숫자 한 칸. 읽을 수 없으면 0 — 이건 **바깥에서 온 값**이라 믿지 않는다.
+
+    ``_price`` 를 쓰면 None 이나 문자열 하나에 heartbeat 전체가 터지고, 그러면 그 바퀴의
+    체결 보고가 통째로 사라진다. 빠진 체결은 리더보드 · 수익률에서 영영 사라진다.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return float(f"{number:.10g}") if math.isfinite(number) else 0.0
+
+
+def record_local_fills(db, row: RunSession, fills) -> List[RunnerCommand]:
+    """실행기가 **스스로 판단해 낸** 체결을 서버 장부에 남긴다.
+
+    서버가 판단할 때는 명령 행을 먼저 만들고 실행기가 결과를 ack 한다. 실행기가 판단하면
+    둘이 한 번에 온다 — 이미 끝난 일이므로 ``acked``(또는 실패면 ``failed``)로 바로 적는다.
+
+    이 기록이 없으면 리더보드 · 수익률 · 활동 기록이 비어 버린다. 지금은 서버가 명령을 냈으니
+    보고를 못 받아도 '냈던 명령' 은 알지만, 실행기가 판단하면 **이 경로가 유일하다.**
+    """
+    out: List[RunnerCommand] = []
+    if not isinstance(fills, list):
+        return out
+    now_ms = _now_ms()
+    now = _now_iso()
+    for raw in fills[:MAX_LOCAL_FILLS]:
+        if not isinstance(raw, dict):
+            continue
+        action = str(raw.get("action") or "").lower()
+        if action not in ("buy", "sell", "short", "cover"):
+            continue
+        executed = _report_num(raw.get("executed_qty"))
+        ok = bool(raw.get("ok", True)) and executed > 0
+        cmd = RunnerCommand(
+            session_id=row.id, seq=0, action=action,
+            notional_frac=_report_num(raw.get("notional_frac")),
+            qty_frac=_report_num(raw.get("qty_frac")),
+            signal_price=_report_num(raw.get("signal_price")),
+            reason=str(raw.get("reason") or "")[:300],
+            status="acked" if ok else "failed",
+            attempts=1, created_at=now, created_ms=now_ms, expires_ms=now_ms,
+            acked_at=now, executed_qty=executed, fill_price=_report_num(raw.get("fill_price")),
+            error=str(raw.get("error") or "")[:200],
+        )
+        db.add(cmd)
+        out.append(cmd)
+    if out:
+        # seq 는 세션 안에서 이어 붙인다 — 화면이 순서대로 보여 줄 수 있게.
+        last = db.exec(select(RunnerCommand.seq).where(RunnerCommand.session_id == row.id)
+                       .order_by(RunnerCommand.seq.desc()).limit(1)).first() or 0
+        for i, cmd in enumerate(out, start=1):
+            cmd.seq = int(last) + i
+        db.flush()
+    return out
+
+
+#: 실행기가 올리는 전략 상태의 크기 상한(글자). 정상 상태는 1KB 안쪽이다.
+MAX_LOCAL_STATE_CHARS = 20_000
+
+
+def store_local_state(row: RunSession, state) -> bool:
+    """실행기가 올린 전략 상태를 세션에 둔다 — 마이페이지 차트의 가격선이 이걸 읽는다.
+
+    판단이 실행기에 있으므로 이 값은 **사본**이다. 서버가 고쳐 쓰지 않는다. 읽지 못할 모양이면
+    옛 값을 그대로 둔다 — 반쪽 상태로 덮으면 화면이 없는 포지션을 그린다.
+    """
+    if not isinstance(state, dict) or not state:
+        return False
+    try:
+        dumped = json.dumps(state)
+    except (TypeError, ValueError):
+        return False
+    if len(dumped) > MAX_LOCAL_STATE_CHARS:
+        return False
+    row.state_json = dumped
+    return True
+
+
 def insert_command(db, row: RunSession, cmd: dict, now_ms: int) -> RunnerCommand:
     """``upsert_command`` 의 행만 — 중복이면 기존 행이 돌아온다(호출자는 새 행이라고 가정하면 안 된다)."""
     return upsert_command(db, row, cmd, now_ms)[0]

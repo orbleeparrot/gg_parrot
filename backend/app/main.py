@@ -408,6 +408,9 @@ class RunnerStartRequest(BaseModel):
     # 스스로 판단하게 되면 이 값이 매크로가 요구하는 세대보다 낮을 때 세션을 열지 않는다.
     # 지금 실행기는 보내지 않는다(빈 값 = 판단을 서버에 맡기는 실행기 → 검사 생략).
     engine_version: str = ""
+    # 실행기가 "내가 판단하겠다"(local)고 밝히는 칸. 실제로 켤지는 서버가 정한다
+    # (RUNNER_LOCAL_DECISIONS). 옛 실행기는 보내지 않아 빈 값 = 서버가 판단.
+    decides: str = ""
     # 매크로 파일에 동봉된 서명(`_sig`). 실행기 v7+ 가 파일을 열면 그대로 올린다.
     # 서버가 검증해 세션 출처(원본/수정본)를 남긴다. 티켓 경로·옛 실행기는 None.
     macro_sig: Optional[dict] = None
@@ -432,6 +435,11 @@ class RunnerHeartbeatRequest(BaseModel):
     events: list[dict] = []
     # v8: 직전 heartbeat 로 받은 명령의 실행 결과 [{command_id, ok, executed_qty, fill_price, error}]
     acks: list[dict] = []
+    # 판단을 실행기가 하는 세션(decides_locally)만: 그 사이 **스스로 내린** 체결 보고와 전략
+    # 상태 사본. 서버는 이걸로 장부를 적고 화면을 비춘다 — 실행기가 판단하면 이 경로가
+    # 리더보드 · 수익률 · 활동 기록의 유일한 입구다. 다른 세션에서는 무시된다.
+    local_fills: list[dict] = []
+    strategy_state: Optional[dict] = None
 
 
 class RunnerStoppedRequest(BaseModel):

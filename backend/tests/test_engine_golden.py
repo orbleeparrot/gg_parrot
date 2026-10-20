@@ -78,17 +78,59 @@ CASES = {
     "B_band": _macro("B", {"buy_price": 4.0, "sell_price": 4.8}),
     # 적립식은 '며칠마다' 를 세므로 일봉 매크로만 만들 수 있다(서버 스키마가 막는다).
     "C_dca": _macro("C", {"amount_per_buy": 5000.0, "interval_days": 1}, candle_interval="1d"),
+    # 간격이 1 이면 곱셈이 항등이라 '며칠마다' 가 대조되지 않는다.
+    "C_dca_every_2d": _macro(
+        "C", {"amount_per_buy": 5000.0, "interval_days": 2}, candle_interval="1d"
+    ),
+    # 가격대를 벗어나 전부 파는 경우(band exit).
     "D_grid": _macro("D", {"lower_price": 1.0, "upper_price": 4.0, "grid_count": 6}),
+    # 가격대 **안에서** 칸별로 사고파는 경우. 위 D_grid 는 밴드 이탈로만 팔아서 칸별
+    # 매도가 한 번도 대조되지 않았다 — 실제로 변이가 살아남았다.
+    "D_grid_inband": _macro(
+        "D", {"lower_price": 0.8, "upper_price": 5.5, "grid_count": 15}
+    ),
     "E_trailing": _macro("E", {"entry_mode": "dip", "entry_dip": 3,
                                "activation_profit": 4, "trail_percent": 2}),
     "F_rsi": _macro("F", {"rsi_period": 7, "entry_threshold": 30, "exit_threshold": 70}),
     "G_bollinger": _macro("G", {"bb_period": 10, "bb_std": 2.0}),
+    # 수축 필터는 이 봉에서 **모든 진입을 막는다** — 그게 이 경우의 요점이다. 위
+    # G_bollinger(같은 밴드, 필터 없음)가 한 번 사므로 "필터가 실제로 막았다" 가 증명된다.
+    # 이름의 `_blocked` 가 "거래가 없어야 정상" 이라는 표시다.
+    "G_bollinger_squeeze_blocked": _macro(
+        "G", {"bb_period": 10, "bb_std": 2.0, "squeeze_filter": True, "squeeze_lookback": 3}
+    ),
     "H_martingale": _macro("H", {"base_order_size": 8000, "safety_order_size": 6000,
                                  "price_deviation": 3, "safety_order_volume_scale": 1.5,
                                  "max_safety_orders": 3, "take_profit": 4}),
     "I_breakout": _macro("I", {"k": 0.6, "exit_mode": "trailing", "trail_percent": 2.0,
                                "ma_filter_period": 20, "session_start_hour": 9}),
     "J_ma_cross": _macro("J", {"fast_period": 5, "slow_period": 20}),
+    "J_ma_cross_confirm": _macro(
+        "J", {"fast_period": 5, "slow_period": 20, "ma_type": "EMA", "confirm_candles": 3}
+    ),
+    # 연속 확인(confirm_candles > 1)을 쓰는 경우. 나머지가 전부 1 이라 이것이 없으면
+    # "몇 봉 연속이어야 믿는다" 는 셈이 대조되지 않는다 — 실제로 변이가 살아남았다.
+    "F_rsi_confirm": _macro(
+        "F", {"rsi_period": 7, "entry_threshold": 35, "exit_threshold": 65, "confirm_candles": 3}
+    ),
+    # --- 숏 매크로 --------------------------------------------------------
+    # 숏은 조건이 거울처럼 뒤집힌다. 롱만 담으면 그 거울이 한 번도 대조되지 않는다
+    # (실제로 변이가 살아남았다). 숏은 바이낸스 선물에서만 된다.
+    "A_short": _macro(
+        "A", {"take_profit_pct": 4.0}, symbol="BTCUSDT", exchange="binance",
+        quote_currency="USDT", market="futures", position_side="short",
+        risk={"invest_ratio": 1.0, "stop_loss_pct": 6.0},
+    ),
+    "F_rsi_short": _macro(
+        "F", {"rsi_period": 7, "entry_threshold": 30, "exit_threshold": 60, "confirm_candles": 2},
+        symbol="BTCUSDT", exchange="binance", quote_currency="USDT", market="futures",
+        position_side="short",
+    ),
+    "J_ma_cross_short": _macro(
+        "J", {"fast_period": 5, "slow_period": 20, "confirm_candles": 2},
+        symbol="BTCUSDT", exchange="binance", quote_currency="USDT", market="futures",
+        position_side="short",
+    ),
     # SAR 은 롱 → 부분 청산 → 숏 전환이라 숏이 되는 곳에서만 성립한다(국내는 현물 롱 1배뿐).
     "K_sar": _macro(
         "K",
@@ -197,15 +239,48 @@ def test_매크로_설정도_그대로다(golden, name):
     assert json.loads(CASES[name].model_dump_json()) == golden["cases"][name]["macro"]
 
 
-def test_열한_규칙이_모두_실제로_사고판다(golden):
-    """아무것도 안 사는 계약은 아무것도 보장하지 않는다."""
+def test_모든_경우가_실제로_사고판다(golden):
+    """아무것도 안 사는 계약은 아무것도 보장하지 않는다.
+
+    예외는 이름이 ``_blocked`` 로 끝나는 경우뿐이다 — 거래가 **없는 것**이 그 경우의
+    요점이고, 짝이 되는 경우가 거래하는 것을 아래 시험이 따로 못 박는다.
+    """
     counts = {name: len(case["commands"]) for name, case in golden["cases"].items()}
-    empty = [name for name, n in counts.items() if n == 0]
+    empty = [name for name, n in counts.items() if n == 0 and not name.endswith("_blocked")]
     assert not empty, f"이 규칙들은 한 번도 주문을 내지 않았다 — 계약이 공허하다: {empty}"
     assert sum(counts.values()) >= 20, f"거래가 너무 적다: {counts}"
     sells = sum(1 for case in golden["cases"].values()
                 for cmd in case["commands"] if cmd["action"] in ("sell", "cover"))
     assert sells >= 3, "청산 명령이 거의 없다 — 청산 비율 계산이 대조되지 않는다"
+
+
+def test_막는_설정은_실제로_막는다(golden):
+    """필터를 켠 판과 끈 판을 짝으로 둔다 — 대조가 있어야 '막았다' 가 뜻을 갖는다."""
+    blocked = golden["cases"]["G_bollinger_squeeze_blocked"]
+    allowed = golden["cases"]["G_bollinger"]
+    assert blocked["commands"] == [], "수축 필터가 막지 못했다"
+    assert allowed["commands"], "필터 없는 짝이 거래하지 않으면 대조가 공허하다"
+    only_filter = {
+        k: v for k, v in blocked["macro"]["params"].items()
+        if k not in ("squeeze_filter", "squeeze_lookback")
+    }
+    assert only_filter == {
+        k: v for k, v in allowed["macro"]["params"].items()
+        if k not in ("squeeze_filter", "squeeze_lookback")
+    }, "필터 말고 다른 설정이 다르면 무엇이 막았는지 알 수 없다"
+
+
+def test_숏_매크로가_계약에_있다(golden):
+    """숏은 조건이 거울처럼 뒤집힌다 — 롱만 담으면 그 거울이 대조되지 않는다."""
+    shorts = [
+        name for name, case in golden["cases"].items()
+        if case["macro"]["position_side"] == "short"
+    ]
+    assert len(shorts) >= 3, f"숏 경우가 너무 적다: {shorts}"
+    sides = {
+        cmd["action"] for name in shorts for cmd in golden["cases"][name]["commands"]
+    }
+    assert {"short", "cover"} <= sides, f"숏 진입 · 청산이 둘 다 나와야 한다: {sides}"
 
 
 def test_계약이_엔진_세대와_함께_간다(golden):

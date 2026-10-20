@@ -467,6 +467,8 @@ class RunnerLaunchTicketClaimRequest(BaseModel):
     ticket: str
     runner_version: str = ""
     engine_version: str = ""
+    # 실행기가 "내가 판단하겠다"(local)고 밝히는 칸 — 적립식 · SAR 은 그때만 열린다.
+    decides: str = ""
 
 
 # 실행기(v13+)가 웹 가이드에 알리는 연결 도우미 단계. 정해진 값만 받고 다른 칸은 422 —
@@ -2556,7 +2558,10 @@ def runner_launch_ticket_claim(
             headers={"Cache-Control": "no-store"},
         )
     return runner_mod.claim_launch_ticket(
-        req.ticket, runner_version=current, engine_version=req.engine_version.strip()
+        req.ticket,
+        runner_version=current,
+        engine_version=req.engine_version.strip(),
+        decides=req.decides.strip(),
     )
 
 

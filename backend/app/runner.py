@@ -117,11 +117,28 @@ def binance_helper_active() -> bool:
 
 SIGNAL_REQUIRED_DETAIL = "지표형 매크로는 실행기 v8 이상이 필요해요. 실행기를 업데이트해 주세요."
 MACRO_REQUIRED_DETAIL = "실행기 v8 은 매크로 설정을 함께 보내야 해요."
-# 실행기로는 아직 돌릴 수 없는 매크로 유형(모든 실행기 버전). C(적립식)는 서버가 3초 틱을 세어 분할 매수하는
-# 규칙이라 봉·명령 모델과 맞지 않고, K(SAR)는 롱↔숏 전환(flip-to-short)을 실행기가 표현할 수 없다.
-# v7 도 C 를 로컬에서 잘못(무조건 진입) 돌렸으므로 버전과 무관하게 막는다.
-RUNNER_UNSUPPORTED_RULES = frozenset({RuleType.C, RuleType.K})
+# **서버가 판단할 때** 실행기로 돌릴 수 없는 매크로 유형. C(적립식)는 서버가 3초 틱을 세어 분할 매수하는
+# 규칙이라 봉·명령 모델과 맞지 않고, K(SAR)는 롱↔숏 전환(flip-to-short)을 명령으로 표현할 수 없다.
+# v7 도 C 를 로컬에서 잘못(무조건 진입) 돌렸으므로 버전과 무관하게 막았다.
+#
+# **실행기가 스스로 판단하면 둘 다 사라지는 제약이다.** 실행기는 자기 시계로 '며칠마다' 를 세고,
+# 방향 전환도 자기 장부 안에서 한다 — 명령 모델을 거치지 않으므로 표현할 수 없던 것이 없다.
+# 그래서 로컬 판단 세션에서는 막지 않는다(`unsupported_rule` 참고).
+SERVER_DRIVEN_UNSUPPORTED_RULES = frozenset({RuleType.C, RuleType.K})
+# 옛 이름 — 서버가 판단하는 경우의 뜻으로 남긴다.
+RUNNER_UNSUPPORTED_RULES = SERVER_DRIVEN_UNSUPPORTED_RULES
 UNSUPPORTED_RULE_DETAIL = "실행기는 아직 이 매크로 유형(적립식·SAR)을 지원하지 않아요."
+
+
+def unsupported_rule(macro: Macro, decides_locally: bool) -> bool:
+    """이 매크로를 열면 안 되는가.
+
+    실행기가 스스로 판단하는 세션이면 열한 유형을 다 돌린다 — C·K 를 막던 이유가
+    서버 명령 모델에 있었고, 그 모델을 거치지 않기 때문이다.
+    """
+    if decides_locally:
+        return False
+    return macro.rule_type in SERVER_DRIVEN_UNSUPPORTED_RULES
 # 실행기는 macro["symbol"] 하나만 읽는다 — 여러 종목 매크로를 넘기면 첫 종목에 전액이 들어가고,
 # 사용자가 백테스트·모의로 확인한 분산과 실제로 돌아가는 것이 달라진다. 어느 버전으로도 열지 않는다.
 PORTFOLIO_UNSUPPORTED_DETAIL = "실행기는 아직 여러 종목 포트폴리오 매크로를 지원하지 않아요. 종목 하나로 나눠 실행해 주세요."
@@ -516,7 +533,9 @@ def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:
         return
 
 
-def claim_launch_ticket(ticket: str, runner_version: str = "", engine_version: str = "") -> dict:
+def claim_launch_ticket(
+    ticket: str, runner_version: str = "", engine_version: str = "", decides: str = ""
+) -> dict:
     """Atomically consume a launch ticket and return its local-runner payload.
 
     ``runner_version`` 은 최소 버전 검사를 통과한 값이다. 여기서는 매크로 종류를 보고 한 번 더 가른다 —
@@ -554,9 +573,11 @@ def claim_launch_ticket(ticket: str, runner_version: str = "", engine_version: s
             macro = Macro.model_validate_json(macro_row.macro_json)
         except (TypeError, ValueError):
             raise _ticket_error(422, "저장된 매크로 형식이 올바르지 않아요.")
-        if macro.rule_type in RUNNER_UNSUPPORTED_RULES:
-            # 실행기가 못 돌리는 유형은 버전과 무관하게 거절 — 업데이트로 풀리는 문제가 아니므로 버전 게이트(426)보다
-            # 먼저 보고, '거절(업데이트 필요)' 표시도 하지 않고 티켓도 소비하지 않는다(잠금만 푼다).
+        local = wants_local_decisions({"decides": decides})
+        if unsupported_rule(macro, local):
+            # 서버가 판단하는 세션에서 못 돌리는 유형은 버전과 무관하게 거절 — 업데이트로 풀리는 문제가
+            # 아니므로 버전 게이트(426)보다 먼저 보고, '거절(업데이트 필요)' 표시도 하지 않고 티켓도
+            # 소비하지 않는다(잠금만 푼다).
             db.rollback()
             raise _ticket_error(422, UNSUPPORTED_RULE_DETAIL)
         if macro.is_portfolio():
@@ -699,8 +720,9 @@ def start_session(user: User, payload: dict) -> dict:
         raise _ticket_error(426, DOMESTIC_REQUIRED_DETAIL)
     if signal_runner and normalized_macro is None:
         raise HTTPException(status_code=422, detail=MACRO_REQUIRED_DETAIL)
-    if normalized_macro is not None and normalized_macro.rule_type in RUNNER_UNSUPPORTED_RULES:
-        # 적립식(C)·SAR(K)는 어느 실행기 버전으로도 돌리지 않는다(위 주석 참고) — 업데이트 안내(426)보다 먼저 알린다.
+    if normalized_macro is not None and unsupported_rule(normalized_macro, decides_locally):
+        # 적립식(C)·SAR(K)는 **서버가 판단할 때** 돌리지 않는다(위 주석 참고) — 업데이트 안내(426)보다
+        # 먼저 알린다. 실행기가 스스로 판단하면 그 제약이 없으므로 열어 준다.
         raise HTTPException(status_code=422, detail=UNSUPPORTED_RULE_DETAIL)
     if normalized_macro is not None and normalized_macro.is_portfolio():
         # 여러 종목은 어느 실행기 버전으로도 돌리지 않는다(위 상수 주석 참고) — 업데이트 안내(426)보다 먼저 알린다.

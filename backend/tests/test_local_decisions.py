@@ -36,8 +36,11 @@ def no_driver(monkeypatch):
 
 
 def _start(key, macro, *, decides=None, version="20"):
-    body = {"symbol": macro["symbol"], "position_side": "long", "leverage": 1, "market": "spot",
-            "testnet": True, "human_summary": "t", "macro": macro, "runner_version": version}
+    # 거래소 · 시장은 매크로를 따라간다 — 서버가 요청과 매크로가 어긋나면 422 로 막는다.
+    body = {"symbol": macro["symbol"], "exchange": macro.get("exchange", "binance"),
+            "position_side": macro.get("position_side", "long"), "leverage": 1,
+            "market": macro.get("market", "spot"), "testnet": True, "human_summary": "t",
+            "macro": macro, "runner_version": version}
     if decides is not None:
         body["decides"] = decides
     return client.post("/api/runner/start", json=body, headers={"X-Runner-Key": key})
@@ -115,6 +118,64 @@ def test_원격_종료는_그대로_간다(local_on, no_driver):
                 json={"mode": "close_and_stop"}, headers=_auth(token))
     assert _beat(key, sid).json()["action"] == "close_and_stop"
     _stop(key, sid)
+
+
+# --- 적립식 · SAR: 로컬 판단에서만 열린다 -------------------------------------
+DCA = {"symbol": "KRW-BTC", "exchange": "upbit", "quote_currency": "KRW", "rule_type": "C",
+       "position_side": "long", "market": "spot", "leverage": 1, "candle_interval": "1d",
+       "period": {"preset": "3m"},
+       "params": {"amount_per_buy": 5000.0, "interval_days": 1, "initial_capital": 100000},
+       "risk": {"invest_ratio": 1.0}}
+SAR = {"symbol": "BTCUSDT", "exchange": "binance", "rule_type": "K", "position_side": "long",
+       "market": "futures", "leverage": 1, "candle_interval": "1h", "period": {"preset": "3m"},
+       "params": {"drop_trigger_pct": 8, "partial_exit_pct": 50, "flip_to_short": True,
+                  "short_take_profit_pct": 5, "short_stop_loss_pct": 4, "initial_capital": 1000},
+       "risk": {"invest_ratio": 1.0}}
+
+
+@pytest.mark.parametrize("macro", [DCA, SAR], ids=["적립식", "SAR"])
+def test_서버가_판단하면_적립식과_SAR_은_거절된다(no_driver, macro):
+    """막은 이유가 **서버 명령 모델**에 있다 — C 는 3초 틱을 세는 규칙이라 봉·명령 모델과
+    맞지 않고, K 는 롱↔숏 전환을 명령으로 표현할 수 없다."""
+    key = _key(_signup())
+    r = _start(key, macro)
+    assert r.status_code == 422
+    assert r.json()["detail"] == runner_mod.UNSUPPORTED_RULE_DETAIL
+
+
+@pytest.mark.parametrize("macro", [DCA, SAR], ids=["적립식", "SAR"])
+def test_실행기가_판단하면_적립식과_SAR_도_열린다(local_on, no_driver, macro):
+    """실행기는 자기 시계로 날짜를 세고 방향 전환도 자기 장부 안에서 한다 —
+    명령 모델을 거치지 않으므로 표현할 수 없던 것이 없다."""
+    key = _key(_signup())
+    r = _start(key, macro, decides="local")
+    assert r.status_code == 200, r.json()
+    assert r.json()["decides"] == "local"
+    sid = r.json()["session_id"]
+    with get_session() as db:
+        assert db.get(RunSession, sid).decides_locally is True
+    assert no_driver == [], "로컬 판단 세션에 서버 드라이버가 뜨면 안 된다"
+    _stop(key, sid)
+
+
+def test_여러_종목_매크로는_로컬_판단으로도_열리지_않는다(local_on, no_driver):
+    """실행기는 종목 하나만 읽는다 — 로컬 판단이어도 분산이 그대로 사라진다."""
+    key = _key(_signup())
+    r = _start(key, {**A, "symbols": ["BTCUSDT", "ETHUSDT"]}, decides="local")
+    assert r.status_code == 422
+    assert r.json()["detail"] == runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL
+
+
+def test_티켓_청구도_판단_의사를_본다(local_on, no_driver):
+    token = _signup()
+    _, ticket = _ticket(token, DCA)
+    refused = client.post("/api/runner/launch-tickets/claim",
+                          json={"ticket": ticket, "runner_version": "20"})
+    assert refused.status_code == 422, "서버가 판단하면 적립식은 거절"
+    ok = client.post("/api/runner/launch-tickets/claim",
+                     json={"ticket": ticket, "runner_version": "20", "decides": "local"})
+    assert ok.status_code == 200, ok.json()
+    assert ok.json()["macro"]["rule_type"] == "C"
 
 
 # --- 체결 기록 ---------------------------------------------------------------

@@ -1401,14 +1401,36 @@ def realized_pnl_text(row: RunSession) -> str:
     return f"{value:+.2f} USDT{note}"
 
 
+def _local_levels(row: RunSession) -> Optional[dict]:
+    """실행기가 올린 가격선 사본. 로컬 판단 세션에만 있다.
+
+    실행기가 판단하면 **실행기만** 그 선을 안다 — 서버는 봉도 지표도 들고 있지 않다.
+    그래서 계산하지 않고 받아 적은 것을 그대로 비춘다. 모양은 engine.live_levels 의
+    칸을 포함하고(화면이 쓰던 그대로), 규칙별 선이 더 붙는다.
+    """
+    if not getattr(row, "decides_locally", False):
+        return None
+    from .paper import parse_state  # 늦은 import: paper ↔ runner 순환 방지
+    state = parse_state(getattr(row, "state_json", "")) or {}
+    levels = state.get("levels")
+    return levels if isinstance(levels, dict) else None
+
+
 def _strategy_levels(row: RunSession, macro: Optional[dict]) -> dict:
-    """화면이 그릴 가격선 — 체크포인트의 전략 상태에서만 낸다(engine.live_levels 가 한 곳).
+    """화면이 그릴 가격선 — **계산하는 쪽이 하나**여야 한다.
 
     화면이 직접 계산하면 규칙 산수가 두 벌이 된다. 실제로 그 일이 있었다: E 눌림목의
     '진입 목표 -3%' 를 화면이 **현재가** 기준으로 그려 가격을 따라 영원히 내려왔다.
     모르면 전부 None 이다 — 추측해서 그리면 거짓이 된다.
+
+    판단하는 쪽이 그 선도 낸다:
+    * 서버가 판단하면 서버 엔진이(engine.live_levels) — 지금은 E 만 낸다.
+    * 실행기가 판단하면 실행기가 올린 사본을 그대로(열한 방식 전부).
     """
     from engine.live_levels import EMPTY, strategy_levels
+    local = _local_levels(row)
+    if local is not None:
+        return local
     if not macro:
         return dict(EMPTY)
     try:
@@ -1436,7 +1458,7 @@ def _entry_wait_args(row: RunSession, macro: Optional[dict] = None, levels: Opti
     from . import entry_wait
     if not entry_wait.is_waiting(macro):
         return None
-    if levels is None and macro.get("rule_type") == "E":
+    if levels is None and (macro.get("rule_type") == "E" or getattr(row, "decides_locally", False)):
         levels = _strategy_levels(row, macro)
     return dict(
         session_id=row.id, macro=macro, symbol=row.symbol, market=row.market or "spot", side=row.position_side or "long",

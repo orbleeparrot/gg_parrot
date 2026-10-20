@@ -330,6 +330,47 @@ def test_너무_큰_상태는_저장하지_않는다(local_on, no_driver):
     _stop(key, sid)
 
 
+# --- 가격선 비추기 -------------------------------------------------------------
+def test_실행기가_올린_가격선을_화면이_받는다(local_on, no_driver):
+    """실행기가 판단하면 **실행기만** 그 선을 안다 — 서버는 봉도 지표도 안 들고 있다."""
+    token = _signup()
+    key = _key(token)
+    sid = _start(key, RSI, decides="local").json()["session_id"]
+    levels = {"entry_target": 3.012, "exit_target": None, "stop_loss": 2.5,
+              "trail_stop": None, "trail_activation": None, "armed": False,
+              "reference": 2.3632, "band_upper": None, "band_lower": None,
+              "next_buy_ms": None, "indicator": None, "pending": False}
+    _beat(key, sid, strategy_state={"levels": levels, "checkpoint_ms": 7})
+    body = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    mine = next(s for s in body["active"] if s["session_id"] == sid)
+    assert mine["strategy_levels"] == levels
+    _stop(key, sid)
+
+
+def test_서버가_판단하는_세션은_서버_선을_쓴다(no_driver):
+    """로컬 사본이 없는 세션까지 빈칸으로 만들면 안 된다 — 지금 돌고 있는 세션들이다."""
+    token = _signup()
+    key = _key(token)
+    sid = _start(key, A).json()["session_id"]
+    body = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    mine = next(s for s in body["active"] if s["session_id"] == sid)
+    # A 규칙은 서버 엔진이 선을 내지 않는다 — 빈 칸이 오고, 그게 '관심 없음' 의 뜻이다.
+    assert set(mine["strategy_levels"]) >= {"entry_target", "trail_stop", "pending"}
+    _stop(key, sid)
+
+
+def test_이상한_가격선은_비추지_않는다(local_on, no_driver):
+    """실행기가 보낸 것을 그대로 믿되, 모양이 아니면 비추지 않는다."""
+    token = _signup()
+    key = _key(token)
+    sid = _start(key, RSI, decides="local").json()["session_id"]
+    _beat(key, sid, strategy_state={"levels": "엉뚱한 값", "checkpoint_ms": 7})
+    body = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    mine = next(s for s in body["active"] if s["session_id"] == sid)
+    assert isinstance(mine["strategy_levels"], dict)
+    _stop(key, sid)
+
+
 # --- 티켓 경로 ----------------------------------------------------------------
 def test_빠른_실행_티켓도_로컬_판단으로_시작할_수_있다(local_on, no_driver):
     token = _signup()

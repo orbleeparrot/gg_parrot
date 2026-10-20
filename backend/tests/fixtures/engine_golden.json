@@ -727,6 +727,263 @@
     ]
   ],
   "cases": {
+    "A_tp_sl": {
+      "macro": {
+        "macro_id": null,
+        "share_slug": null,
+        "exchange": "bithumb",
+        "quote_currency": "KRW",
+        "symbol": "KRW-AZIT",
+        "symbols": null,
+        "rule_type": "A",
+        "position_side": "long",
+        "candle_interval": "1h",
+        "leverage": 1,
+        "margin_mode": "isolated",
+        "market": "spot",
+        "params": {
+          "initial_capital": 40000.0,
+          "take_profit_pct": 5.0
+        },
+        "risk": {
+          "invest_ratio": 1.0,
+          "stop_loss_pct": null,
+          "daily_max_loss_pct": null,
+          "max_holding_hours": null,
+          "cooldown_minutes": 0.0
+        },
+        "period": {
+          "preset": "3m",
+          "start": null,
+          "end": null
+        },
+        "fees": {
+          "commission_pct": 0.04,
+          "slippage_pct": 0.05,
+          "funding_pct": 0.0
+        },
+        "entry_filter": null,
+        "legs": null,
+        "bundle_risk": null,
+        "created_at": null
+      },
+      "commands": [
+        {
+          "candle_t": 1760140800000,
+          "action": "buy",
+          "notional_frac": 1.0,
+          "qty_frac": 0.0,
+          "signal_price": 3.500082851,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760151600000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 3.819182259,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760151600000,
+          "action": "buy",
+          "notional_frac": 1.090332634,
+          "qty_frac": 0.0,
+          "signal_price": 3.823003352,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760155200000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 4.090509328,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760155200000,
+          "action": "buy",
+          "notional_frac": 1.1657234,
+          "qty_frac": 0.0,
+          "signal_price": 4.094601884,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760166000000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 4.467903058,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760166000000,
+          "action": "buy",
+          "notional_frac": 1.271026264,
+          "qty_frac": 0.0,
+          "signal_price": 4.472373196,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760169600000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 5.072436394,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760169600000,
+          "action": "buy",
+          "notional_frac": 1.440476212,
+          "qty_frac": 0.0,
+          "signal_price": 5.077511368,
+          "reason": "진입"
+        }
+      ],
+      "trade_count": 9,
+      "equity": 12936.00125
+    },
+    "B_band": {
+      "macro": {
+        "macro_id": null,
+        "share_slug": null,
+        "exchange": "bithumb",
+        "quote_currency": "KRW",
+        "symbol": "KRW-AZIT",
+        "symbols": null,
+        "rule_type": "B",
+        "position_side": "long",
+        "candle_interval": "1h",
+        "leverage": 1,
+        "margin_mode": "isolated",
+        "market": "spot",
+        "params": {
+          "initial_capital": 40000.0,
+          "buy_price": 4.0,
+          "sell_price": 4.8
+        },
+        "risk": {
+          "invest_ratio": 1.0,
+          "stop_loss_pct": null,
+          "daily_max_loss_pct": null,
+          "max_holding_hours": null,
+          "cooldown_minutes": 0.0
+        },
+        "period": {
+          "preset": "3m",
+          "start": null,
+          "end": null
+        },
+        "fees": {
+          "commission_pct": 0.04,
+          "slippage_pct": 0.05,
+          "funding_pct": 0.0
+        },
+        "entry_filter": null,
+        "legs": null,
+        "bundle_risk": null,
+        "created_at": null
+      },
+      "commands": [
+        {
+          "candle_t": 1760140800000,
+          "action": "buy",
+          "notional_frac": 1.0,
+          "qty_frac": 0.0,
+          "signal_price": 3.500082851,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760169600000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 5.072436394,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760191200000,
+          "action": "buy",
+          "notional_frac": 1.448253542,
+          "qty_frac": 0.0,
+          "signal_price": 3.975750076,
+          "reason": "진입"
+        }
+      ],
+      "trade_count": 3,
+      "equity": 16616.45027
+    },
+    "C_dca": {
+      "macro": {
+        "macro_id": null,
+        "share_slug": null,
+        "exchange": "bithumb",
+        "quote_currency": "KRW",
+        "symbol": "KRW-AZIT",
+        "symbols": null,
+        "rule_type": "C",
+        "position_side": "long",
+        "candle_interval": "1d",
+        "leverage": 1,
+        "margin_mode": "isolated",
+        "market": "spot",
+        "params": {
+          "initial_capital": 40000.0,
+          "amount_per_buy": 5000.0,
+          "interval_days": 1
+        },
+        "risk": {
+          "invest_ratio": 1.0,
+          "stop_loss_pct": null,
+          "daily_max_loss_pct": null,
+          "max_holding_hours": null,
+          "cooldown_minutes": 0.0
+        },
+        "period": {
+          "preset": "3m",
+          "start": null,
+          "end": null
+        },
+        "fees": {
+          "commission_pct": 0.04,
+          "slippage_pct": 0.05,
+          "funding_pct": 0.0
+        },
+        "entry_filter": null,
+        "legs": null,
+        "bundle_risk": null,
+        "created_at": null
+      },
+      "commands": [
+        {
+          "candle_t": 1760140800000,
+          "action": "buy",
+          "notional_frac": 0.12495,
+          "qty_frac": 0.0,
+          "signal_price": 3.500082851,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760227200000,
+          "action": "buy",
+          "notional_frac": 0.12495,
+          "qty_frac": 0.0,
+          "signal_price": 2.687444289,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760313600000,
+          "action": "buy",
+          "notional_frac": 0.12495,
+          "qty_frac": 0.0,
+          "signal_price": 1.142865151,
+          "reason": "진입"
+        }
+      ],
+      "trade_count": 3,
+      "equity": 33748.63497
+    },
     "D_grid": {
       "macro": {
         "macro_id": null,
@@ -1243,6 +1500,396 @@
       ],
       "trade_count": 8,
       "equity": 43752.5379
+    },
+    "J_ma_cross": {
+      "macro": {
+        "macro_id": null,
+        "share_slug": null,
+        "exchange": "bithumb",
+        "quote_currency": "KRW",
+        "symbol": "KRW-AZIT",
+        "symbols": null,
+        "rule_type": "J",
+        "position_side": "long",
+        "candle_interval": "1h",
+        "leverage": 1,
+        "margin_mode": "isolated",
+        "market": "spot",
+        "params": {
+          "ma_type": "SMA",
+          "fast_period": 5,
+          "slow_period": 20,
+          "entry_signal": "golden_cross",
+          "exit_signal": "dead_cross",
+          "take_profit": null,
+          "confirm_candles": 1,
+          "initial_capital": 40000.0
+        },
+        "risk": {
+          "invest_ratio": 1.0,
+          "stop_loss_pct": null,
+          "daily_max_loss_pct": null,
+          "max_holding_hours": null,
+          "cooldown_minutes": 0.0
+        },
+        "period": {
+          "preset": "3m",
+          "start": null,
+          "end": null
+        },
+        "fees": {
+          "commission_pct": 0.04,
+          "slippage_pct": 0.05,
+          "funding_pct": 0.0
+        },
+        "entry_filter": null,
+        "legs": null,
+        "bundle_risk": null,
+        "created_at": null
+      },
+      "commands": [
+        {
+          "candle_t": 1760140800000,
+          "action": "buy",
+          "notional_frac": 1.0,
+          "qty_frac": 0.0,
+          "signal_price": 3.500082851,
+          "reason": "골든크로스 · 진입"
+        },
+        {
+          "candle_t": 1760198400000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 3.570151688,
+          "reason": "데드크로스 · 청산"
+        }
+      ],
+      "trade_count": 2,
+      "equity": 40768.44744
+    },
+    "K_sar": {
+      "macro": {
+        "macro_id": null,
+        "share_slug": null,
+        "exchange": "binance",
+        "quote_currency": "USDT",
+        "symbol": "BTCUSDT",
+        "symbols": null,
+        "rule_type": "K",
+        "position_side": "long",
+        "candle_interval": "1h",
+        "leverage": 1,
+        "margin_mode": "isolated",
+        "market": "futures",
+        "params": {
+          "long_take_profit_pct": null,
+          "drop_trigger_pct": 8.0,
+          "partial_exit_pct": 50.0,
+          "flip_to_short": true,
+          "short_take_profit_pct": 5.0,
+          "short_stop_loss_pct": 4.0,
+          "reenter_long_after": true,
+          "initial_capital": 40000.0
+        },
+        "risk": {
+          "invest_ratio": 1.0,
+          "stop_loss_pct": null,
+          "daily_max_loss_pct": null,
+          "max_holding_hours": null,
+          "cooldown_minutes": 0.0
+        },
+        "period": {
+          "preset": "3m",
+          "start": null,
+          "end": null
+        },
+        "fees": {
+          "commission_pct": 0.04,
+          "slippage_pct": 0.05,
+          "funding_pct": 0.0
+        },
+        "entry_filter": null,
+        "legs": null,
+        "bundle_risk": null,
+        "created_at": null
+      },
+      "commands": [
+        {
+          "candle_t": 1760140800000,
+          "action": "buy",
+          "notional_frac": 1.0,
+          "qty_frac": 0.0,
+          "signal_price": 3.500082851,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760209200000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 0.5,
+          "signal_price": 3.218466185,
+          "reason": "부분 청산"
+        },
+        {
+          "candle_t": 1760209200000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 3.218466185,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760209200000,
+          "action": "short",
+          "notional_frac": 0.918772184,
+          "qty_frac": 0.0,
+          "signal_price": 3.218466185,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760212800000,
+          "action": "cover",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 3.348878435,
+          "reason": "손절"
+        },
+        {
+          "candle_t": 1760216400000,
+          "action": "buy",
+          "notional_frac": 0.8807936259,
+          "qty_frac": 0.0,
+          "signal_price": 3.284098199,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760220000000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 0.5,
+          "signal_price": 3.019859658,
+          "reason": "부분 청산"
+        },
+        {
+          "candle_t": 1760220000000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 3.019859658,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760220000000,
+          "action": "short",
+          "notional_frac": 0.8092486833,
+          "qty_frac": 0.0,
+          "signal_price": 3.019859658,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760227200000,
+          "action": "cover",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 2.870301108,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760230800000,
+          "action": "buy",
+          "notional_frac": 0.8486953566,
+          "qty_frac": 0.0,
+          "signal_price": 2.686702149,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760241600000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 0.5,
+          "signal_price": 2.470530094,
+          "reason": "부분 청산"
+        },
+        {
+          "candle_t": 1760241600000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 2.470530094,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760241600000,
+          "action": "short",
+          "notional_frac": 0.7797576864,
+          "qty_frac": 0.0,
+          "signal_price": 2.470530094,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760245200000,
+          "action": "cover",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 2.348177091,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760248800000,
+          "action": "buy",
+          "notional_frac": 0.8177668266,
+          "qty_frac": 0.0,
+          "signal_price": 2.248309468,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760256000000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 0.5,
+          "signal_price": 2.067410489,
+          "reason": "부분 청산"
+        },
+        {
+          "candle_t": 1760256000000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 2.067410489,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760256000000,
+          "action": "short",
+          "notional_frac": 0.7513414133,
+          "qty_frac": 0.0,
+          "signal_price": 2.067410489,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760266800000,
+          "action": "cover",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 1.965021984,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760270400000,
+          "action": "buy",
+          "notional_frac": 0.7879654077,
+          "qty_frac": 0.0,
+          "signal_price": 1.752537139,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760284800000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 0.5,
+          "signal_price": 1.611528001,
+          "reason": "부분 청산"
+        },
+        {
+          "candle_t": 1760284800000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 1.611528001,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760284800000,
+          "action": "short",
+          "notional_frac": 0.7239606986,
+          "qty_frac": 0.0,
+          "signal_price": 1.611528001,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760288400000,
+          "action": "cover",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 1.531717077,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760292000000,
+          "action": "buy",
+          "notional_frac": 0.7592500253,
+          "qty_frac": 0.0,
+          "signal_price": 1.466168382,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760299200000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 0.5,
+          "signal_price": 1.348200474,
+          "reason": "부분 청산"
+        },
+        {
+          "candle_t": 1760299200000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 1.348200474,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760299200000,
+          "action": "short",
+          "notional_frac": 0.6975778039,
+          "qty_frac": 0.0,
+          "signal_price": 1.348200474,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760302800000,
+          "action": "cover",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 1.281430845,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760306400000,
+          "action": "buy",
+          "notional_frac": 0.7315811014,
+          "qty_frac": 0.0,
+          "signal_price": 1.271431898,
+          "reason": "진입"
+        },
+        {
+          "candle_t": 1760313600000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 0.5,
+          "signal_price": 1.169132488,
+          "reason": "부분 청산"
+        },
+        {
+          "candle_t": 1760313600000,
+          "action": "sell",
+          "notional_frac": 0.0,
+          "qty_frac": 1.0,
+          "signal_price": 1.169132488,
+          "reason": "청산"
+        },
+        {
+          "candle_t": 1760313600000,
+          "action": "short",
+          "notional_frac": 0.6721563664,
+          "qty_frac": 0.0,
+          "signal_price": 1.169132488,
+          "reason": "진입"
+        }
+      ],
+      "trade_count": 34,
+      "equity": 27499.95242
     }
   }
 }

@@ -32,15 +32,22 @@ T0 = 1_760_000_000_000 // HOUR * HOUR
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "engine_golden.json"
 
 
-def _macro(rule_type, params):
-    return Macro.model_validate({
+def _macro(rule_type, params, **overrides):
+    """계약에 쓰는 매크로 하나. 기본은 빗썸 KRW 현물 · 롱 · 1시간봉.
+
+    ``overrides`` 는 그 규칙이 다른 거래소 · 시장을 요구할 때만 쓴다 —
+    C(적립식)는 날짜를 세므로 일봉, K(SAR)는 숏 전환이라 바이낸스 선물.
+    """
+    body = {
         "symbol": "KRW-AZIT", "exchange": "bithumb", "quote_currency": "KRW",
         "rule_type": rule_type, "position_side": "long", "market": "spot", "leverage": 1,
         "candle_interval": "1h", "period": {"preset": "3m"},
         "params": {"initial_capital": 40000.0, **params},
         "risk": {"invest_ratio": 1.0},
         "fees": {"commission_pct": 0.04, "slippage_pct": 0.05},
-    })
+    }
+    body.update(overrides)
+    return Macro.model_validate(body)
 
 
 def bars(n=90, base=2.0):
@@ -60,8 +67,17 @@ def bars(n=90, base=2.0):
     return out
 
 
-#: 규칙마다 하나씩. 이름은 golden 파일의 키라 바꾸면 계약이 깨진다.
+#: 규칙마다 하나씩 — 실행기가 돌려야 할 **열한 가지 전부**(A~K).
+#: 이름은 golden 파일의 키라 바꾸면 계약이 깨진다.
+#:
+#: 판단 시점이 둘로 갈린다. A · B · C 는 틱 기반(현재가를 볼 때마다 판단)이고 나머지는
+#: 봉 기반(봉이 닫힐 때만 판단)이다. 계약은 둘 다 같은 자리에서 잰다 — 봉을 넣고 그 봉의
+#: 종가로 틱을 돌린다. 서버 실시간도 정확히 그렇게 돈다.
 CASES = {
+    "A_tp_sl": _macro("A", {"take_profit_pct": 5.0}),
+    "B_band": _macro("B", {"buy_price": 4.0, "sell_price": 4.8}),
+    # 적립식은 '며칠마다' 를 세므로 일봉 매크로만 만들 수 있다(서버 스키마가 막는다).
+    "C_dca": _macro("C", {"amount_per_buy": 5000.0, "interval_days": 1}, candle_interval="1d"),
     "D_grid": _macro("D", {"lower_price": 1.0, "upper_price": 4.0, "grid_count": 6}),
     "E_trailing": _macro("E", {"entry_mode": "dip", "entry_dip": 3,
                                "activation_profit": 4, "trail_percent": 2}),
@@ -72,6 +88,14 @@ CASES = {
                                  "max_safety_orders": 3, "take_profit": 4}),
     "I_breakout": _macro("I", {"k": 0.6, "exit_mode": "trailing", "trail_percent": 2.0,
                                "ma_filter_period": 20, "session_start_hour": 9}),
+    "J_ma_cross": _macro("J", {"fast_period": 5, "slow_period": 20}),
+    # SAR 은 롱 → 부분 청산 → 숏 전환이라 숏이 되는 곳에서만 성립한다(국내는 현물 롱 1배뿐).
+    "K_sar": _macro(
+        "K",
+        {"drop_trigger_pct": 8, "partial_exit_pct": 50, "flip_to_short": True,
+         "short_take_profit_pct": 5, "short_stop_loss_pct": 4},
+        symbol="BTCUSDT", exchange="binance", quote_currency="USDT", market="futures",
+    ),
 }
 WARMUP = 40
 
@@ -173,7 +197,7 @@ def test_매크로_설정도_그대로다(golden, name):
     assert json.loads(CASES[name].model_dump_json()) == golden["cases"][name]["macro"]
 
 
-def test_여섯_규칙이_모두_실제로_사고판다(golden):
+def test_열한_규칙이_모두_실제로_사고판다(golden):
     """아무것도 안 사는 계약은 아무것도 보장하지 않는다."""
     counts = {name: len(case["commands"]) for name, case in golden["cases"].items()}
     empty = [name for name, n in counts.items() if n == 0]

@@ -1,7 +1,8 @@
 """매크로 엔진 — 서버와 실행기가 **같은 코드**로 판단하기 위한 공유 패키지.
 
-``app`` 을 거꾸로 참조하지 않는다. 그래야 실행기(PyInstaller 번들)가 이 패키지만
-가져다 쓸 수 있다. 바깥 의존성은 실거래 경로 전체에서 ``pydantic`` 하나뿐이다.
+``app`` 을 거꾸로 참조하지 않는다. 그래야 판단을 읽는 데 DB · 설정 · 웹 프레임워크가
+필요 없고, 다른 구현(실행기는 Rust 다)이 맞춰야 할 계약을 서버 없이 만들 수 있다.
+바깥 의존성은 실거래 판단 경로 전체에서 ``pydantic`` 하나뿐이다.
 
 실거래 경로:  schema · exchanges · leverage · stepper · candles · driver ·
               live_levels · entry_filter · bundle
@@ -9,8 +10,8 @@
               (pandas · numpy 를 쓴다)
 
 아래 이름들을 모듈 맨 위에서 import 하지 않고 ``__getattr__`` 로 미루는 이유가
-바로 그 경계다 — ``import engine.driver`` 한 번에 pandas 가 딸려 오면 실행기
-번들에 수십 MB 가 붙고, PyInstaller 가 필요 없는 서버 코드까지 끌어안는다.
+바로 그 경계다 — ``import engine.driver`` 한 번에 pandas 가 딸려 오면 판단과 분석의
+구분이 사라지고, 판단만 보려는 쪽이 서버 전용 코드까지 끌어안는다.
 """
 from .schema import (
     Fees,

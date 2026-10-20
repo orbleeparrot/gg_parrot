@@ -77,3 +77,14 @@ def isolate_runtime_caches(tmp_path, monkeypatch):
     yield
     cache_runtime.close_cache_runtime()
     cache_runtime.clear_all_caches()
+
+
+def pytest_addoption(parser):
+    """``--regolden`` — 엔진 판단 계약(tests/fixtures/engine_golden.json)을 다시 만든다.
+
+    평소에는 쓰지 않는다. 판단이 **의도적으로** 바뀐 변경에서만 쓰고, 그때는
+    ``engine/version.py`` 의 ENGINE_VERSION 도 함께 올린다 — 안 올리면 옛 실행기가
+    조용히 다른 답을 낸다.
+    """
+    parser.addoption("--regolden", action="store_true",
+                     help="엔진 판단 golden 파일을 다시 만든다")

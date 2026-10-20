@@ -50,7 +50,7 @@ jobs:
 
       - name: Build Windows executable
         working-directory: runner
-        run: pyinstaller --clean --onefile --noconsole --paths ../backend --name ggparrot-runner macro_runner.py
+        run: pyinstaller --clean --onefile --noconsole --name ggparrot-runner macro_runner.py
 
       - name: Write SHA-256 checksum
         shell: pwsh

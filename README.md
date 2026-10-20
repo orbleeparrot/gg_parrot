@@ -46,21 +46,40 @@ cd ../backend && python -m uvicorn app.main:app --port 8000
 
 ## 엔진은 공유 패키지 — `backend/engine/`
 
-매매 판단 코드는 저장소에 **한 벌**만 둔다. 서버(`backend/app/`)와 실행기(`runner/`)가 같은
-모듈을 가져다 쓴다. 두 벌이 되면 백테스트 결과와 실거래가 조용히 갈라지기 때문이다.
+매매 판단 코드는 저장소에 **한 벌**만 둔다. 백테스트 · 서버 실시간 · 실행기가 맞춰야 할
+계약이 전부 여기서 나온다. 두 벌이 되면 백테스트 결과와 실거래가 조용히 갈라진다.
+
+**실행기는 Tauri(Rust) 앱이다** — `orbleeparrot/ggparrot-desktop`, 매매 루프는
+`src-tauri/crates/runner-core`. 파이썬 패키지를 그대로 import 할 수 없으므로, "같은 코드"
+대신 **같은 답**을 계약으로 박는다(`backend/tests/fixtures/engine_golden.json`).
+(`gg_parrot/runner/` 의 파이썬 · Tk 실행기는 옛 경로이고 배포되지 않는다.)
 
 - `engine` 은 `app` 을 **거꾸로 참조하지 않는다.** 서버 전용 코드(DB · 캔들 수급 · API)는
-  `app/` 에 남는다 — 봉 피드가 `app/candle_feed.py` 에 있는 것도 그래서다.
-- **실거래 경로**(`schema` · `exchanges` · `leverage` · `stepper` · `candles` · `driver` ·
-  `live_levels` · `entry_filter` · `bundle`)의 바깥 의존성은 `pydantic` 하나다.
+  `app/` 에 남는다 — 봉 피드가 `app/candle_feed.py` 에 있는 것도 그래서다. 그래야 판단을
+  읽는 데 DB 도 웹 프레임워크도 필요 없고, 계약을 서버 없이 만들 수 있다.
+- **실거래 판단 경로**(`schema` · `exchanges` · `intervals` · `leverage` · `stepper` ·
+  `candles` · `driver` · `live_session` · `live_levels` · `entry_filter` · `bundle` ·
+  `version`)의 바깥 의존성은 `pydantic` 하나다.
 - **서버 전용**(`backtest` · `walkforward` · `portfolio*` · `explain` · `summary` ·
-  `validation`)은 pandas · numpy 를 쓴다. `engine/__init__.py` 가 이 이름들을 지연 import 해서
-  실행기 번들에 딸려 들어가지 않게 한다.
-- 실행기는 `runner/shared_engine.py` 로 집어 온다. 소스에서는 `backend/` 를 import 경로에
-  올리고, PyInstaller 번들에서는 `--paths ../backend` 로 묶인 것을 쓴다.
+  `validation`)은 pandas · numpy 를 쓴다. `engine/__init__.py` 가 이 이름들을 지연 import 해
+  판단 경로와 섞이지 않게 한다.
 
-경계는 시험이 지킨다 — `backend/tests/test_engine_package_boundary.py`,
-`runner/test_shared_engine.py`. 엔진에 서버 코드나 pandas 가 흘러들면 거기서 깨진다.
+경계는 `backend/tests/test_engine_package_boundary.py` 가 지킨다.
+
+### 판단 계약 — `tests/fixtures/engine_golden.json`
+
+엔진이 두 언어로 존재하므로 "같은 코드" 라고 말할 수 없다. 대신 **같은 입력에 같은 답**을
+글로 박아 두고 양쪽을 잰다. 고정된 90개 봉에 여섯 규칙(D · E · F · G · H · I)을 돌려 나온
+주문 명령 · 거래 수 · 끝 자산이 그 계약이다.
+
+- 파이썬: `backend/tests/test_engine_golden.py` 가 지금 엔진이 그 답을 그대로 내는지 본다.
+- Rust: 같은 파일을 읽어 자기 엔진에 같은 봉을 흘려보내고 같은 답이 나오는지 본다.
+
+판단을 **의도적으로** 바꿨다면 `--regolden` 으로 다시 만들고 `ENGINE_VERSION` 도 올린다.
+안 올리면 옛 실행기가 조용히 다른 답을 낸다. 두 값이 어긋나면 시험이 깨진다.
+
+봉은 여섯 규칙이 **전부 실제로 사고팔도록** 일부러 섞어 만들었다 — 아무것도 안 사는 계약은
+아무것도 보장하지 않는다. 그 사실 자체를 보초 시험이 지킨다.
 
 ### 엔진 세대 — `engine/version.py`
 
@@ -89,7 +108,7 @@ cd ../backend && python -m uvicorn app.main:app --port 8000
 | | 서버 판단(지금 기본) | 실행기 판단 |
 |---|---|---|
 | 봉 받기 | 서버가 거래소에서 | **실행기가 거래소에서 직접** |
-| 진입 · 청산 판단 | 서버 드라이버 | **실행기**(`runner/local_engine.py`) |
+| 진입 · 청산 판단 | 서버 드라이버 | **실행기**(Rust, 구현 예정) |
 | 손절 · 일일 손실 · 보유시간 | 실행기 | 실행기 (그대로) |
 | 주문 | 실행기 | 실행기 (그대로, 같은 길) |
 | 전략 상태 · 체결 기록 | 서버가 씀 | 실행기가 올리고 서버는 **비추기만** |
@@ -100,6 +119,10 @@ cd ../backend && python -m uvicorn app.main:app --port 8000
 (`decides: "local"`)고 말하고, 켤지는 서버가 정해 시작 응답(`decides`)으로 알려 준다 —
 양쪽이 동시에 판단하면 같은 신호로 두 번 산다.
 
+실행기 쪽은 **아직 없다** — Tauri(Rust) 앱(`orbleeparrot/ggparrot-desktop`)에 봉 수집과
+판단을 구현해야 켤 수 있다. 서버 쪽은 받을 준비가 끝났다: 로컬 세션에는 드라이버를 띄우지
+않고 명령도 주지 않으며, `local_fills` · `strategy_state` 를 받아 적고 비춘다.
+
 켠 뒤 알아 둘 것:
 
 - **화면은 실행기가 올리는 것만 보여 준다.** 실행기가 멈추면 숫자도 멈춘다. 서버가
@@ -109,8 +132,7 @@ cd ../backend && python -m uvicorn app.main:app --port 8000
   활동 기록의 전부다. 서버가 명령을 내던 때는 '냈던 명령' 이라도 알았지만 이제는 모른다.
 - **어긋나면 실행기가 이긴다.** 실제로 돈이 움직인 쪽이다.
 
-서버와 실행기가 같은 결론을 내는지는 `backend/tests/test_local_engine_parity.py` 가
-지킨다 — 여섯 규칙에 같은 봉을 흘려보내 주문 명령이 글자까지 같은지 본다.
+서버와 실행기가 같은 결론을 내는지는 위 **판단 계약**(`engine_golden.json`)으로 잰다.
 
 ## 주요 가정 (Assumptions) — 백테스트 엔진
 - **봉:** 일봉(1d) 순차 시뮬레이션.

@@ -147,31 +147,7 @@ def test_세대를_안_보내는_실행기는_티켓을_가져간다(monkeypatch
     assert r.status_code == 200
 
 
-# --- 실행기가 실제로 그 값을 보낸다 -----------------------------------------
-def test_실행기가_자기_세대를_싣는다():
-    """서버 쪽만 만들어 두고 실행기가 안 보내면 게이트는 영원히 잠들어 있다."""
-    import sys
-    from pathlib import Path
-
-    runner_dir = Path(__file__).resolve().parents[2] / "runner"
-    sys.path.insert(0, str(runner_dir))
-    try:
-        import macro_runner
-    finally:
-        sys.path.remove(str(runner_dir))
-    assert macro_runner.ENGINE_VERSION == ENGINE_VERSION, "실행기가 다른 엔진을 들고 있다"
-    # 글자 찾기가 아니라 실제로 만들어지는 payload 를 본다 — 다른 자리의 같은 글자에 속지 않게.
-    payload = macro_runner._session_payload(A, testnet=True, mode="mock")
-    assert payload["engine_version"] == str(ENGINE_VERSION), "시작 요청에 세대가 없다"
-    # 티켓 청구에도 실어야 한다 — 웹 빠른 실행은 이 경로로만 들어온다.
-    # 글자 찾기 대신 그 호출의 json= 본문을 구문 트리에서 꺼낸다.
-    import ast
-
-    tree = ast.parse((runner_dir / "macro_runner.py").read_text(encoding="utf-8"))
-    claim_fn = next(n for n in ast.walk(tree)
-                    if isinstance(n, ast.FunctionDef) and n.name == "_claim_protocol_ticket")
-    bodies = [kw.value for call in ast.walk(claim_fn) if isinstance(call, ast.Call)
-              for kw in call.keywords if kw.arg == "json" and isinstance(kw.value, ast.Dict)]
-    assert bodies, "_claim_protocol_ticket 에서 json= 본문을 못 찾았다"
-    keys = {k.value for body in bodies for k in body.keys if isinstance(k, ast.Constant)}
-    assert "engine_version" in keys, f"티켓 청구에 세대가 없다 (보낸 칸: {sorted(keys)})"
+# --- 실행기 쪽 ---------------------------------------------------------------
+# 실행기는 Tauri(Rust) 앱이다(orbleeparrot/ggparrot-desktop). 자기 세대를 실제로 싣는지는
+# 거기서 확인한다 — 여기서 확인할 수 있는 것은 서버가 그 값을 받아 바르게 가린다는 것뿐이다.
+# 실행기가 아직 보내지 않는 동안에는 게이트가 통과시킨다(위 시험들이 그걸 못 박는다).

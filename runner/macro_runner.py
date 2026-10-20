@@ -95,9 +95,6 @@ try:  # package import (tests) / direct script import (PyInstaller build)
         RunnerSingleInstance,
         SingleInstanceError,
     )
-    from .shared_engine import ENGINE_VERSION, Macro
-    from .candle_source import CandleFetchError, CandleSource, ClosedCandleStream
-    from .local_engine import LocalStrategy
 except ImportError:
     from protocol import (
         PROTOCOL_CLAIM_PATH,
@@ -116,11 +113,6 @@ except ImportError:
         RunnerSingleInstance,
         SingleInstanceError,
     )
-    # 판단 엔진은 서버와 공유하는 한 벌이다(backend/engine). 여기서 깨지면 빌드가
-    # 엔진을 안 묶은 것 — 조용히 넘어가면 옛 엔진으로 도는 실행기를 서버가 못 가린다.
-    from shared_engine import ENGINE_VERSION, Macro
-    from candle_source import CandleFetchError, CandleSource, ClosedCandleStream
-    from local_engine import LocalStrategy
 
 # ==================================================================
 #  설정
@@ -225,12 +217,6 @@ def _session_payload(macro: dict, *, testnet: bool, mode: str) -> dict:
         "human_summary": macro.get("human_summary", ""),
         # 서버가 세션에 기록하고 오래된 버전을 거절할 수 있게 실어 보낸다.
         "runner_version": RUNNER_VERSION,
-        # 이 실행기에 묶여 있는 판단 엔진의 세대. 실행기가 스스로 판단하게 되면 서버가
-        # 이 값으로 "이 매크로를 이 엔진이 판단해도 같은 답이 나오는가" 를 가린다.
-        "engine_version": str(ENGINE_VERSION),
-        # 실행기는 스스로 판단할 줄 안다고 말한다. 실제로 켤지는 **서버가** 정한다
-        # (응답의 "decides") — 양쪽이 동시에 판단하면 같은 신호로 두 번 산다.
-        "decides": "local",
         # 매크로 원문 — 마이페이지 실시간 차트에 빌더와 동일한 전략 보조지표를
         # 그리는 데 쓰인다. 거래소 키/시크릿은 여기에 포함되지 않는다.
         "macro": macro,
@@ -690,8 +676,6 @@ class ServerClient:
         self.key = runner_key.strip()
         self.session_id = None
         self.macro_origin = ""
-        # 판단 주체. 세션을 시작하면 서버 응답이 정한다 — 그 전에는 가장 보수적인 쪽(서버).
-        self.decides = "server"
         self._headers = {"X-Runner-Key": self.key, "Content-Type": "application/json"}
         # 실행 창 로그를 서버에도 남긴다 — heartbeat 에 실어 보내고, 실패하면 다음에 다시.
         self._events: list[dict] = []
@@ -988,8 +972,6 @@ class ServerClient:
         data = r.json()
         self.session_id = data.get("session_id")
         self.macro_origin = str(data.get("macro_origin") or "")
-        # 이 세션의 판단을 누가 하는가 — 서버가 정한다. 모르면 서버(지금까지의 동작).
-        self.decides = str(data.get("decides") or "server")
         self._schedule_event_recovery()
         return data
 
@@ -1066,10 +1048,6 @@ class BotThread(threading.Thread):
     # 금액 주문이나 실전 주문으로 새지 않는다.
     exchange = "binance"
     mode = MODE_MOCK
-    # 로컬 판단은 서버가 켜 준 세션에서만 — 기본은 '없음'(지금까지처럼 서버가 판단).
-    # __init__ 뿐 아니라 **클래스에도** 둔다: 시험이 object.__new__ 로 봇을 만든다.
-    strategy = None
-    candles = None
 
     def __init__(self, macro: dict, credentials: dict, mode: str,
                  server: ServerClient, on_log, on_status, on_finish) -> None:
@@ -1112,10 +1090,6 @@ class BotThread(threading.Thread):
         self.pending_acks: list[dict] = []
         self._offline_logged = False
         self._preflight = None
-        # 로컬 판단(서버가 켜 준 세션에서만). None 이면 지금까지처럼 서버가 판단한다.
-        self.strategy = None
-        self.candles = None
-        self._local_fills: list[dict] = []
 
     @property
     def domestic(self) -> bool:
@@ -1600,85 +1574,6 @@ class BotThread(threading.Thread):
         self._active_log_operation_id = ""
         return ack
 
-    @property
-    def decides_locally(self) -> bool:
-        return self.strategy is not None
-
-    def _start_local_engine(self) -> bool:
-        """서버가 '네가 판단해라' 고 한 세션에서 로컬 엔진을 세운다. 실패하면 거짓.
-
-        여기서 실패하면 **아무도 판단하지 않는다** — 서버는 이 세션의 드라이버를 띄우지
-        않았다. 조용히 서버 모드로 되돌아가는 길은 없으므로 세션을 오류로 끝낸다.
-        """
-        macro = Macro.model_validate(self.macro)
-        interval = macro.candle_interval or "1d"
-        try:
-            source = CandleSource(self.exchange, self.symbol, interval, market=self.market)
-            strategy = LocalStrategy(macro, self.symbol)
-            history = source.recent_closed(strategy.warmup_count)
-        except CandleFetchError as exc:
-            self.log(f"봉을 받지 못해 매크로를 시작할 수 없어요: {exc}", kind="error", severity="ERROR",
-                     event_name="runner.local_engine_failed")
-            return False
-        # 되살릴 때 아직 판정 안 된 봉은 웜업에서 빼고 실시간 봉처럼 다시 흘려보낸다.
-        replay = strategy.unjudged_candle(history)
-        strategy.warmup(history[:-1] if replay is not None else history)
-        strategy.restore(None, replay_last=replay)
-        self.strategy = strategy
-        # 봉은 자리로 읽는다(엔진과 같은 규칙) — .t 로 읽으면 평범한 튜플을 받는 경로에서 깨진다.
-        self.candles = ClosedCandleStream(source, since_t=history[-1][0])
-        self.log(f"로컬 판단으로 시작해요 — {interval} 봉 {len(history)}개로 지표를 세웠어요. "
-                 f"서버가 멈춰도 매매는 이 PC 에서 이어집니다.",
-                 event_name="runner.local_engine_started", severity="INFO",
-                 details={"interval": interval, "warmup": len(history),
-                          "last_candle_ms": history[-1][0], "engine_version": ENGINE_VERSION})
-        return True
-
-    def _local_round(self, price: float, guard) -> None:
-        """마감봉을 받아 판단하고, 나온 주문을 서버 명령과 **같은 길로** 실행한다."""
-        if self.strategy is None or self.candles is None:
-            return
-        try:
-            fresh = self.candles.poll()
-        except CandleFetchError as exc:
-            # 봉을 못 받은 것은 치명적이지 않다 — 다음 바퀴에 다시 받는다. 손절은 아래 안전망이 본다.
-            self.log(f"  일시 오류(봉): {exc} — {POLL_SECONDS:.0f}초 후 재시도", kind="warn",
-                     severity="WARN", event_name="runner.candle_fetch_failed")
-            return
-        if fresh:
-            self.strategy.push_candles(fresh)
-        for cmd in self.strategy.decide(price):
-            self._run_local_command(cmd, price, guard)
-
-    def _run_local_command(self, cmd: dict, price: float, guard) -> None:
-        kind = str(cmd.get("action", "")).lower()
-        is_entry = kind in ("buy", "short")
-        blocked, why = guard.entry_blocked()
-        if blocked and is_entry:
-            self.log(f"  ⏸ 진입 보류: {why}", kind="signal", severity="WARN",
-                     event_name="runner.entry_blocked",
-                     details={"action": kind, "reason": why, "source": "local"})
-            return
-        realized_before, was_flat = self.realized, not self.in_position
-        ack = self._execute_command(cmd, price)
-        if ack["ok"] and ack["executed_qty"] > 0:
-            if is_entry:
-                if was_flat:  # 추가 진입은 보유시간 기준을 바꾸지 않는다
-                    guard.on_entry()
-            elif not self.in_position:
-                guard.on_exit(self.realized - realized_before, was_stop=False)
-            else:
-                guard.on_partial_exit(self.realized - realized_before)
-        # 서버에 ack 를 보내지 않는다 — 서버가 모르는 id 다. 대신 체결 자체를 보고한다:
-        # 실행기가 판단하면 이 경로가 리더보드 · 수익률 · 활동 기록의 **유일한** 입구다.
-        self.local_fills.append({
-            "action": kind, "notional_frac": cmd.get("notional_frac", 0.0),
-            "qty_frac": cmd.get("qty_frac", 0.0), "signal_price": cmd.get("signal_price", 0.0),
-            "reason": cmd.get("reason", ""), "ok": bool(ack["ok"]),
-            "executed_qty": ack["executed_qty"], "fill_price": ack["fill_price"],
-            "error": ack["error"],
-        })
-
     def _snapshot(self) -> dict:
         price = getattr(self, "last_price", 0.0)
         return {
@@ -1691,29 +1586,6 @@ class BotThread(threading.Thread):
             "unrealized_pct": _pnl_pct(self.entry_price, price, self.side) if self.in_position and price else 0.0,
             "note": "포지션 확인 필요 · 거래소에서 주문과 포지션을 확인하세요." if getattr(self, "position_uncertain", False) else self._dust_note(),
         }
-
-    @property
-    def local_fills(self) -> list:
-        """아직 서버에 못 올린 로컬 체결. 늦게 만든다 — 시험이 __init__ 없이 봇을 만든다."""
-        fills = getattr(self, "_local_fills", None)
-        if fills is None:
-            fills = []
-            self._local_fills = fills
-        return fills
-
-    def _local_snapshot_extra(self) -> dict:
-        """로컬 판단 세션이 heartbeat 에 덧붙이는 것 — 서버는 이걸로 화면을 비춘다.
-
-        체결은 **보낸 뒤에 비운다**(전송이 성공해야). 전송이 실패해 다음 바퀴에 다시 보내면
-        서버가 같은 체결을 두 번 적을 수 있지만, 빠뜨리는 쪽이 훨씬 나쁘다 — 빠진 체결은
-        리더보드 · 수익률에서 영영 사라진다.
-        """
-        if self.strategy is None:
-            return {}
-        extra = {"strategy_state": self.strategy.state()}
-        if self.local_fills:
-            extra["local_fills"] = list(self.local_fills)
-        return extra
 
     def _dust_note(self) -> str:
         dust = getattr(self, "position_dust_qty", 0.0)
@@ -1732,11 +1604,6 @@ class BotThread(threading.Thread):
                               cap=order_cap(self.quote))
             self.log(f"공통 리스크: {guard.describe()} · 주문 상한 {order_cap(self.quote):,.0f} {self.quote} · "
                      f"{POLL_SECONDS:.0f}초마다 평가")
-            if str(getattr(self.server, "decides", "server")).lower() == "local":
-                # 서버가 이 세션의 드라이버를 띄우지 않았다 — 세우지 못하면 아무도 판단하지 않는다.
-                if not self._start_local_engine():
-                    status, note = "error", "봉을 받지 못해 로컬 판단을 시작하지 못했어요 — 로그 확인"
-                    return
 
             while True:
                 # 1) 종료 명령 확인 (로컬 또는 직전 원격)
@@ -1762,8 +1629,7 @@ class BotThread(threading.Thread):
                     continue
                 guard.roll_day()
 
-                # 3) 로컬 안전망 — 일일 손실·최대 보유시간(RiskGuard) + 손절.
-                #    진입 판단은 로컬 엔진(있으면) 또는 서버가 한다.
+                # 3) 로컬 안전망 — 일일 손실·최대 보유시간(RiskGuard) + 손절. 진입 판단은 서버가 한다.
                 if self.in_position:
                     unreal = _pnl_usdt(self.held_qty, self.entry_price, price, self.side)
                     forced, why = guard.force_close(unreal)
@@ -1779,20 +1645,11 @@ class BotThread(threading.Thread):
                                      f"({_money(pnl, self.quote)}) · 누적 {_money(self.realized, self.quote)}")
                             guard.on_exit(pnl, was_stop=stop)
 
-                # 4) 로컬 판단 — 마감봉을 받아 스스로 사고판다(서버가 켜 준 세션만).
-                #    안전망(3) 뒤에 둔다: 손절이 이미 포지션을 닫았으면 그 상태로 판단한다.
-                if self.decides_locally:
-                    self._local_round(price, guard)
-
-                # 5) 하트비트 — 상태·ack 를 올리고 명령을 받아 순서대로 실행
-                snap = {**self._snapshot(), **self._local_snapshot_extra()}
-                sent_fills = len(snap.get("local_fills") or [])
+                # 4) 하트비트 — 상태·ack 를 올리고 명령을 받아 순서대로 실행
+                snap = self._snapshot()
                 self.on_status(snap)
                 reply = self.server.heartbeat(snap, acks=self.pending_acks)
                 self.pending_acks = []
-                if not reply.get("offline") and sent_fills:
-                    # 서버가 받았다 — 보낸 만큼만 비운다(그 사이 새로 난 체결은 남긴다).
-                    del self.local_fills[:sent_fills]
                 if reply.get("offline"):
                     if not self._offline_logged:
                         self.log("서버 연결 재시도 중 — 신호 대기(진입 없음, 손절만 로컬에서 봅니다)",
@@ -1807,13 +1664,6 @@ class BotThread(threading.Thread):
                 if action in ("stop_only", "close_and_stop"):
                     self.log(f"원격 종료 명령 수신: {action}")
                     self.set_command(action)
-                elif self.decides_locally:
-                    # 판단은 이 PC 가 한다 — 서버 명령이 섞여 오면 같은 신호로 두 번 산다.
-                    stray = reply.get("commands") or []
-                    if stray:
-                        self.log("서버가 보낸 주문 명령을 무시했어요(이 세션은 실행기가 판단합니다).",
-                                 kind="warn", severity="WARN", event_name="runner.command_ignored",
-                                 details={"count": len(stray)})
                 else:
                     for cmd in reply.get("commands") or []:
                         kind = str(cmd.get("action", "")).lower()
@@ -1839,7 +1689,7 @@ class BotThread(threading.Thread):
                                 guard.on_partial_exit(self.realized - realized_before)
                         self.pending_acks.append(ack)
 
-                # 6) 대기(종료 명령 시 즉시 깨어남)
+                # 5) 대기(종료 명령 시 즉시 깨어남)
                 self._sleep(POLL_SECONDS)
         except Exception as exc:
             status, note = "error", f"예기치 못한 오류: {exc}"
@@ -3303,8 +3153,7 @@ class RunnerApp:
         try:
             response = requests.post(
                 f"{claim_base}{PROTOCOL_CLAIM_PATH}",
-                json={"ticket": launch.ticket, "runner_version": RUNNER_VERSION,
-                      "engine_version": str(ENGINE_VERSION)},
+                json={"ticket": launch.ticket, "runner_version": RUNNER_VERSION},
                 timeout=15,
             )
             response.raise_for_status()

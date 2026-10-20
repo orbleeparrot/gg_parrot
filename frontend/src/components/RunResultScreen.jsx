@@ -24,7 +24,7 @@ export default function RunResultScreen({ session, onShowLog }) {
       </div>
 
       <div className="agent-result-pnl-block">
-        <span className="agent-result-pnl-label">{outcome.pnl.label || (outcome.pnl.sub ? "투입금 대비 총수익률" : "총 실현손익")}</span>
+        <span className="agent-result-pnl-label">{outcome.pnl.label || (outcome.pnl.sub ? "최대 투입금 대비 총수익률" : "총 실현손익")}</span>
         <strong className={`agent-result-pnl num is-${outcome.pnl.tone}${outcome.pending ? " is-pending" : ""}`}>
           {outcome.pnl.text}
         </strong>
@@ -32,7 +32,7 @@ export default function RunResultScreen({ session, onShowLog }) {
           // 번 돈 · 투입금은 수익률 바로 아래 한 문장으로 — 회색 작은 글자가 아니게(번 돈은 수익과 같은 색).
           <p className="agent-result-money-line num">
             <b className={`is-${outcome.pnl.moneyTone}`}>{outcome.pnl.money}</b>{{ up: " 벌었어요", down: " 잃었어요" }[outcome.pnl.moneyTone] || ""}
-            <span> · 투입 {outcome.pnl.invested}</span>
+            <span> · 최대 투입 {outcome.pnl.invested}</span>
           </p>
         ) : outcome.pnl.sub ? <span className="agent-result-pnl-sub num">{outcome.pnl.sub}</span> : null}
       </div>

@@ -23,6 +23,7 @@ import pandas as pd
 
 from ..http_runtime import SingleFlightGroup, get_http_client
 from ..cache_runtime import ResponseCache
+from engine.intervals import INTERVAL_MS
 
 # Base host is env-configurable so a US-hosted deploy (where api.binance.com is
 # geo-blocked) can point at the public data mirror (data-api.binance.vision),
@@ -40,15 +41,9 @@ _FUT_FUNDING = f"{_FUTURES_BASE}/fapi/v1/fundingRate"
 _CACHE_DIR = os.environ.get("MARKET_CACHE_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "cache")
 _DB_PATH = os.path.join(_CACHE_DIR, "market.db")
 _MS_DAY = 86_400_000
-_INTERVAL_MS = {
-    "1m": 60_000,
-    "3m": 3 * 60_000,
-    "5m": 5 * 60_000,
-    "15m": 15 * 60_000,
-    "1h": 60 * 60_000,
-    "4h": 4 * 60 * 60_000,
-    "1d": _MS_DAY,
-}
+# 봉 격자는 공유 엔진이 한 벌만 가진다 — 서버와 실행기가 다른 경계를 쓰면 같은 매크로가
+# 다른 봉을 보고 다른 자리에서 사고판다(engine/intervals.py).
+_INTERVAL_MS = INTERVAL_MS
 PERIOD_PRESET_DAYS = {"1y": 365, "6m": 182, "3m": 91, "1m": 30, "1w": 7, "1d": 1}
 
 # Refuse requests whose raw simulation would monopolize the web process. The

@@ -16,6 +16,7 @@ import pandas as pd
 
 from ..cache_runtime import ResponseCache
 from engine.exchanges import normalize_exchange, validate_symbol
+from engine.intervals import interval_grid_offset as _interval_grid_offset
 from ..http_runtime import SingleFlightGroup, get_http_client
 from . import binance
 
@@ -264,14 +265,9 @@ def _to_cursor(stamp_ms: int, exchange: str) -> str:
     return stamp.isoformat(timespec="milliseconds")
 
 
-def interval_grid_offset(exchange: str, interval: str) -> int:
-    """Bithumb candles begin on KST boundaries; Upbit uses UTC boundaries.
-
-    Keep native candle UTC timestamps intact. Only boundary arithmetic changes
-    (Bithumb 4h offset=03:00 UTC; daily offset=15:00 UTC).
-    """
-    step = binance._INTERVAL_MS[interval]
-    return (-9 * 3600_000) % step if exchange == "bithumb" else 0
+# 격자 산수는 공유 엔진에 한 벌(engine/intervals.py) — 실행기도 같은 것을 쓴다.
+# 이름을 여기 남겨 두는 건 부르는 쪽(main.py · candle_feed.py)을 안 건드리기 위해서다.
+interval_grid_offset = _interval_grid_offset
 
 
 def _normalized_window(exchange: str, interval: str, start_ms: int, end_ms: int):

@@ -13,9 +13,9 @@ import time
 from collections import namedtuple
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
-from .data.binance import _INTERVAL_MS
 from .data import get_recent_klines
 from engine.exchanges import normalize_exchange
+from engine.intervals import INTERVAL_MS as _INTERVAL_MS, next_close_ms as _next_close_ms
 
 log = logging.getLogger(__name__)
 
@@ -136,14 +136,9 @@ class CandleFeed:
                 task.cancel()
 
     # -- 시각 -----------------------------------------------------------
-    @staticmethod
-    def next_close_ms(interval: str, now_ms: int, *, exchange: str = "binance") -> int:
-        step = _INTERVAL_MS[interval]
-        offset = 0
-        if exchange != "binance":
-            from .data.krw import interval_grid_offset
-            offset = interval_grid_offset(exchange, interval)
-        return ((now_ms - offset) // step + 1) * step + offset
+    # 봉 경계 산수는 공유 엔진(engine/intervals.py)이 한 벌만 가진다 — 실행기도 같은 것을 쓴다.
+    # 양쪽이 각자 계산하면 빗썸(KST 경계)에서 하루가 9시간 어긋난다.
+    next_close_ms = staticmethod(_next_close_ms)
 
     # -- 조회 -----------------------------------------------------------
     async def history(self, symbol: str, interval: str, market: str, n: int, *, exchange: str = "binance") -> List[Candle]:

@@ -1,8 +1,8 @@
 """Fill 에 사유·직전 수량이 붙는다 — 실행기 명령 변환(qty_frac)과 로그 문구의 근거."""
 from datetime import datetime, timezone
 
-from app.engine import Macro
-from app.engine.stepper import make_sim
+from engine import Macro
+from engine.stepper import make_sim
 
 
 def _a():
@@ -36,7 +36,7 @@ def test_position_sim_fill_carries_reason_and_qty_before():
 
 
 def test_candle_sim_indicator_reason_names_the_signal():
-    from app.engine.candles import make_candle_sim
+    from engine.candles import make_candle_sim
 
     inner = make_candle_sim(_rsi(), initial_capital=1000.0)
     t = datetime(2026, 9, 22, tzinfo=timezone.utc)

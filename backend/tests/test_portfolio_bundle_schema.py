@@ -2,7 +2,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.engine.schema import BundleRisk, GATEABLE_TYPES, Macro, PortfolioLeg, RuleType
+from engine.schema import BundleRisk, GATEABLE_TYPES, Macro, PortfolioLeg, RuleType
 
 BASE = {
     "symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h",
@@ -204,7 +204,7 @@ def test_mixed_rules_allowed_without_bundle_risk():
 
 
 def test_gateable_types_matches_filterable():
-    from app.engine.schema import FILTERABLE_TYPES
+    from engine.schema import FILTERABLE_TYPES
     assert GATEABLE_TYPES == FILTERABLE_TYPES
     assert RuleType.D not in GATEABLE_TYPES and RuleType.E in GATEABLE_TYPES
 

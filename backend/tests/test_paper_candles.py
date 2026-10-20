@@ -3,7 +3,7 @@ import asyncio
 from types import SimpleNamespace
 
 from app import paper
-from app.engine import Macro
+from engine import Macro
 
 
 def _run(coro):

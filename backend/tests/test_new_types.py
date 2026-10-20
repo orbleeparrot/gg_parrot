@@ -9,8 +9,8 @@ from pydantic import ValidationError
 
 from app import kimchi as kimchi_mod
 from app import marketdata
-from app.engine.backtest import run_backtest
-from app.engine.schema import Macro
+from engine.backtest import run_backtest
+from engine.schema import Macro
 from app.main import app
 
 client = TestClient(app)

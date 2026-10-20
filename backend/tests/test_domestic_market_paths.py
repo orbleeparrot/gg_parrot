@@ -5,9 +5,9 @@ import pytest
 
 from app import chart, marketdata, paper
 from app.data import NoSpotDataError
-from app.engine import Macro
-from app.engine.candle_feed import CandleFeed
-from app.engine.stepper import make_sim
+from engine import Macro
+from app.candle_feed import CandleFeed
+from engine.stepper import make_sim
 
 
 def _macro(exchange="upbit", rule="F"):
@@ -149,7 +149,7 @@ def test_domestic_dca_missing_timestamp_cannot_trigger_a_buy():
 
 def test_domestic_dca_restore_preserves_each_legs_next_daily_buy():
     from datetime import datetime, timedelta, timezone
-    from app.engine.driver import Leg, StrategyDriver
+    from engine.driver import Leg, StrategyDriver
     macro = _macro(rule="C")
     start = datetime(2026, 10, 2, tzinfo=timezone.utc)
     first = StrategyDriver([Leg("KRW-BTC", make_sim(macro), 700_000)], 700_000, macro=macro)
@@ -164,7 +164,7 @@ def test_domestic_dca_restore_preserves_each_legs_next_daily_buy():
 def test_domestic_dca_sparse_daily_backtest_uses_elapsed_days_not_row_count():
     from datetime import datetime, timedelta, timezone
     import pandas as pd
-    from app.engine import run_backtest
+    from engine import run_backtest
     macro = _macro(rule="C")
     macro.params["interval_days"] = 2
     start = datetime(2026, 10, 2, tzinfo=timezone.utc)
@@ -176,7 +176,7 @@ def test_domestic_dca_sparse_daily_backtest_uses_elapsed_days_not_row_count():
 
 def test_domestic_portfolio_dca_restores_independent_buy_schedules():
     from datetime import datetime, timedelta, timezone
-    from app.engine.driver import Leg, StrategyDriver
+    from engine.driver import Leg, StrategyDriver
     macro = _macro(rule="C")
     start = datetime(2026, 10, 2, tzinfo=timezone.utc)
     first = StrategyDriver([Leg("KRW-BTC", make_sim(macro), 700_000),
@@ -195,7 +195,7 @@ def test_domestic_portfolio_dca_restores_independent_buy_schedules():
 
 def test_domestic_dca_restore_does_not_restart_after_stop_loss():
     from datetime import datetime, timedelta, timezone
-    from app.engine.driver import Leg, StrategyDriver
+    from engine.driver import Leg, StrategyDriver
     macro = _macro(rule="C")
     macro.risk.stop_loss_pct = 5
     start = datetime(2026, 10, 2, tzinfo=timezone.utc)

@@ -8,6 +8,9 @@ WORKDIR /app
 COPY requirements.txt requirements-prefect.txt ./
 RUN pip install --no-cache-dir -r requirements-prefect.txt
 
+# engine 은 app 과 나란히 있는 공유 패키지(서버 · 실행기 공용)다. 빠뜨리면
+# app 이 import 하는 순간 ModuleNotFoundError 로 워커가 기동하지 못한다.
+COPY --chown=pwuser:pwuser engine ./engine
 COPY --chown=pwuser:pwuser app ./app
 
 USER pwuser

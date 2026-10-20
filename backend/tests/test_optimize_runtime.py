@@ -11,7 +11,7 @@ import pandas as pd
 import pytest
 
 from app import optimize as optimize_mod
-from app.engine.schema import Fees, Macro, Period, Risk
+from engine.schema import Fees, Macro, Period, Risk
 
 
 NO_COST = Fees(commission_pct=0.0, slippage_pct=0.0, funding_pct=0.0)

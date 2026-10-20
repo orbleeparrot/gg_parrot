@@ -9,9 +9,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app.engine import Macro, run_backtest
-from app.engine.schema import Fees, Period, Risk
-from app.engine.stepper import make_sim
+from engine import Macro, run_backtest
+from engine.schema import Fees, Period, Risk
+from engine.stepper import make_sim
 from tests.test_engine import NO_COST
 
 

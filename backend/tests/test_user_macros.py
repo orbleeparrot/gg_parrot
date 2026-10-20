@@ -6,7 +6,7 @@ import secrets
 import pytest
 from fastapi.testclient import TestClient
 
-from app.engine import BacktestResult
+from engine import BacktestResult
 from app.main import app
 
 client = TestClient(app)

@@ -4,9 +4,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from app.engine.backtest import BacktestResult, run_backtest
-from app.engine.explain import MOODS, Explanation, explain_result
-from app.engine.schema import Macro
+from engine.backtest import BacktestResult, run_backtest
+from engine.explain import MOODS, Explanation, explain_result
+from engine.schema import Macro
 
 
 def _macro(**kw):

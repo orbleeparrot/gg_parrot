@@ -8,13 +8,13 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app.engine import run_backtest
-from app.engine.backtest import (
+from engine import run_backtest
+from engine.backtest import (
     _buy_hold_return_pct,
     _max_consecutive_losses,
     _profit_factor,
 )
-from app.engine.schema import Fees, Macro, Period, Risk
+from engine.schema import Fees, Macro, Period, Risk
 
 NO_COST = Fees(commission_pct=0.0, slippage_pct=0.0, funding_pct=0.0)
 

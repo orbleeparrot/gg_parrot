@@ -13,7 +13,7 @@ import pytest
 pytest.importorskip("pydantic")
 
 from app import ai_challenge
-from app.engine.schema import Macro, RuleType, required_param_names
+from engine.schema import Macro, RuleType, required_param_names
 
 # 프롬프트가 모델에게 허용한 타입들.
 OFFERED = ("A", "E", "F", "J")

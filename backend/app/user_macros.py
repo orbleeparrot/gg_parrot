@@ -19,7 +19,7 @@ from sqlmodel import select
 from . import paper as paper_mod
 from . import points as points_mod
 from .db import LeaderboardEntry, MacroRow, MacroUnlock, User, UserMacro, get_session
-from .engine import Macro, human_summary
+from engine import Macro, human_summary
 
 _SOURCES = {"created", "leaderboard", "upload", "builder"}
 

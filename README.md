@@ -44,6 +44,24 @@ cd ../backend && python -m uvicorn app.main:app --port 8000
 
 ---
 
+## 엔진은 공유 패키지 — `backend/engine/`
+
+매매 판단 코드는 저장소에 **한 벌**만 둔다. 서버(`backend/app/`)와 실행기(`runner/`)가 같은
+모듈을 가져다 쓴다. 두 벌이 되면 백테스트 결과와 실거래가 조용히 갈라지기 때문이다.
+
+- `engine` 은 `app` 을 **거꾸로 참조하지 않는다.** 서버 전용 코드(DB · 캔들 수급 · API)는
+  `app/` 에 남는다 — 봉 피드가 `app/candle_feed.py` 에 있는 것도 그래서다.
+- **실거래 경로**(`schema` · `exchanges` · `leverage` · `stepper` · `candles` · `driver` ·
+  `live_levels` · `entry_filter` · `bundle`)의 바깥 의존성은 `pydantic` 하나다.
+- **서버 전용**(`backtest` · `walkforward` · `portfolio*` · `explain` · `summary` ·
+  `validation`)은 pandas · numpy 를 쓴다. `engine/__init__.py` 가 이 이름들을 지연 import 해서
+  실행기 번들에 딸려 들어가지 않게 한다.
+- 실행기는 `runner/shared_engine.py` 로 집어 온다. 소스에서는 `backend/` 를 import 경로에
+  올리고, PyInstaller 번들에서는 `--paths ../backend` 로 묶인 것을 쓴다.
+
+경계는 시험이 지킨다 — `backend/tests/test_engine_package_boundary.py`,
+`runner/test_shared_engine.py`. 엔진에 서버 코드나 pandas 가 흘러들면 거기서 깨진다.
+
 ## 주요 가정 (Assumptions) — 백테스트 엔진
 - **봉:** 일봉(1d) 순차 시뮬레이션.
 - **체결가:** 신호는 **해당 봉 종가**로 평가하고 그 종가에서 체결(슬리피지 반영). 봉 내 고가/저가로 TP/SL을 트리거하지 않습니다(단순화).
@@ -88,7 +106,7 @@ API 응답의 `data_source` 필드:
 
 ### 규칙 타입 (A~J, `rule_type` discriminated union)
 원본 A·B·C(단일 포지션·DCA)는 그대로 유지되고, v4에서 D~J가 추가됐습니다. D~J는 공통 엔벌로프
-(`candle_interval` + 고급 리스크)를 공유하며, 공용 캔들 엔진(`app/engine/candles.py`)에서 실행됩니다.
+(`candle_interval` + 고급 리스크)를 공유하며, 공용 캔들 엔진(`engine/candles.py`)에서 실행됩니다.
 
 - **A** 익절/손절 후 재진입 (long/short) — `take_profit_pct`, `initial_capital`
 - **B** 지정가 밴드 매매 (long/short) — `buy_price`, `sell_price`, `initial_capital`
@@ -143,7 +161,7 @@ API 응답의 `data_source` 필드:
 
 ### A. 페이퍼 트레이딩 (실시간 모의매매)
 - 실제 주문·거래소 계정·API 키 **없이** 공개 실시간 시세로 "샀다/팔았다 치고" 기록만 합니다. 화면에 "모의(페이퍼)" 배지 상시 표시.
-- **핵심 재사용:** 페이퍼의 가상 체결은 백테스트와 **동일한 실행 엔진**(`app/engine/stepper.py`의 `PositionSim`/`DcaSim`)을 그대로 사용합니다. 백테스트는 과거 일봉을, 페이퍼는 실시간 틱을 같은 `step(price)`에 흘려보내는 차이뿐입니다(중복 구현 아님).
+- **핵심 재사용:** 페이퍼의 가상 체결은 백테스트와 **동일한 실행 엔진**(`engine/stepper.py`의 `PositionSim`/`DcaSim`)을 그대로 사용합니다. 백테스트는 과거 일봉을, 페이퍼는 실시간 틱을 같은 `step(price)`에 흘려보내는 차이뿐입니다(중복 구현 아님).
 - **실시간 소스 선택:** REST 폴링 방식(`GET /api/v3/ticker/price`)을 선택했습니다(websocket 대비 구현 단순·안정). 폴링 간격은 env로 조절.
 - **데모 안정성 장치:** ① 종목 자유 입력(빌더 symbol) ② 민감도 조절(익절/손절 0.3~1% 등 임계값을 낮게) ③ **`demo_replay` 모드** — 최근 수 시간치 1분봉을 빠르게 재생해 매매 로그가 촤르륵 쌓이게 함(오프라인이면 결정론적 합성 인트라데이로 폴백).
 - **환경 변수:** `PAPER_POLL_SECONDS`(기본 3), `PAPER_REPLAY_SECONDS`(기본 0.4), `PAPER_REPLAY_HOURS`(기본 6).
@@ -166,7 +184,7 @@ API 응답의 `data_source` 필드:
 
 ### A. 매크로 타입 D~J 확장
 - 위 "규칙 타입 (A~J)" 참고. 빌더는 `rule_type` 선택에 따라 타입별 params 폼만 조건부 렌더하고, 각 필드에 `InfoTooltip`을 노출합니다.
-- 백엔드는 타입별 pydantic params 모델(`app/engine/schema.py`의 `ParamsD`~`ParamsJ`)로 검증하고, 프론트도 저장 전 동일 규칙을 검사합니다(`frontend/src/lib/macro.js`의 `validate`).
+- 백엔드는 타입별 pydantic params 모델(`engine/schema.py`의 `ParamsD`~`ParamsJ`)로 검증하고, 프론트도 저장 전 동일 규칙을 검사합니다(`frontend/src/lib/macro.js`의 `validate`).
 - 저장/복제/공유(share_slug) 로직은 기존 것을 그대로 재사용합니다.
 
 ### B. 상단 실시간 김치프리미엄 배너

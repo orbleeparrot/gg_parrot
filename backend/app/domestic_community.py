@@ -27,7 +27,7 @@ from . import feed_index
 from .cache_runtime import ResponseCache
 from .feed_index import FeedAsset
 from .db import get_session
-from .exchanges import validate_symbol
+from engine.exchanges import validate_symbol
 from .http_runtime import get_http_client
 from .moderation import contains_profanity
 from .public_news import PublicNewsLease, claim_work, finish_work

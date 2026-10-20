@@ -136,7 +136,7 @@ def _list_binance_symbols(*, now: Optional[float] = None) -> dict:
 
 
 def list_symbols(*, now: Optional[float] = None, exchange: str = "binance") -> dict:
-    from ..exchanges import normalize_exchange
+    from engine.exchanges import normalize_exchange
     exchange = normalize_exchange(exchange)
     if exchange == "binance":
         return {**_list_binance_symbols(now=now), "exchange": exchange, "quote_currency": "USDT"}

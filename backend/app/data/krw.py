@@ -15,7 +15,7 @@ import time
 import pandas as pd
 
 from ..cache_runtime import ResponseCache
-from ..exchanges import normalize_exchange, validate_symbol
+from engine.exchanges import normalize_exchange, validate_symbol
 from ..http_runtime import SingleFlightGroup, get_http_client
 from . import binance
 

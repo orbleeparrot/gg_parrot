@@ -10,7 +10,7 @@ import pytest
 
 from app import api_usage, validate_explain
 from app.ai_runtime import AiCallRuntime, ai_cache_key
-from app.engine import validation
+from engine import validation
 
 PAYLOAD = {"final_return_pct": 142.0, "buy_hold_return_pct": 38.0, "mdd_pct": 31.0,
            "total_trades": 14, "calmar": 1.2, "sortino": 0.9,

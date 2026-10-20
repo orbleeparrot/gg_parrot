@@ -9,9 +9,9 @@ import { readFileSync } from "node:fs";
 import { EXCHANGES, commissionForExchange } from "../src/lib/exchanges.js";
 import { defaultForm, withExchangeDefaults } from "../src/lib/macro.js";
 
-// backend/app/exchanges.py 의 _COMMISSION_PCT 를 읽는다.
+// backend/engine/exchanges.py 의 _COMMISSION_PCT 를 읽는다.
 function backendTable() {
-  const source = readFileSync(new URL("../../backend/app/exchanges.py", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../../backend/engine/exchanges.py", import.meta.url), "utf8");
   const match = /_COMMISSION_PCT = \{([^}]+)\}/.exec(source);
   assert.ok(match, "backend 의 _COMMISSION_PCT 를 찾지 못했다 — 이름이 바뀌었으면 이 시험을 고쳐라");
   const table = {};

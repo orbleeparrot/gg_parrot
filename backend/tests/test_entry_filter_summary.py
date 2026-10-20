@@ -1,8 +1,8 @@
 """한 줄 요약에 필터가 보인다 — 리더보드·카드·실행 독이 이 문장을 쓴다."""
 import pytest
 
-from app.engine.schema import Macro
-from app.engine.summary import human_summary
+from engine.schema import Macro
+from engine.summary import human_summary
 
 BODY = {"symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},
         "params": {"k": 0.5, "initial_capital": 1000}, "risk": {"invest_ratio": 1.0}}

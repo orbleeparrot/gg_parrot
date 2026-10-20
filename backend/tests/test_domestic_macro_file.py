@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import macro_signing, realtrade, runner
-from app.engine import Macro
+from engine import Macro
 from app.main import app
 
 UPBIT = {"exchange": "upbit", "symbol": "KRW-BTC", "rule_type": "A", "position_side": "long",

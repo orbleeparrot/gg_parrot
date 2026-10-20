@@ -15,7 +15,7 @@ from app import ask
 from app import ask_candidates as ac
 from app.data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS, _expected_bar_count
 from app.db import AskMacroSession, PointLedger, User, get_session
-from app.engine import BacktestResult
+from engine import BacktestResult
 from app.main import app
 
 client = TestClient(app)
@@ -923,7 +923,7 @@ def test_allowed_symbols_falls_back_when_symbol_source_is_down(monkeypatch):
 
 def test_result_view_carries_hold_return_and_a_small_curve():
     # 결과 카드(2026-09-30)가 '그냥 들고 있기' 대비와 자산곡선을 그리도록 옆 칸에 싣는다 — metrics 모양은 그대로.
-    from app.engine.backtest import EquityPoint
+    from engine.backtest import EquityPoint
     curve = [EquityPoint(t=f"2026-01-01T{h:02d}:00:00", equity=1000 + h * 3 + (h % 5)) for h in range(24)] * 5
     result = BacktestResult(
         initial_capital=1000.0, final_equity=1100.0, final_return_pct=10.0, mdd_pct=4.0,
@@ -1047,7 +1047,7 @@ def test_macro_fees_follow_the_exchange():
 
     실측: 1주 · 5m 단타 후보가 0.1% 에서 -6.08%, 0.05% 에서 -4.75%.
     """
-    from app.exchanges import spot_commission_pct
+    from engine.exchanges import spot_commission_pct
     seen = {}
     for exchange, symbol in (("binance", "BTCUSDT"), ("upbit", "KRW-BTC"), ("bithumb", "KRW-ETH")):
         req = ask._Plan(risk_profile="balanced", market="spot", leverage=1, symbols=[symbol],
@@ -1063,7 +1063,7 @@ def test_macro_fees_follow_the_exchange():
 
 
 def test_commission_can_be_overridden_by_env(monkeypatch):
-    from app.exchanges import spot_commission_pct
+    from engine.exchanges import spot_commission_pct
     monkeypatch.setenv("EXCHANGE_COMMISSION_JSON", '{"upbit": 0.139}')
     assert spot_commission_pct("upbit") == pytest.approx(0.139)
     assert spot_commission_pct("binance") == pytest.approx(0.1), "안 적은 거래소는 그대로"

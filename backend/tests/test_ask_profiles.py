@@ -8,8 +8,8 @@ from __future__ import annotations
 import pandas as pd
 
 from app import ask
-from app.engine.backtest import BacktestResult, _buy_hold_mdd_pct, run_backtest
-from app.engine.schema import Macro
+from engine.backtest import BacktestResult, _buy_hold_mdd_pct, run_backtest
+from engine.schema import Macro
 
 
 def _df(closes: list[float]) -> pd.DataFrame:
@@ -228,7 +228,7 @@ def test_the_ai_explanation_layer_is_gone_but_the_explanation_is_not():
     import pytest
 
     from app import main as main_mod
-    from app.engine.explain import explain_result
+    from engine.explain import explain_result
 
     with pytest.raises(ModuleNotFoundError):
         importlib.import_module("app.ai_explain")

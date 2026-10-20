@@ -8,7 +8,7 @@ import math
 from fastapi.testclient import TestClient
 
 from app import entry_wait
-from app.engine.candles import MAState
+from engine.candles import MAState
 from app.main import app
 from tests.test_runner import _auth, _signup
 from tests.test_runner_signals_api import _key, _stop

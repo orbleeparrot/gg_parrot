@@ -84,7 +84,7 @@ def test_domestic_save_round_trip_and_inconsistent_start_blocked(monkeypatch):
 
 
 def test_runner_guard_rejects_domestic_for_old_runner_before_database_work():
-    from app.engine import Macro
+    from engine import Macro
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as exc:
         runner._require_supported_exchange(Macro.model_validate(DOMESTIC), "9")

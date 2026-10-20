@@ -2,8 +2,8 @@
 import pandas as pd
 import pytest
 
-from app.engine import walkforward as wf
-from app.engine.schema import Macro
+from engine import walkforward as wf
+from engine.schema import Macro
 
 BASE = {
     "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},
@@ -134,8 +134,8 @@ def test_no_limit_bundle_uses_the_same_path_for_period_and_windows():
 
     창 하나로 자르면 그 창의 수익률이 전체기간 수익률과 같아야 한다.
     """
-    from app.engine import portfolio as portfolio_mod
-    from app.engine.portfolio_backtest import run_legs
+    from engine import portfolio as portfolio_mod
+    from engine.portfolio_backtest import run_legs
 
     m = Macro(**{**BASE, "legs": [{"symbol": "BTCUSDT", "weight": 60},
                                   {"symbol": "ETHUSDT", "weight": 40}]})

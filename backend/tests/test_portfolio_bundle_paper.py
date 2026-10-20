@@ -4,9 +4,9 @@ import asyncio
 import pytest
 
 from app import paper
-from app.engine.bundle import BundleGate
-from app.engine.schema import BundleRisk, Macro
-from app.engine.stepper import make_sim
+from engine.bundle import BundleGate
+from engine.schema import BundleRisk, Macro
+from engine.stepper import make_sim
 
 BASE = {
     "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},

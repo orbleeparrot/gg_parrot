@@ -12,7 +12,7 @@ import hmac
 import pytest
 
 from app import macro_signing
-from app.engine import Macro
+from engine import Macro
 
 # entry_filter 가 생기기 전(커밋 603da89 의 부모)의 Macro 로 canonical_bytes 를 돌려 얻은 바이트.
 # Macro(rule_type="A", params={"take_profit_pct": 3, "initial_capital": 1000})

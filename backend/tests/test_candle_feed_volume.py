@@ -6,10 +6,10 @@
 import asyncio
 from datetime import datetime, timezone
 
-from app.engine.candle_feed import Candle, CandleFeed, _to_candle
-from app.engine.candles import LiveCandleSim, make_candle_sim
-from app.engine.driver import Leg, StrategyDriver
-from app.engine.schema import Macro
+from app.candle_feed import Candle, CandleFeed, _to_candle
+from engine.candles import LiveCandleSim, make_candle_sim
+from engine.driver import Leg, StrategyDriver
+from engine.schema import Macro
 
 START_MS = int(datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
 HOUR = 3_600_000

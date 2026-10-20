@@ -10,9 +10,9 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
-from app.engine import Macro, human_summary, run_backtest
-from app.engine.leverage import liquidation_price
-from app.engine.schema import Fees, Period, PositionSide, Risk
+from engine import Macro, human_summary, run_backtest
+from engine.leverage import liquidation_price
+from engine.schema import Fees, Period, PositionSide, Risk
 
 NO_COST = Fees(commission_pct=0.0, slippage_pct=0.0, funding_pct=0.0)
 

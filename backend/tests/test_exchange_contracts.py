@@ -5,7 +5,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from app.engine import Macro
+from engine import Macro
 from app import macro_signing
 
 
@@ -48,7 +48,7 @@ def test_domestic_short_flip_strategy_is_rejected():
 
 def test_dca_backtest_respects_explicit_quote_budget():
     import pandas as pd
-    from app.engine import run_backtest
+    from engine import run_backtest
     macro = Macro(exchange="bithumb", symbol="KRW-BTC", rule_type="C",
                   params={"initial_capital": 100, "amount_per_buy": 60, "interval_days": 1},
                   fees={"commission_pct": 0, "slippage_pct": 0})
@@ -114,6 +114,6 @@ def test_new_signature_binds_exchange_and_legacy_signature_still_verifies(symbol
 def test_every_exchange_reports_runner_support():
     # 실행기 v10 은 업비트 · 빗썸 원화 현물에 주문을 낸다. 국내를 거짓으로 두면 API 가 거짓말을 하고,
     # 다음에 이 값을 읽는 화면이 국내 실행을 막게 된다.
-    from app.exchanges import capabilities
+    from engine.exchanges import capabilities
     for exchange in ("binance", "upbit", "bithumb"):
         assert capabilities(exchange)["runner_supported"] is True, exchange

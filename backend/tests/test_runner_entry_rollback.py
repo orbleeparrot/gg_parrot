@@ -14,9 +14,9 @@ from sqlmodel import select
 
 from app import runner_engine as eng
 from app.db import RunnerCommand, RunSession, RunSessionEvent, get_session
-from app.engine import Macro
-from app.engine.driver import Leg, StrategyDriver
-from app.engine.stepper import make_sim
+from engine import Macro
+from engine.driver import Leg, StrategyDriver
+from engine.stepper import make_sim
 
 T0 = datetime(2026, 10, 13, 0, 0, tzinfo=timezone.utc)
 FEES = {"commission_pct": 0.1, "slippage_pct": 0.05}

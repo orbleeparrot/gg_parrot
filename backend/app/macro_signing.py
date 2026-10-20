@@ -18,7 +18,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from .engine import Macro
+from engine import Macro
 
 # v1: exchange·quote_currency 가 없던 시절. v2: 그 둘을 포함. v3: entry_filter 를 포함.
 # v4: legs·bundle_risk(묶음)를 포함.

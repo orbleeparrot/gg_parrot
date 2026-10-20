@@ -5,8 +5,8 @@
 """
 from datetime import datetime, timedelta
 
-from app.engine.backtest import EquityPoint
-from app.engine import validation
+from engine.backtest import EquityPoint
+from engine import validation
 
 
 def curve(points):

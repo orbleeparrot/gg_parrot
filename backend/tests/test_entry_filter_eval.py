@@ -2,8 +2,8 @@
 
 기대값은 구현 출력을 베낀 것이 아니라 손으로 계산한 값이다. 계산 근거는 각 테스트 위 주석에 있다.
 """
-from app.engine.entry_filter import FilterEval, make_filter
-from app.engine.schema import Macro
+from engine.entry_filter import FilterEval, make_filter
+from engine.schema import Macro
 
 BREAKOUT = {"symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},
             "params": {"k": 0.5, "initial_capital": 1000}, "risk": {"invest_ratio": 1.0}}

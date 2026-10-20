@@ -1,9 +1,9 @@
 """필터가 걸린 매크로의 설명에 필터가 보인다 — 없으면 '왜 안 샀는지' 를 설명에서 못 찾는다."""
 import pytest
 
-from app.engine.backtest import BacktestResult
-from app.engine.explain import explain_result
-from app.engine.schema import Macro
+from engine.backtest import BacktestResult
+from engine.explain import explain_result
+from engine.schema import Macro
 
 BODY = {"symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},
         "params": {"k": 0.5, "initial_capital": 1000}, "risk": {"invest_ratio": 1.0}}

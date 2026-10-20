@@ -8,8 +8,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app.engine import Macro, run_backtest
-from app.engine.schema import Fees, Period, Risk
+from engine import Macro, run_backtest
+from engine.schema import Fees, Period, Risk
 
 
 def make_df(closes: list[float]) -> pd.DataFrame:

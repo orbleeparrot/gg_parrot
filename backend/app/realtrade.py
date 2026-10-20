@@ -18,7 +18,7 @@ import io
 import json
 import zipfile
 
-from .engine import Macro, human_summary
+from engine import Macro, human_summary
 
 # --- bot.py (verbatim; settings come from the bundled macro.json) --------
 _BOT_PY = r'''"""

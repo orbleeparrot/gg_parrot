@@ -4,9 +4,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from app.engine.backtest import run_backtest
-from app.engine import portfolio
-from app.engine.schema import Macro
+from engine.backtest import run_backtest
+from engine import portfolio
+from engine.schema import Macro
 
 
 def _df(prices):

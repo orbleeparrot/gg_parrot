@@ -3,9 +3,9 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.engine import Macro
-from app.engine.candles import LiveCandleSim
-from app.engine.stepper import make_sim
+from engine import Macro
+from engine.candles import LiveCandleSim
+from engine.stepper import make_sim
 
 T = datetime(2026, 9, 22, tzinfo=timezone.utc)
 
@@ -119,7 +119,7 @@ def test_pending_exit_executes_on_first_tick():
 
 def test_indicator_backtest_path_unchanged_by_execute_pending():
     """백테스트 경로(on_candle 만 연달아)는 예전처럼 다음 봉 시가에 체결한다 — 평가 기준가는 그 봉 종가."""
-    from app.engine.candles import make_candle_sim
+    from engine.candles import make_candle_sim
     inner = make_candle_sim(RSI, 1000.0)
     for c in [100, 105, 102, 106, 60]:
         assert inner.on_candle(c, c, c, c, T) == []

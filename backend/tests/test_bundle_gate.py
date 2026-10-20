@@ -1,9 +1,9 @@
 """묶음 관문 — 한도에 닿으면 새 진입을 막고, 청산은 건드리지 않는다."""
 from datetime import datetime, timezone
 
-from app.engine.bundle import BundleGate
-from app.engine.candles import LiveCandleSim, make_candle_sim
-from app.engine.schema import BundleRisk, Macro
+from engine.bundle import BundleGate
+from engine.candles import LiveCandleSim, make_candle_sim
+from engine.schema import BundleRisk, Macro
 
 
 class _Sim:

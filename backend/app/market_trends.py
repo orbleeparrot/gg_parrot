@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 
 from . import hotcoins
 from .data import krw
-from .exchanges import Exchange, normalize_exchange
+from engine.exchanges import Exchange, normalize_exchange
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 Sort = Literal["turnover", "gainers", "losers", "volume"]

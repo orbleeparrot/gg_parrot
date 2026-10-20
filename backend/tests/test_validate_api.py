@@ -11,8 +11,8 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.data import NoSpotDataError
-from app.engine import Macro, run_backtest
-from app.engine import validation, walkforward
+from engine import Macro, run_backtest
+from engine import validation, walkforward
 
 MACRO = {"symbol": "BTCUSDT", "rule_type": "A", "candle_interval": "1d",
          "params": {"take_profit_pct": 5, "initial_capital": 1000000},

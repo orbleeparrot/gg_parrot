@@ -14,7 +14,7 @@ import re
 from typing import Callable, Optional
 
 from .hotcoins import MIN_QUOTE_VOLUME, select_hot_coins
-from .exchanges import is_domestic, normalize_exchange, quote_currency
+from engine.exchanges import is_domestic, normalize_exchange, quote_currency
 
 POOL_SIZE = 10
 # 거래대금 상위 몇 개 안에서 고를지 — 유동성 없는 코인이 후보에 오르지 않게 한다.

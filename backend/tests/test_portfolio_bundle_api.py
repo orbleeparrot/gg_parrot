@@ -2,7 +2,7 @@
 import pandas as pd
 import pytest
 
-from app.engine.schema import Macro
+from engine.schema import Macro
 
 BASE = {
     "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},

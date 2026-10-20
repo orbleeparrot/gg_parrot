@@ -16,7 +16,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app import ask, coach, db as db_mod, main
 from app.db import AskMacroSession, User
-from app.engine import BacktestResult, Macro
+from engine import BacktestResult, Macro
 
 
 @pytest.fixture

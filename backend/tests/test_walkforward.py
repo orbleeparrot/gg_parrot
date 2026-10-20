@@ -4,8 +4,8 @@ import pytest
 
 pytest.importorskip("pandas")
 
-from app.engine import walkforward
-from app.engine.schema import Macro
+from engine import walkforward
+from engine.schema import Macro
 
 
 def frame(rows: int) -> pd.DataFrame:

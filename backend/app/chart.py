@@ -15,7 +15,7 @@ import time
 
 from .data import NoSpotDataError, get_recent_klines
 from .cache_runtime import ResponseCache
-from .exchanges import normalize_exchange, quote_currency, validate_symbol
+from engine.exchanges import normalize_exchange, quote_currency, validate_symbol
 
 # Supported intervals -> how long a chart response stays fresh. This value is
 # both the server cache TTL and the poll interval the client is told to use.

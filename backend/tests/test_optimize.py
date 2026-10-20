@@ -4,7 +4,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app.engine.schema import Fees, Macro, Period, Risk
+from engine.schema import Fees, Macro, Period, Risk
 from app.optimize import (
     DEFAULT_SL,
     DEFAULT_TP,

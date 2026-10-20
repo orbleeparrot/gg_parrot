@@ -11,9 +11,9 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.engine import Macro
-from app.engine.driver import Leg, StrategyDriver
-from app.engine.stepper import make_sim
+from engine import Macro
+from engine.driver import Leg, StrategyDriver
+from engine.stepper import make_sim
 
 T = datetime(2026, 10, 12, tzinfo=timezone.utc)
 

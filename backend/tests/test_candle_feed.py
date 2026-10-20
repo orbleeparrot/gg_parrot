@@ -3,7 +3,7 @@ import asyncio
 
 import pytest
 
-from app.engine.candle_feed import Candle, CandleFeed
+from app.candle_feed import Candle, CandleFeed
 
 
 def _k(t, c, closed=True):

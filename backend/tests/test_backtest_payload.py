@@ -1,8 +1,8 @@
 """Public backtest payload size contracts."""
 from __future__ import annotations
 
-from app.engine import backtest as backtest_mod
-from app.engine.backtest import BacktestResult, EquityPoint
+from engine import backtest as backtest_mod
+from engine.backtest import BacktestResult, EquityPoint
 
 
 def _result(points: int) -> BacktestResult:

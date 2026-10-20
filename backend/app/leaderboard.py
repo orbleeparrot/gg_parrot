@@ -33,7 +33,7 @@ from .db import (
     get_session,
 )
 from .security import verify_password
-from .exchanges import normalize_exchange, quote_currency
+from engine.exchanges import normalize_exchange, quote_currency
 
 KST = timezone(timedelta(hours=9))
 DAY_MS = 24 * 60 * 60 * 1000

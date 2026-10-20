@@ -38,8 +38,8 @@ from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
 from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession,
                  RunSessionEvent, User, UserMacro, get_session)
-from .engine import Macro, RuleType
-from .exchanges import is_domestic, normalize_exchange, validate_symbol
+from engine import Macro, RuleType
+from engine.exchanges import is_domestic, normalize_exchange, validate_symbol
 
 _KST = timezone(timedelta(hours=9))
 _log = logging.getLogger(__name__)
@@ -1327,7 +1327,7 @@ def _strategy_levels(row: RunSession, macro: Optional[dict]) -> dict:
     '진입 목표 -3%' 를 화면이 **현재가** 기준으로 그려 가격을 따라 영원히 내려왔다.
     모르면 전부 None 이다 — 추측해서 그리면 거짓이 된다.
     """
-    from .engine.live_levels import EMPTY, strategy_levels
+    from engine.live_levels import EMPTY, strategy_levels
     if not macro:
         return dict(EMPTY)
     try:

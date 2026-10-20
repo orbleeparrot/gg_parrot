@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from app import leaderboard as lb
 from app import paper as paper_mod
 from app.data import binance
-from app.engine.schema import Macro
+from engine.schema import Macro
 from app.main import app
 from app.realtrade import build_bundle
 

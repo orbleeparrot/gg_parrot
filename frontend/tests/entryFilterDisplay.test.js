@@ -7,7 +7,7 @@ import { buildMacro, defaultForm, entryFilterPhrase, withTypeDefaults } from "..
 import { leaderboardStrategy } from "../src/lib/leaderboardStrategy.js";
 import { renderComponent, textOf } from "./renderHelper.js";
 
-// 서버(backend/app/engine/entry_filter.py note())의 문구 그대로 — 두 화면이 서로 다른 말을 하지 않게.
+// 서버(backend/engine/entry_filter.py note())의 문구 그대로 — 두 화면이 서로 다른 말을 하지 않게.
 const SERVER_WORDING = {
   ma: [{ kind: "ma", params: { ma_type: "SMA", period: 20, side: "above" } }, "20봉 SMA 이동평균 위"],
   rsi: [{ kind: "rsi", params: { period: 14, max: 70 } }, "RSI(14) 70 이하"],

@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app import ask, ask_candidates
 from app.db import AskMacroSession, User, get_session
-from app.engine import BacktestResult
+from engine import BacktestResult
 
 
 def answers(**kwargs):
@@ -201,7 +201,7 @@ def test_one_letter_binance_candidate_pool_and_server_listing_revalidation(monke
 def test_martingale_orders_meet_exchange_minimum_by_raising_size_then_cutting_count():
     """2026-10-17 업비트 47,000원 → 기본 · 추가 주문 4,700원(100만 원 기준 10만 원을 비율로 줄인 값)이라
     업비트 최소 주문 5,000원에 걸려 실행기가 막았다. 주문 크기를 최소 + 2%(5,100원)로 올리고, 예산을 넘으면 횟수를 줄인다."""
-    from app.engine.schema import ParamsH
+    from engine.schema import ParamsH
 
     plan = ask._plan(answers(exchange="upbit", account_balance=47_000), "KRW-GTC")
     first = ask._make_macro(plan, "H", ask._PRESETS["H"][0], ["KRW-GTC"])

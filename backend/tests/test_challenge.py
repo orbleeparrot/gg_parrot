@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from app import ai_challenge
 from app import challenge
-from app.engine.schema import Macro
+from engine.schema import Macro
 from app.main import app
 
 client = TestClient(app)

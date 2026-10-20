@@ -25,7 +25,7 @@ _MACRO = {
 @pytest.fixture(autouse=True)
 def _stub_engine(monkeypatch):
     """시세 없이 — 리더보드 등록의 페이퍼 시작과 백테스트를 가짜로 둔다."""
-    from app.engine import BacktestResult
+    from engine import BacktestResult
 
     def fake_run_any(macro):
         result = BacktestResult(

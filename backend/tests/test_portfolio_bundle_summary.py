@@ -1,8 +1,8 @@
 """묶음 요약 문구 — 비중과 한도가 요약과 해설에 들어간다."""
-from app.engine.backtest import BacktestResult
-from app.engine.explain import explain_result
-from app.engine.schema import Macro
-from app.engine.summary import human_summary
+from engine.backtest import BacktestResult
+from engine.explain import explain_result
+from engine.schema import Macro
+from engine.summary import human_summary
 
 BASE = {
     "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},
@@ -103,8 +103,8 @@ def test_bundle_pieces_keep_their_heading_when_the_summary_is_split():
 
 def test_the_limit_card_phrase_still_uses_the_middle_dot():
     """카드(`bundleLimitPhrase`)와 해설은 `" · "` 를 그대로 쓴다 — 바꾼 것은 요약에 넣을 때만이다."""
-    from app.engine.bundle import limit_note
-    from app.engine.schema import BundleRisk
+    from engine.bundle import limit_note
+    from engine.schema import BundleRisk
 
     assert limit_note(BundleRisk(max_positions=1, max_exposure_pct=60)) \
         == "한 번에 1종목까지 · 총 노출 60% 까지"

@@ -7,8 +7,8 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app import marketdata
-from app.engine import Macro
-from app.engine.stepper import DcaSim, PositionSim, make_sim
+from engine import Macro
+from engine.stepper import DcaSim, PositionSim, make_sim
 
 client = TestClient(app)
 
@@ -79,7 +79,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 from app import paper
 from app.db import PaperSession
-from app.engine.stepper import Fill
+from engine.stepper import Fill
 
 
 class _StatefulSim:

@@ -96,7 +96,7 @@ def human_summary(macro: Macro) -> str:
             parts.append("묶음 한도: " + limit_note(macro.bundle_risk).replace(" · ", ", "))
 
     if macro.exchange != "binance":
-        from ..exchanges import capabilities
+        from .exchanges import capabilities
         parts.insert(0, f"{capabilities(macro.exchange)['label']} · KRW 현물")
     return " · ".join(parts)
 

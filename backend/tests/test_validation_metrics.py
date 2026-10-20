@@ -1,6 +1,6 @@
 """equity_curve 만 다시 읽어 내는 지표 — 백테스트를 다시 돌리지 않는다."""
-from app.engine.backtest import EquityPoint
-from app.engine import validation
+from engine.backtest import EquityPoint
+from engine import validation
 
 
 def curve(points):

@@ -3,8 +3,8 @@ import math
 
 import pandas as pd
 
-from app.engine import Macro, run_backtest
-from app.engine.backtest import _summarize_trade_share
+from engine import Macro, run_backtest
+from engine.backtest import _summarize_trade_share
 
 
 def test_a_few_big_winners_show_a_high_share():

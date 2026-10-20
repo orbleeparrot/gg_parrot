@@ -7,8 +7,8 @@ from sqlmodel import select
 
 from app import runner_engine as eng
 from app.db import RunnerCommand, RunSession, RunSessionEvent, get_session
-from app.engine import Macro
-from app.engine.stepper import Fill
+from engine import Macro
+from engine.stepper import Fill
 
 
 @pytest.fixture(autouse=True)

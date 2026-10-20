@@ -31,13 +31,13 @@ from typing import Dict, List, Optional
 from sqlmodel import Session, select
 
 from .data import NoSpotDataError, ensure_spot_available, get_klines, get_ticker_price_cached
-from .exchanges import normalize_exchange, quote_currency
+from engine.exchanges import normalize_exchange, quote_currency
 from .db import PaperSession, PaperTrade, get_session
-from .engine import Macro, RuleType
-from .engine.bundle import BundleGate
-from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
-from .engine.driver import Leg, StrategyDriver, sim_state  # noqa: F401 (sim_state 재export)
-from .engine.stepper import make_sim
+from engine import Macro, RuleType
+from engine.bundle import BundleGate
+from .candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
+from engine.driver import Leg, StrategyDriver, sim_state  # noqa: F401 (sim_state 재export)
+from engine.stepper import make_sim
 
 # 시뮬레이션 코어(레그·틱·체결 요약·상태)는 engine.driver 로 옮겼다. 여기서는 DB·체크포인트·
 # 리더보드 관심사만 남기고, 옛 이름들은 테스트 호환용 별칭·래퍼로 유지한다.

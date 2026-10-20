@@ -9,7 +9,7 @@ from .binance import (
     resolve_period,
 )
 from . import binance as _binance
-from ..exchanges import normalize_exchange, validate_symbol
+from engine.exchanges import normalize_exchange, validate_symbol
 
 
 def get_klines(symbol, start_ms, end_ms, interval="1d", *, market="spot", allow_synthetic=True, exchange="binance"):

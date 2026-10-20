@@ -12,9 +12,9 @@ import pandas as pd
 from .cache_runtime import ResponseCache
 from .data import NoSpotDataError, get_klines
 from .data.binance import _TICKER
-from .engine import Macro
+from engine import Macro
 from .http_runtime import get_http_client
-from .exchanges import normalize_exchange
+from engine.exchanges import normalize_exchange
 
 SYMBOL_RE = re.compile(r"^[A-Z0-9]{1,20}USDT$")
 MAX_PRICE_SYMBOLS = 30

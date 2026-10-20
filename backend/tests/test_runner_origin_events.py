@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 
 from app import macro_signing
 from app import runner as runner_mod
-from app.engine import Macro
+from engine import Macro
 from app.main import app
 
 client = TestClient(app)

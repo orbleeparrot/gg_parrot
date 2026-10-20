@@ -12,7 +12,7 @@ from ... import agent_logs
 from ... import runner as runner_mod
 from ... import user_macros as user_macros_mod
 from ...db import User, request_session
-from ...engine import Macro
+from engine import Macro
 from ...news import (
     NewsTranslationBusyError,
     NewsTranslationError,

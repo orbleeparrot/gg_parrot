@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from app.data import binance
-from app.engine.schema import Macro, Risk
+from engine.schema import Macro, Risk
 
 
 def _macro(side="long", leverage=1, market="auto"):

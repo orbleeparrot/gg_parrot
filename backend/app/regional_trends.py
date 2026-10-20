@@ -25,7 +25,7 @@ from . import domestic_community, feed_index, market_trends, news, news_ai_budge
 from .ai_runtime import get_ai_client, get_ai_runtime
 from .cache_runtime import ResponseCache
 from .db import get_session
-from .exchanges import validate_symbol
+from engine.exchanges import validate_symbol
 from .news_identity import news_identity
 from .public_news import PublicNewsLease, claim_work, finish_work, renew_work
 from .trend_sources import collect_source, source_registry, validate_item_url

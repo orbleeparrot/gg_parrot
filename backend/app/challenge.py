@@ -26,7 +26,7 @@ from . import leaderboard as leaderboard_mod
 from . import paper as paper_mod
 from .db import DailyChallenge, LeaderboardEntry, get_session
 from .leaderboard_snapshot import LeaderboardChallengeBot
-from .engine import Macro, human_summary
+from engine import Macro, human_summary
 
 # Each bot gets its own numbered name (껄무새1호기봇, 껄무새2호기봇, …) so the
 # board reads as several competitors rather than one repeated entry.

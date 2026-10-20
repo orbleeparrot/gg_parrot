@@ -1,5 +1,5 @@
-from app.engine import Macro, human_summary
-from app.engine.schema import Risk
+from engine import Macro, human_summary
+from engine.schema import Risk
 
 
 def test_summary_short_a():

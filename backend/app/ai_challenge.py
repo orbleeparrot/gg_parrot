@@ -13,7 +13,7 @@ import os
 from typing import Optional
 
 from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client, get_ai_runtime
-from .engine.schema import Macro, RuleType, required_param_names
+from engine.schema import Macro, RuleType, required_param_names
 
 logger = logging.getLogger(__name__)
 

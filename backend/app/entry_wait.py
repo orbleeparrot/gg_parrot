@@ -27,7 +27,7 @@ import time
 from collections import deque
 from typing import Optional
 
-from .engine.candles import BollingerState, MAState, RSIState
+from engine.candles import BollingerState, MAState, RSIState
 
 WAITING_RULES = {"B", "E", "F", "G", "I", "J"}
 STEP_MS = {
@@ -174,8 +174,8 @@ def _entry_filter(macro: dict):
     if not spec:
         return None
     try:
-        from .engine.entry_filter import FilterEval
-        from .engine.schema import EntryFilter
+        from engine.entry_filter import FilterEval
+        from engine.schema import EntryFilter
         return FilterEval(EntryFilter.model_validate(spec))
     except Exception:
         return None

@@ -1,7 +1,7 @@
 """진입 필터 스키마 — kind 별 params 검증, 못 쓰는 규칙 거부."""
 import pytest
 
-from app.engine.schema import FILTERABLE_TYPES, Macro, RuleType
+from engine.schema import FILTERABLE_TYPES, Macro, RuleType
 
 BREAKOUT = {"symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h", "period": {"preset": "3m"},
             "params": {"k": 0.5, "initial_capital": 1000}, "risk": {"invest_ratio": 1.0}}

@@ -1,9 +1,9 @@
 """공용 전략 드라이버 — 페이퍼와 실행기가 같은 코어를 쓴다."""
 from datetime import datetime, timezone
 
-from app.engine import Macro
-from app.engine.driver import Leg, StrategyDriver
-from app.engine.stepper import make_sim
+from engine import Macro
+from engine.driver import Leg, StrategyDriver
+from engine.stepper import make_sim
 
 T = datetime(2026, 9, 22, tzinfo=timezone.utc)
 

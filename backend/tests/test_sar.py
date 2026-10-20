@@ -11,9 +11,9 @@ import pandas as pd
 import pytest
 from pydantic import ValidationError
 
-from app.engine.backtest import run_backtest
-from app.engine.candles import make_candle_sim
-from app.engine.schema import Macro
+from engine.backtest import run_backtest
+from engine.candles import make_candle_sim
+from engine.schema import Macro
 
 
 def _df(prices):

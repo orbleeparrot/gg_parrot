@@ -14,10 +14,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.engine import Macro
-from app.engine.candles import TrailingSim, make_candle_sim
-from app.engine.driver import Leg, StrategyDriver
-from app.engine.stepper import make_sim
+from engine import Macro
+from engine.candles import TrailingSim, make_candle_sim
+from engine.driver import Leg, StrategyDriver
+from engine.stepper import make_sim
 
 T = datetime(2026, 10, 12, tzinfo=timezone.utc)
 
@@ -148,7 +148,7 @@ def test_restart_without_the_strategy_block_is_the_old_behaviour():
 # --- 4. 화면에 줄 가격선은 서버가 한 곳에서 계산한다 ------------------------
 
 def test_strategy_levels_for_the_screen():
-    from app.engine.live_levels import strategy_levels
+    from engine.live_levels import strategy_levels
     macro = _macro()
 
     # 무포지션 · 눌림목 대기 — 진입 목표는 **고정 기준가**의 -3% 다(현재가와 무관).
@@ -200,7 +200,7 @@ def test_levels_say_pending_before_the_first_candle_closes():
     ``entry_target: None`` 을 보냈고 화면은 미리보기 '현재가 -3%' 선을 그렸다 — 가격이
     내려갈 때마다 선도 같이 내려와 "매수지점이 계속 따라내려간다" 로 읽혔다.
     """
-    from app.engine.live_levels import strategy_levels
+    from engine.live_levels import strategy_levels
     macro = _macro()
 
     # 무포지션 · 눌림목 대기인데 기준가가 아직 없다.
@@ -366,7 +366,7 @@ def test_sar_restores_the_short_leg_and_its_cash():
     방어 전환으로 숏이 된 세션을 LONG 으로 복구하면 **현금이 틀린 식으로** 되살아난다.
     그래서 전략 상태를 장부보다 **먼저** 돌려놓는다.
     """
-    from app.engine.schema import PositionSide
+    from engine.schema import PositionSide
     macro = _m("K", {"drop_trigger_pct": 5, "partial_exit_pct": 50, "flip_to_short": True,
                      "short_take_profit_pct": 5, "short_stop_loss_pct": 5})
     live = _drive(macro, [(0, 100, 100, 100, 100), (3_600_000, 100, 100, 94, 94)])

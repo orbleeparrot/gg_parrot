@@ -19,7 +19,7 @@ from typing import Callable, Literal, Optional
 
 # exchanges.py 는 re · typing 만 쓰는 순수 파일이다 — DB · HTTP · 설정을 끌어오지 않으므로
 # 이 파일의 '순수함' 을 깨지 않는다(import 가 무거워지면 전수 시험이 비싸진다).
-from .exchanges import is_domestic
+from engine.exchanges import is_domestic
 
 PAGE_SIZE = 5          # 한 번에 보여 주는 선택지 수. 더 있으면 "다른 선택지 보기".
 MAX_SYMBOLS = 5        # buildMacro 의 symbols 상한과 같다.

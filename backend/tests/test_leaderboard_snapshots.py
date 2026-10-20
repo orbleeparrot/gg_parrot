@@ -227,7 +227,7 @@ def test_carryover_failure_rolls_back_marker_and_entries_then_retries(isolated, 
 
 def test_challenge_slot_and_entry_commit_together_on_retry(isolated):
     from app.ai_challenge import generate_macros
-    from app.engine import Macro
+    from engine import Macro
     date = challenge._today_kst()
     token = challenge._claim_daily_challenge(date)['claim_token']
     macro = Macro(**generate_macros('BTCUSDT', 1)[0])

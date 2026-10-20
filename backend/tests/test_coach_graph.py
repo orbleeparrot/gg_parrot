@@ -100,7 +100,7 @@ def test_rule_choices_narrow_from_earlier_answers():
 
 
 def test_rule_choices_are_valid_rule_types():
-    from app.engine.schema import RuleType
+    from engine.schema import RuleType
     valid = {r.value for r in RuleType}
     for goal in GRAPH["goal"].choices:
         for risk in GRAPH["risk"].choices:
@@ -220,7 +220,7 @@ def test_rule_patch_carries_the_type_defaults_exactly():
 
 
 def test_filterable_matches_the_server():
-    from app.engine.schema import FILTERABLE_TYPES
+    from engine.schema import FILTERABLE_TYPES
     assert FILTERABLE == {r.value for r in FILTERABLE_TYPES}
 
 
@@ -266,7 +266,7 @@ def _model_input(patch, model):
 
 
 def test_every_rule_patch_validates_against_the_server_params():
-    from app.engine.schema import _PARAMS_MODEL
+    from engine.schema import _PARAMS_MODEL
     for rule, model in _PARAMS_MODEL.items():
         if rule.value not in _TYPE_DEFAULTS:
             continue
@@ -277,7 +277,7 @@ def test_every_rule_patch_validates_against_the_server_params():
 
 def test_capital_scaling_keeps_martingale_affordable_for_every_split():
     """H 는 최악의 필요 자금이 (자금 x 레그 몫 x 투입 비율) 안이어야 서버가 받는다."""
-    from app.engine.schema import ParamsH
+    from engine.schema import ParamsH
     ratios = {c.value: c.patch["invest_ratio_pct"] / 100 for c in GRAPH["risk"].choices}
     # (종목, 비중 답, 가장 작은 레그의 몫)
     splits = [("BTCUSDT", None, 1.0), ("BTCUSDT, ETHUSDT", "even", 0.5),
@@ -357,7 +357,7 @@ def test_dca_is_offered_only_to_people_who_look_daily():
 
 
 def test_entry_filter_patches_are_valid_filters():
-    from app.engine.schema import EntryFilter
+    from engine.schema import EntryFilter
     for c in GRAPH["entry_filter"].choices:
         if not c.patch["use_entry_filter"]:
             continue
@@ -372,7 +372,7 @@ def test_entry_filter_patches_are_valid_filters():
 
 
 def test_bundle_risk_patches_are_valid_for_every_symbol_count():
-    from app.engine.schema import BundleRisk
+    from engine.schema import BundleRisk
     for c in GRAPH["bundle_risk"].choices:
         if not c.patch["use_bundle_risk"]:
             continue

@@ -21,7 +21,7 @@ _MACRO = {
 @pytest.fixture(autouse=True)
 def _stub_engine(monkeypatch):
     """No market data in tests: backtest and paper start succeed without the network."""
-    from app.engine import BacktestResult
+    from engine import BacktestResult
 
     def fake_run_any(macro):
         result = BacktestResult(

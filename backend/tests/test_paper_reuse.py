@@ -5,9 +5,9 @@ reproduce the backtest's equity curve exactly (no duplicated / drifting logic).
 """
 from __future__ import annotations
 
-from app.engine import Macro, run_backtest
-from app.engine.schema import Fees, Period, Risk
-from app.engine.stepper import make_sim
+from engine import Macro, run_backtest
+from engine.schema import Fees, Period, Risk
+from engine.stepper import make_sim
 from tests.test_engine import make_df, NO_COST
 
 

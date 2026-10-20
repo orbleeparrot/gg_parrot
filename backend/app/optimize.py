@@ -31,7 +31,7 @@ from typing import List, Optional
 import pandas as pd
 
 from .data import estimate_bar_count, resolve_period
-from .engine import Macro, run_backtest
+from engine import Macro, run_backtest
 from .marketdata import fetch_klines_for_macro
 
 # Bound each axis so one request can't explode into thousands of backtests.

@@ -15,7 +15,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from app import paper
 from app.db import PaperSession, PaperTrade
-from app.engine import Macro
+from engine import Macro
 
 
 class _FakeSim:

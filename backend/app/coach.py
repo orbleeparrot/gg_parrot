@@ -53,7 +53,7 @@ from .coach_graph import (
     patch_for,
 )
 from .db import AskMacroSession, User
-from .exchanges import normalize_exchange
+from engine.exchanges import normalize_exchange
 from .quests import today_kst
 
 COACH_KIND = "coach"

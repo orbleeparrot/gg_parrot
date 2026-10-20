@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import macro_signing
-from app.engine import Macro
+from engine import Macro
 from app.main import app
 
 MACRO = {

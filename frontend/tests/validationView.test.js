@@ -20,7 +20,7 @@ test("모르는 경고 코드는 식별자 대신 일반 문장이 된다 — �
 });
 
 test("화면이 아는 경고 코드는 백엔드 WARNING_CODES 와 같은 목록이다", () => {
-  const source = readFileSync(new URL("../../backend/app/engine/validation.py", import.meta.url), "utf8");
+  const source = readFileSync(new URL("../../backend/engine/validation.py", import.meta.url), "utf8");
   const match = source.match(/^WARNING_CODES\s*=\s*\(([^)]*)\)/m);
   assert.ok(match, "백엔드 WARNING_CODES 를 못 읽었다 — 이 시험이 아무것도 보지 않는 것이다");
   const backend = [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);

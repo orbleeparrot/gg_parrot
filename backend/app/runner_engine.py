@@ -25,11 +25,11 @@ from sqlmodel import select
 
 from .data import get_ticker_price_cached  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
 from .db import RunnerCommand, RunSession, get_session
-from .engine import Macro
+from engine import Macro
 from .data.binance import _INTERVAL_MS
-from .engine.candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
-from .engine.driver import Leg, StrategyDriver
-from .engine.stepper import EXIT_SIDES, Fill, make_sim
+from .candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
+from engine.driver import Leg, StrategyDriver
+from engine.stepper import EXIT_SIDES, Fill, make_sim
 
 log = logging.getLogger(__name__)
 

@@ -43,7 +43,7 @@ def test_korean_amounts_have_no_decimals():
 
 def test_symbol_is_a_safe_stand_in_for_the_exchange():
     """RunSession 에 거래소 칸이 없어 종목명으로 가른다 — 스키마가 그 모양을 보장한다."""
-    from app.engine.schema import validate_symbol
+    from engine.schema import validate_symbol
     validate_symbol("KRW-BTC", "upbit")                 # 국내는 KRW- 만
     with pytest.raises(ValueError):
         validate_symbol("BTCUSDT", "upbit")

@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from app.engine.schema import Macro
+from engine.schema import Macro
 from app.macro_signing import (
     ACCEPTED_SIG_VERSIONS, SIG_VERSION, _key, canonical_bytes, sign, verify,
 )

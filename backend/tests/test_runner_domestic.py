@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from app import runner as runner_mod
 from app import runner_engine as eng
 from app.db import RunnerLaunchTicket, RunSession, get_session
-from app.engine import Macro
+from engine import Macro
 from app.main import app
 from tests.test_runner import _auth, _signup
 from tests.test_runner_signals_api import A, DCA, _key, _start, _stop, _ticket

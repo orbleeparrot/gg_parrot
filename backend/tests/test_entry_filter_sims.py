@@ -2,8 +2,8 @@
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from app.engine.candles import make_candle_sim
-from app.engine.schema import Macro
+from engine.candles import make_candle_sim
+from engine.schema import Macro
 
 START = datetime(2026, 1, 1, tzinfo=timezone.utc)
 

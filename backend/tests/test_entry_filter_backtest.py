@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from app.engine import Macro, run_backtest
+from engine import Macro, run_backtest
 
 BREAKOUT = {"symbol": "BTCUSDT", "rule_type": "I", "candle_interval": "1h",
             "period": {"preset": "custom"}, "params": {"k": 0.1, "initial_capital": 1000},

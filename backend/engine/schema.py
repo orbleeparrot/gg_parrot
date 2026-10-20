@@ -17,7 +17,7 @@ from typing import ClassVar, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from ..exchanges import Exchange, is_domestic, quote_currency as exchange_quote, validate_symbol
+from .exchanges import Exchange, is_domestic, quote_currency as exchange_quote, validate_symbol
 
 # Upper bound on macro leverage (demo safety cap). Env-tunable; the builder mirrors
 # this default. Leverage is a backtest/paper-only concept (never applied to real

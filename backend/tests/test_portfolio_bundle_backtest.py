@@ -1,9 +1,9 @@
 """레그 동기 백테스트 — 한도가 레그를 가로질러 듣는가, 그리고 한도가 없을 때 기존 경로와 같은가."""
 import pandas as pd
 
-from app.engine.backtest import run_backtest
-from app.engine.portfolio_backtest import run_bundle, split_frames_by_time
-from app.engine.schema import Macro
+from engine.backtest import run_backtest
+from engine.portfolio_backtest import run_bundle, split_frames_by_time
+from engine.schema import Macro
 
 BREAKOUT_PARAMS = {"k": 0.5, "initial_capital": 1000}
 BASE = {
@@ -303,7 +303,7 @@ def test_empty_frames_are_not_shared_between_windows():
 
 def test_curve_timestamps_match_the_shared_iso_format():
     """곡선의 t 는 backtest._iso 와 같은 글자여야 한다 — 서식을 두 벌 들고 있어서 못 박는다."""
-    from app.engine.backtest import _iso
+    from engine.backtest import _iso
 
     f = frame(RISING)
     legs = [{"symbol": "BTCUSDT", "weight": 50}, {"symbol": "ETHUSDT", "weight": 50}]
@@ -314,7 +314,7 @@ def test_curve_timestamps_match_the_shared_iso_format():
 
 def test_no_gate_object_is_created_without_bundle_limits(monkeypatch):
     """한도가 없으면 관문을 아예 만들지 않는다(심의 bundle_gate 가 None 으로 남는다)."""
-    import app.engine.portfolio_backtest as pb
+    import engine.portfolio_backtest as pb
 
     seen = []
 

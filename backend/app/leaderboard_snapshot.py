@@ -19,7 +19,7 @@ from sqlmodel import Field, SQLModel, select
 
 from .db import LeaderboardEntry, LeaderboardVote, MacroUnlock, get_session
 from .cache_runtime import ResponseCache
-from .exchanges import normalize_exchange, quote_currency
+from engine.exchanges import normalize_exchange, quote_currency
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100

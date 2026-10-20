@@ -29,6 +29,13 @@ from engine import Macro
 from .data.binance import _INTERVAL_MS
 from .candle_feed import feed  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
 from engine.driver import Leg, StrategyDriver
+from engine.live_session import (
+    FALLBACK_CAPITAL,
+    WARMUP_CANDLES,
+    build_driver,
+    command_from_fill,
+    unjudged_last_close,
+)
 from engine.stepper import EXIT_SIDES, Fill, make_sim
 
 log = logging.getLogger(__name__)
@@ -46,8 +53,6 @@ COMMAND_DEDUPE_SECONDS = float(os.environ.get("COMMAND_DEDUPE_SECONDS", "60"))
 # 아무도 실행하지 않을 명령을 쌓지 않게. 마이페이지의 '연결 끊김'(30초)보다 훨씬 길게 잡아 잠깐의 끊김은 견딘다.
 STALE_RUNNER_SECONDS = float(os.environ.get("RUNNER_STALE_SECONDS", "3600"))
 STALE_RUNNER_NOTE = "실행기 연결 끊김 — 서버 전략을 자동 종료했어요"
-WARMUP_CANDLES = 500
-FALLBACK_CAPITAL = 100.0  # 실행기 MAX_ORDER_USDT 기본과 같다
 EXIT_FAIL_NOTE = "청산 실패 — 확인 필요"
 ENTRY_SIDES = ("buy", "short")
 # 진입 주문이 나가지 않으면(실패 · 만료) 서버 전략을 그 신호 직전으로 되돌린 뒤, 이만큼 기다렸다가 다시 진입한다.
@@ -129,15 +134,6 @@ def schedule_stop(session_id: int) -> None:
 
 
 # --- 드라이버 ------------------------------------------------------------
-def build_driver(macro: Macro, symbol: str) -> StrategyDriver:
-    """실행기 세션은 종목 하나 — 초기자본은 매크로 값, 없으면 실행기 기본 주문 한도."""
-    initial = float(macro.initial_capital or FALLBACK_CAPITAL)
-    sym = (symbol or macro.symbol).upper()
-    driver = StrategyDriver([Leg(sym, make_sim(macro, initial_capital=initial), initial)], initial, macro=macro)
-    driver.enable_fill_snapshots()  # 진입이 실제로 안 나가면 되돌릴 수 있게 체결 직전 상태를 잡는다
-    return driver
-
-
 START_FAIL_NOTE = "서버 전략 시작 실패 — 매크로 설정을 확인해 주세요"
 # 실행기는 macro["symbol"] 하나만 읽으므로 여러 종목 매크로를 되살리면 첫 종목에 전액이 들어간다.
 # 새 세션은 runner.py 의 관문 세 곳이 막지만, 그 관문이 생기기 **전에** 시작해 지금도 running 인 세션은
@@ -289,23 +285,12 @@ async def _start_driver(session_id: int) -> bool:
 
 
 def _unjudged_last_close(history: Dict[str, list], state: Optional[dict], keys: List[tuple]) -> Dict[str, tuple]:
-    """되살릴 때 실시간으로 다시 판정할 봉 — 종목마다 가장 최근 마감봉이 마지막 저장(checkpoint_ms) 뒤에 마감됐으면 그 봉.
-
-    체결이 나면 그 자리에서 상태를 저장하므로(checkpoint_ms = 처리 시각 > 마감 시각) 판정해 체결까지 간 봉은 여기
-    걸리지 않는다. 판정했지만 체결이 없던 봉이 걸리면 같은 봉으로 같은 결정을 다시 내릴 뿐이다(웜업은 그 봉을 빼고 한다).
-    처음 시작(저장 없음)이면 비운다 — 시작하자마자 지난 봉의 신호로 사지 않는다.
-    """
+    """종목마다 다시 판정할 봉. 판정 규칙은 공유 엔진이 갖는다(engine.live_session) — 실행기도 같은 규칙으로 되살린다."""
     checkpoint = (state or {}).get("checkpoint_ms")
-    if not checkpoint:
-        return {}
     out: Dict[str, tuple] = {}
     for symbol, interval, _market in keys:
-        rows = history.get(symbol) or []
-        step = _INTERVAL_MS.get(interval)
-        if not rows or not step:
-            continue
-        last = rows[-1]
-        if int(last[0]) + int(step) > int(checkpoint):
+        last = unjudged_last_close(history.get(symbol) or [], checkpoint, _INTERVAL_MS.get(interval) or 0)
+        if last is not None:
             out[symbol] = last
     return out
 
@@ -516,19 +501,6 @@ def _persist_fill(live: _Live, fill: Fill, state_json: str, rollback_json: str =
 
 
 # --- Fill → 명령 -----------------------------------------------------------
-def command_from_fill(fill: Fill, initial: float) -> dict:
-    """진입은 초기자본 대비 금액 비율, 청산은 직전 보유 수량 대비 비율(모르면 전량)."""
-    if fill.side in EXIT_SIDES:
-        frac = 1.0 if fill.qty_before <= 0 else min(1.0, fill.qty / fill.qty_before)
-        if frac >= 0.999:
-            frac = 1.0
-        return {"action": fill.side, "notional_frac": 0.0, "qty_frac": float(frac),
-                "signal_price": float(fill.price), "reason": fill.reason or "청산"}
-    notional = fill.qty * fill.price
-    return {"action": fill.side, "notional_frac": float(notional / initial) if initial > 0 else 0.0, "qty_frac": 0.0,
-            "signal_price": float(fill.price), "reason": fill.reason or "진입"}
-
-
 def upsert_command(db, row: RunSession, cmd: dict, now_ms: int, *, rollback_state: str = "") -> tuple[RunnerCommand, bool]:
     """세션 안에서 seq 를 이어 pending 명령을 넣는다(flush 만, 커밋은 호출자). ``(행, 새로 넣었는지)``.
 

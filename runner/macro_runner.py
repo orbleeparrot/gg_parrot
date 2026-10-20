@@ -95,6 +95,7 @@ try:  # package import (tests) / direct script import (PyInstaller build)
         RunnerSingleInstance,
         SingleInstanceError,
     )
+    from .shared_engine import ENGINE_VERSION
 except ImportError:
     from protocol import (
         PROTOCOL_CLAIM_PATH,
@@ -113,6 +114,9 @@ except ImportError:
         RunnerSingleInstance,
         SingleInstanceError,
     )
+    # 판단 엔진은 서버와 공유하는 한 벌이다(backend/engine). 여기서 깨지면 빌드가
+    # 엔진을 안 묶은 것 — 조용히 넘어가면 옛 엔진으로 도는 실행기를 서버가 못 가린다.
+    from shared_engine import ENGINE_VERSION
 
 # ==================================================================
 #  설정
@@ -217,6 +221,9 @@ def _session_payload(macro: dict, *, testnet: bool, mode: str) -> dict:
         "human_summary": macro.get("human_summary", ""),
         # 서버가 세션에 기록하고 오래된 버전을 거절할 수 있게 실어 보낸다.
         "runner_version": RUNNER_VERSION,
+        # 이 실행기에 묶여 있는 판단 엔진의 세대. 실행기가 스스로 판단하게 되면 서버가
+        # 이 값으로 "이 매크로를 이 엔진이 판단해도 같은 답이 나오는가" 를 가린다.
+        "engine_version": str(ENGINE_VERSION),
         # 매크로 원문 — 마이페이지 실시간 차트에 빌더와 동일한 전략 보조지표를
         # 그리는 데 쓰인다. 거래소 키/시크릿은 여기에 포함되지 않는다.
         "macro": macro,
@@ -3153,7 +3160,8 @@ class RunnerApp:
         try:
             response = requests.post(
                 f"{claim_base}{PROTOCOL_CLAIM_PATH}",
-                json={"ticket": launch.ticket, "runner_version": RUNNER_VERSION},
+                json={"ticket": launch.ticket, "runner_version": RUNNER_VERSION,
+                      "engine_version": str(ENGINE_VERSION)},
                 timeout=15,
             )
             response.raise_for_status()

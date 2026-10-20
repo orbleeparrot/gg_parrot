@@ -507,6 +507,10 @@ class RunSession(SQLModel, table=True):
     pinned: bool = False
     # 시작 요청에 실린 실행기 버전. v6 이하 exe 는 보내지 않아 빈 문자열로 남는다.
     runner_version: str = ""
+    # 그 실행기에 묶여 있던 판단 엔진의 세대(engine.version.ENGINE_VERSION). 판단을 서버에
+    # 맡기는 실행기는 보내지 않아 빈 문자열이다. 실행기가 스스로 판단하게 되면, "왜 내 봇만
+    # 다른 자리에서 샀나" 를 이 값 없이는 답할 수 없다.
+    engine_version: str = ""
     # 매크로 출처 — web | file_verified | file_modified | file_unsigned (macro_signing 참고).
     # 옛 실행기가 만든 세션은 빈 문자열.
     macro_origin: str = ""
@@ -1411,6 +1415,7 @@ def _migrate() -> None:
     })
     added.setdefault("runsession", {}).update({
         "runner_version": "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''",
+        "engine_version": "ALTER TABLE runsession ADD COLUMN engine_version TEXT DEFAULT ''",
         # 옛 행은 빈 값으로 남는다 — 그 세션은 testnet 플래그로만 읽는다(모드를 아무도 보내지 않았다).
         "mode": "ALTER TABLE runsession ADD COLUMN mode TEXT DEFAULT ''",
     })
@@ -1541,6 +1546,7 @@ _PG_ADDED_COLUMNS = {
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
         "runner_version": "TEXT DEFAULT ''",
+        "engine_version": "TEXT DEFAULT ''",
         "mode": "TEXT DEFAULT ''",
         "macro_origin": "TEXT DEFAULT ''",
         "macro_digest": "TEXT DEFAULT ''",

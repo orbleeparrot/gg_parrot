@@ -39,6 +39,7 @@ from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦
 from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession,
                  RunSessionEvent, User, UserMacro, get_session)
 from engine import Macro, RuleType
+from engine.version import ENGINE_VERSION, meets_engine_version, required_engine_version
 from engine.exchanges import is_domestic, normalize_exchange, validate_symbol
 
 _KST = timezone(timedelta(hours=9))
@@ -298,6 +299,29 @@ def _ticket_error(status_code: int, detail: str) -> HTTPException:
 DOMESTIC_BUNDLE_DETAIL = "독립 봇 압축파일은 바이낸스 전용이에요. 업비트·빗썸은 매크로 파일(.ggm.json)을 내려받아 매크로 실행기에 넣어 주세요."
 
 
+ENGINE_REQUIRED_DETAIL = (
+    "이 매크로는 더 새로운 판단 엔진이 필요해요. 실행기를 업데이트해 주세요."
+)
+
+
+def _require_engine_version(macro: Macro, engine_version: str) -> None:
+    """실행기가 **스스로 판단**해도 백테스트와 같은 답이 나오는 세대인지 본다.
+
+    실행기가 엔진 세대를 밝히지 않으면(지금 배포된 전부) 통과시킨다 — 판단을 서버가
+    하므로 그 실행기의 엔진은 결과에 영향이 없다. 실행기가 판단을 넘겨받으면서
+    세대를 싣고 오고, 그때부터 이 비교가 일을 한다.
+
+    늦게 사는 것보다 **다르게 사는 것**이 나쁘다. 늦은 건 사용자 눈에 보이지만,
+    옛 엔진이 다른 자리에서 사고판 건 보이지 않는다.
+    """
+    if not meets_engine_version(engine_version, macro):
+        raise _ticket_error(
+            426,
+            f"{ENGINE_REQUIRED_DETAIL}"
+            f"(필요 {required_engine_version(macro)} · 지금 {str(engine_version or '').strip() or '알 수 없음'})",
+        )
+
+
 def _require_supported_exchange(macro: Macro, runner_version: str) -> None:
     """국내 거래소 매크로는 국내 주문을 낼 줄 아는 실행기(v10+)에만 내준다. 바이낸스는 버전을 묻지 않는다.
 
@@ -482,7 +506,7 @@ def mark_launch_ticket_rejected(ticket: str, runner_version: str) -> None:
         return
 
 
-def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
+def claim_launch_ticket(ticket: str, runner_version: str = "", engine_version: str = "") -> dict:
     """Atomically consume a launch ticket and return its local-runner payload.
 
     ``runner_version`` 은 최소 버전 검사를 통과한 값이다. 여기서는 매크로 종류를 보고 한 번 더 가른다 —
@@ -543,6 +567,13 @@ def claim_launch_ticket(ticket: str, runner_version: str = "") -> dict:
             db.rollback()
             mark_launch_ticket_rejected(raw_ticket, runner_version)
             raise _ticket_error(426, BINANCE_HELPER_REQUIRED_DETAIL)
+        try:
+            _require_engine_version(macro, engine_version)
+        except HTTPException:
+            # 거래소 게이트와 같은 취급 — 거절만 남기고 티켓은 소비하지 않는다(업데이트하면 청구 가능).
+            db.rollback()
+            mark_launch_ticket_rejected(raw_ticket, runner_version)
+            raise
         if not supports_signals(runner_version) and needs_signals(macro):
             # 구버전 실행기 + 지표형 매크로: 거절 사실만 남기고(웹이 상태 조회로 알아챔) 티켓은 소비하지 않는다.
             # mark_launch_ticket_rejected 는 자기 세션을 여니 BEGIN IMMEDIATE 잠금을 먼저 푼다.
@@ -628,6 +659,8 @@ def start_session(user: User, payload: dict) -> dict:
     summary = str(payload.get("human_summary", ""))[:300]
     # 시작 요청에 실린 실행기 버전. 예전 실행기는 보내지 않는다(빈 문자열).
     runner_version = str(payload.get("runner_version") or "").strip()[:12]
+    # 실행기에 묶여 있는 판단 엔진의 세대. 지금 배포된 실행기는 보내지 않는다(빈 문자열).
+    engine_version = str(payload.get("engine_version") or "").strip()[:12]
     if market not in ("spot", "futures"):
         market = "futures" if (side == "short" or leverage > 1) else "spot"
     # 실행 중인 매크로 원문 — 마이페이지 실시간 차트에 전략 보조지표를 그리는 데 쓴다.
@@ -664,6 +697,9 @@ def start_session(user: User, payload: dict) -> dict:
     # (청구 경로와 같은 순서).
     if normalized_macro is not None:
         _require_supported_exchange(normalized_macro, runner_version)
+        # 엔진 세대 게이트 — 거래소와 같은 자리(업데이트로 풀리는 문제)에 둔다. 세대를 밝히지
+        # 않는 실행기는 통과한다(판단을 서버가 하므로 그 실행기의 엔진은 결과에 영향이 없다).
+        _require_engine_version(normalized_macro, engine_version)
     if not signal_runner and needs_signals(normalized_macro):
         raise HTTPException(status_code=426, detail=SIGNAL_REQUIRED_DETAIL)
 
@@ -730,6 +766,7 @@ def start_session(user: User, payload: dict) -> dict:
             started_at=now,
             last_heartbeat_at=now,
             runner_version=runner_version,
+            engine_version=engine_version,
             macro_origin=macro_origin,
             macro_digest=macro_digest,
         )
@@ -743,6 +780,7 @@ def start_session(user: User, payload: dict) -> dict:
             "severity": "INFO", "event_name": "session.started",
             "event_key": f"session:{row.id}:started", "operation_id": f"session:{row.id}",
             "details": {"status": row.status, "runner_version": row.runner_version,
+                        "engine_version": row.engine_version,
                         "macro_origin": row.macro_origin, "macro_digest": row.macro_digest},
             "message": (
                 f"실행 시작 · 실행기 v{runner_version or '?'} · {environment_label(row)}"
@@ -1399,6 +1437,8 @@ def _session_view(row: RunSession) -> dict:
         "stopping": stopping,
         "stop_mode": row.stop_mode,
         "runner_version": getattr(row, "runner_version", ""),
+        # 실행기에 묶여 있던 판단 엔진 세대. 빈 값은 "판단을 서버에 맡긴 실행기".
+        "engine_version": getattr(row, "engine_version", ""),
         "macro_origin": getattr(row, "macro_origin", "") or "",
         "macro_origin_label": macro_signing.ORIGIN_LABELS.get(getattr(row, "macro_origin", "") or "", ""),
         "macro_digest": getattr(row, "macro_digest", "") or "",

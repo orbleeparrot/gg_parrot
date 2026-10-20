@@ -164,6 +164,7 @@ def _session_context(session: RunSession) -> dict:
     return {"session_id": session.id, "symbol": _safe_text(session.symbol, 40), "exchange": exchange,
             "mode": session.mode if session.mode in {"mock", "testnet", "live"} else "",
             "market": _safe_text(session.market, 24), "runner_version": _safe_text(session.runner_version, 24),
+            "engine_version": _safe_text(getattr(session, "engine_version", ""), 24),
             "macro_digest": _safe_text(session.macro_digest, 64)}
 
 

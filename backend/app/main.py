@@ -404,6 +404,10 @@ class RunnerStartRequest(BaseModel):
     macro: Optional[dict] = None
     # 실행기 버전. v7 부터 보낸다. 있고 최소 버전 미만이면 세션을 만들지 않는다.
     runner_version: str = ""
+    # 실행기에 묶여 있는 판단 엔진의 세대(engine.version.ENGINE_VERSION). 실행기가
+    # 스스로 판단하게 되면 이 값이 매크로가 요구하는 세대보다 낮을 때 세션을 열지 않는다.
+    # 지금 실행기는 보내지 않는다(빈 값 = 판단을 서버에 맡기는 실행기 → 검사 생략).
+    engine_version: str = ""
     # 매크로 파일에 동봉된 서명(`_sig`). 실행기 v7+ 가 파일을 열면 그대로 올린다.
     # 서버가 검증해 세션 출처(원본/수정본)를 남긴다. 티켓 경로·옛 실행기는 None.
     macro_sig: Optional[dict] = None
@@ -454,6 +458,7 @@ class RunnerLaunchTicketCreateRequest(BaseModel):
 class RunnerLaunchTicketClaimRequest(BaseModel):
     ticket: str
     runner_version: str = ""
+    engine_version: str = ""
 
 
 # 실행기(v13+)가 웹 가이드에 알리는 연결 도우미 단계. 정해진 값만 받고 다른 칸은 422 —
@@ -2552,7 +2557,9 @@ def runner_launch_ticket_claim(
             detail=f"실행기 v{_RUNNER_MIN_VERSION or MIN_SUPPORTED_RUNNER_VERSION} 이상으로 업데이트해 주세요.",
             headers={"Cache-Control": "no-store"},
         )
-    return runner_mod.claim_launch_ticket(req.ticket, runner_version=current)
+    return runner_mod.claim_launch_ticket(
+        req.ticket, runner_version=current, engine_version=req.engine_version.strip()
+    )
 
 
 @app.post("/api/runner/launch-tickets/{launch_id}/progress")

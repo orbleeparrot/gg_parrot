@@ -47,9 +47,11 @@ from engine.candles import make_candle_sim  # noqa: E402
 from engine.driver import Leg, StrategyDriver, sim_state, sim_strategy_state  # noqa: E402
 from engine.live_levels import strategy_levels  # noqa: E402
 from engine.stepper import Fill  # noqa: E402
+from engine.version import ENGINE_VERSION  # noqa: E402
 
 __all__ = [
     "BACKEND_DIR",
+    "ENGINE_VERSION",
     "bootstrap_import_path",
     "Fill",
     "Leg",

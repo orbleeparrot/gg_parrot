@@ -29,7 +29,7 @@ _TEXT_FIELDS = {
     "outcome": 64, "reason": 500, "action": 24, "status": 40,
     "command_status": 40, "fee_currency": 24, "error_code": 100,
     "error_type": 100, "error": 500, "ack_source": 40, "verification": 100,
-    "runner_version": 24, "macro_origin": 40, "macro_digest": 64,
+    "runner_version": 24, "engine_version": 24, "macro_origin": 40, "macro_digest": 64,
     "source": 80, "query": 200, "stage": 40, "condition": 120,
     "indicator": 64, "decision": 100, "mode": 24, "market": 24,
     "exchange": 24, "symbol": 40,

@@ -73,7 +73,9 @@ def test_legacy_logs_have_unknown_level_and_no_inferred_operation(owner):
     assert item["ts"] == "2026-10-13T02:01:02+00:00"  # no fabricated milliseconds
     assert item["time_basis"] == "event" and item["occurred_at"] == item["ts"]
     assert body["context"] == {"session_id": owner[1], "symbol": "KRW-BTC", "exchange": "upbit",
-                               "mode": "live", "market": "spot", "runner_version": "10", "macro_digest": ""}
+                               "mode": "live", "market": "spot", "runner_version": "10",
+                               # 판단 엔진 세대 — 이 세션은 서버가 판단하던 실행기라 빈 값이다.
+                               "engine_version": "", "macro_digest": ""}
     assert read(owner).headers["cache-control"] == "private, no-store"
 
 

@@ -22,6 +22,7 @@ ENGINE_DIR = Path(__file__).resolve().parents[1] / "engine"
 
 # 실행기가 실제로 쓰는 모듈 — 봉 판정과 주문 결정에 필요한 전부.
 LIVE_PATH = [
+    "engine.version",
     "engine.schema",
     "engine.exchanges",
     "engine.leverage",

@@ -108,6 +108,24 @@ def _version_at_least(version: str, minimum: str) -> bool:
     return v.isascii() and v.isdigit() and len(v) <= 6 and m.isdigit() and int(v) >= int(m)
 
 
+# 체결 기준 장부(2026-10-21 설계 §9): 서버 전략 장부를 실행기가 보고한 실제 체결로 확정한다. 실행기 연동 레벨 21(0.21.0)부터
+# ack 에 주문 사실(orders)을, 하트비트에 로컬 체결(local_fills)을 싣는다. 1단계는 마틴게일(H) · 롱 · 현물 · 레버리지 1 만 —
+# 다른 규칙은 검증 뒤 따로 켠다. 정책은 세션을 만들 때 한 번 저장하고 재기동 · 재연결 복구는 그 값만 본다(실행기가
+# 업데이트돼도 이미 시작한 세션의 방식은 바뀌지 않는다). 끄는 스위치: RUNNER_FILL_LEDGER_MIN_VERSION=999.
+FILL_LEDGER_MIN_VERSION = os.environ.get("RUNNER_FILL_LEDGER_MIN_VERSION", "21").strip() or "21"
+
+
+def fill_ledger_policy(macro: Optional[Macro], runner_version: str) -> str:
+    """새 세션에 저장할 실행 방식. 조건이 하나라도 안 맞으면 빈 값 — 지금 방식으로 돈다."""
+    if macro is None or not _version_at_least(runner_version, FILL_LEDGER_MIN_VERSION):
+        return ""
+    if macro.rule_type is not RuleType.H or macro.is_portfolio():
+        return ""
+    if macro.position_side.value != "long" or macro.resolved_market() != "spot" or int(macro.leverage or 1) != 1:
+        return ""
+    return runner_engine.FILL_LEDGER_POLICY
+
+
 def binance_helper_active() -> bool:
     """운영에 공개된 실행기(RUNNER_DOWNLOAD_URL)가 바이낸스 연결 도우미를 가졌는가."""
     from .runner_release import resolve_runner_release
@@ -732,6 +750,7 @@ def start_session(user: User, payload: dict) -> dict:
             runner_version=runner_version,
             macro_origin=macro_origin,
             macro_digest=macro_digest,
+            exec_policy=fill_ledger_policy(normalized_macro, runner_version),
         )
         db.add(row)
         db.commit()
@@ -743,7 +762,8 @@ def start_session(user: User, payload: dict) -> dict:
             "severity": "INFO", "event_name": "session.started",
             "event_key": f"session:{row.id}:started", "operation_id": f"session:{row.id}",
             "details": {"status": row.status, "runner_version": row.runner_version,
-                        "macro_origin": row.macro_origin, "macro_digest": row.macro_digest},
+                        "macro_origin": row.macro_origin, "macro_digest": row.macro_digest,
+                        "exec_policy": row.exec_policy},
             "message": (
                 f"실행 시작 · 실행기 v{runner_version or '?'} · {environment_label(row)}"
                 f" · 매크로 {macro_signing.ORIGIN_LABELS.get(macro_origin, macro_origin)}"

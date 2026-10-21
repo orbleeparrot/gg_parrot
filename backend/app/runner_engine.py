@@ -61,6 +61,8 @@ ROLLED_BACK_ALSO = "rolled_back_also"
 # 길게 쥐면 다른 회원의 heartbeat 가 '혼잡' 으로 밀린다. 루프는 보통 수 ms 안에 받는다 — 못 받으면 다음 heartbeat 에 다시.
 ROLLBACK_WAIT_SECONDS = 0.5
 ROLLBACK_RETRY_MAX = 5  # 일시적으로 못 되돌린 진입을 다음 heartbeat 들에서 다시 시도하는 횟수
+# 세션 실행 방식(RunSession.exec_policy) — 서버 전략 장부를 실행기가 보고한 실제 체결로 확정한다(runner.fill_ledger_policy).
+FILL_LEDGER_POLICY = "fill_ledger_v1"
 
 
 def _now_iso() -> str:
@@ -151,7 +153,8 @@ def _load_session(session_id: int) -> Optional[dict]:
         row = db.get(RunSession, session_id)
         if row is None or row.status != "running":
             return None
-        return {"symbol": row.symbol, "macro_json": row.macro_json, "state_json": row.state_json}
+        return {"symbol": row.symbol, "macro_json": row.macro_json, "state_json": row.state_json,
+                "exec_policy": row.exec_policy or ""}
 
 
 def _note_start_failure(session_id: int) -> None:
@@ -233,6 +236,8 @@ async def _start_driver(session_id: int) -> bool:
             raise ValueError("macro_json is empty")
         macro = Macro.model_validate_json(info["macro_json"])
         driver = build_driver(macro, info["symbol"])
+        if info.get("exec_policy") == FILL_LEDGER_POLICY:
+            driver.enable_fill_ledger()  # 세션을 만들 때 정한 값만 본다 — 실행기 버전이 바뀌어도 그대로(결정 4)
     except Exception:
         log.exception("runner engine: session %s macro invalid", session_id)
         try:

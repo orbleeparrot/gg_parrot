@@ -97,6 +97,8 @@ class StrategyDriver:
         self.entry_hold_until_ms: Optional[int] = None
         # 되돌린 횟수 — 저장 중에 되돌리기가 끼어들었는지 저장하는 쪽이 알아보게 한다(runner_engine._tick_once).
         self.rollbacks = 0
+        # 체결 기준 장부(fill_ledger_v1) — 장부를 실행기가 보고한 실제 체결로 확정한다. 실행기 세션 드라이버만 켠다.
+        self.fill_ledger = False
 
     # -- 접근자 -----------------------------------------------------------
     @property
@@ -121,6 +123,11 @@ class StrategyDriver:
             if leg.symbol == symbol:
                 return leg
         raise KeyError(symbol)
+
+    # -- 체결 기준 장부 -----------------------------------------------------
+    def enable_fill_ledger(self) -> None:
+        """장부를 실행기가 보고한 실제 체결로 확정한다(세션 exec_policy = fill_ledger_v1)."""
+        self.fill_ledger = True
 
     # -- 체결 직전 상태 -----------------------------------------------------
     def enable_fill_snapshots(self) -> None:

@@ -42,14 +42,15 @@
   .financial-candle-plot.is-expanded.has-rsi { height: 390px; }
 }
 @media (max-width: 1099px) {
-  .candle-chart.is-studio .candle-chart-toolbar .candle-chart-controls {
+  /* 직접 만들기 도구줄만 — 다른 화면에 끼운 차트(is-embed)는 봉 간격 · 확대가 한 줄이라 이 격자를 받지 않는다. */
+  .candle-chart.is-studio:not(.is-embed) .candle-chart-toolbar .candle-chart-controls {
     display: grid;
     grid-template-columns: 32px max-content 32px max-content;
     justify-content: start;
     max-width: 100%;
   }
   .candle-chart.is-studio .candle-chart-controls > .seg { grid-column: 1 / -1; }
-  .candle-chart.is-studio .candle-chart-stage .candle-chart-plot { min-height: 240px; }
+  .candle-chart.is-studio:not(.is-embed) .candle-chart-stage .candle-chart-plot { min-height: 240px; }
   .candle-chart.is-studio .candle-chart-stage .candle-chart-plot:has(.has-rsi) { min-height: 350px; }
 }
 

@@ -588,6 +588,14 @@
 - 공식 거래소 공지는 이번 뉴스/커뮤니티 기능과 구분해 `not_configured`로 표시한다. 업비트 공식 공지 socket은 private 인증이 필요하므로 사용자 키를 자동으로 사용하지 않으며, 아직 연결하지 않은 공지를 수집 완료로 표시하지 않는다. 전체 UI 적용·운영 배포·원격 push는 이번 요청에 포함하지 않는다. 첫 전체 검사에서 확인된 기존 AI 호출 목록 계약 누락과 기능 전용 브랜치의 UI 없는 테스트 참조를 보완했다.
 - `verification-before-completion` 검증: 백엔드 전체 4,079 passed/5 skipped/기존 Starlette 경고 2개. 전체 검사 실행 중 반영한 최신 main 두 파일과 정적 소스 목록 API는 최종 통합 86개로 별도 재검증해 모두 통과했다. 저장소 diff/check 통과, 프론트/실행기/Render/디자인 변경 0개다. 국내 뉴스 4곳의 실제 공개 수집·커뮤니티 실제 HTML·PostgreSQL JSONB 공개 projection/공유 캐시·ORM BIGINT 왕복도 확인했다. 마이그레이션/RLS 검증용 PostgreSQL 컨테이너와 임시 HTML 3개는 제거했으며 다른 세션/원본 첨부/기존 미리보기는 보존했다. 운영 DB·회원·주문·실제 AI 호출·키 변경 없이 검증했고, 기능 코드/테스트/새 migration/이 단일 작업 기록만 새 브랜치에 로컬 커밋으로 보존한다.
 
+## 2026-10-21 · 코인 정보 — 저가·고가 게이지 대신 직접 만들기 차트
+
+- 사용자 요청: 코인동향에서 코인을 검색하면 가격이 게이지로만 나온다 — 직접 만들기 차트를 중간 크기로. 시안(artifact 2CR9zyBkPi9UktFouDw1a9, 운영 시세로 지금/제안을 같은 화면에서 찍어 나란히)을 사용자가 그대로 승인.
+- 구현: `CandleChart` 에 `variant="embed"` — 다른 화면에 끼우는 같은 그림. 이름 · 가격은 쓰는 화면이 이미 보이므로 빼고, 봉 간격 6칸(누를 수 있음 — 직접 만들기에선 조건 값을 비출 뿐) · 최신 · 확대/축소 한 줄 + 그림, 높이는 감싸는 칸이 정함. `CoinView` 는 `React.lazy` 로 고를 때만 불러 높이 320(`.ct-coin-chart`), 순위 칸 470px 미만이면 260 · 봉 간격 6칸이 폭을 나누고 확대/축소는 뺌(손가락으로 벌려 확대). 기본 1시간.
+- 함정: 직접 만들기의 1099px 이하 도구줄 격자(`.candle-chart.is-studio .candle-chart-toolbar .candle-chart-controls{display:grid}`)가 나중에 불러오는 차트 CSS 라 끼운 차트까지 먹어 휴대폰에서 '4시간 · 1일'이 잘림 → 그 규칙과 그림 최소 높이를 `:not(.is-embed)` 로.
+- 게이지 정리: `.ct-range*` CSS · `rangePosition` · `EXCHANGE_META.rangeLabel` 삭제.
+- 검증: node 980 · lint · build. coinTrendsBrowser 12가지에 차트 확인 추가(게이지 없음 · 그림 있음 · 높이 320/260 · 봉 간격 한 줄 · 잘림 없음 · 휴대폰 확대/축소 숨김 · '4시간' 누르면 interval=4h 로 다시 받음) — 가짜 서버에 /api/candles 응답 추가.
+
 ## 2026-10-21 · 업비트 공지 — 공식 Private WebSocket 연결
 
 - 사용자가 운영용 업비트 키를 발급해 `UPBIT_ACCESS_KEY` · `UPBIT_SECRET_KEY` 로 넣음(발급 화면 upbit.com/mypage/open_api_management — 권한은 최소 하나 필수라 '자산조회'만, 허용 IP = Render Outbound). 사무실 서버(211.206.125.193)에서 접속하면 401 `V1::Exceptions::NoAuthorizationIp` — 키는 유효하고 허용 IP 가 Render 쪽이라는 뜻, 운영에서만 연결된다.

@@ -198,12 +198,15 @@ export default function CandleChart({
   title,
   // "studio" — 직접 만들기 워크벤치용. 종목·시세와 차트 조작 아래 OHLC·LIVE를 표시하고,
   // 그림은 판의 남은 공간을 채운다.
+  // "embed" — 다른 화면 안에 끼우는 같은 그림(코인동향 코인 정보). 이름 · 가격은 그 화면이 이미 보이므로 빼고,
+  // 봉 간격(누를 수 있음) · 확대/축소 한 줄 + 그림. 높이는 쓰는 화면이 정한다.
   variant = "default",
   // 고를 수 없는 봉 간격(예: 테스트 기간에서 봉 수 한도를 넘는 것) — [{ value, title }]. 도구줄 segmented 에서 비활성.
   disabledIntervals = [],
 }) {
   const exchange = normalizeExchange(exchangeValue);
-  const studio = variant === "studio";
+  const embed = variant === "embed";
+  const studio = variant === "studio" || embed;
   const phone = useMedia(PHONE_QUERY);
   const disabledIntervalMap = Object.fromEntries((disabledIntervals || []).map((item) => [item.value, item.title || "이 테스트 기간에서는 고를 수 없어요"]));
   const [localInterval, setLocalInterval] = useState(defaultInterval);
@@ -422,6 +425,45 @@ export default function CandleChart({
     !feed.history?.awaiting && isChartLive(feed.live || feed.history, current, now);
 
   const btn = "btn btn-s btn-secondary w-9 px-0";
+
+  if (embed) {
+    return (
+      <div className="candle-chart is-studio is-embed">
+        <div className="candle-chart-toolbar">
+          <div className="seg candle-chart-pick" role="group" aria-label="봉 간격">
+            {INTERVALS.map((o) => (
+              <button key={o.value} type="button" aria-pressed={interval === o.value}
+                className={"seg-item" + (interval === o.value ? " seg-item-on" : "")} onClick={() => changeInterval(o.value)}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <div className="candle-chart-controls">
+            {!live && <button type="button" onClick={goLive} className="btn btn-s btn-secondary" title="최신 봉으로 이동">최신</button>}
+            <button type="button" onClick={() => applyZoom(zoom * 1.35)} disabled={zoom >= maxZoom} className="btn btn-s btn-secondary w-8 px-0" aria-label="차트 축소">−</button>
+            <button type="button" onClick={() => applyZoom(zoom * 0.7)} disabled={zoom <= MIN_ZOOM} className="btn btn-s btn-secondary w-8 px-0" aria-label="차트 확대">+</button>
+          </div>
+        </div>
+        {error && <div className="notice-warn py-6 t-small text-slate-700">차트를 불러오지 못했어요: {error}</div>}
+        {!error && (!candles || !candles.length) && (
+          <div className="candle-chart-stage">
+            <div className="candle-chart-plot candle-chart-wait t-small text-slate-500">{loading ? "차트 불러오는 중…" : candles ? "표시할 시세가 없어요." : "—"}</div>
+          </div>
+        )}
+        {view.length > 0 && (
+          <div className="candle-chart-stage">
+            <div className="candle-chart-plot">
+              {plot}
+              {/* 시가·고가·저가·종가는 봉 위에 있을 때만 위에 한 줄로 */}
+              {hover != null && candles?.[hover] ? (
+                <div className="candle-chart-readout-overlay ccp-readout"><BarReadout bar={candles[hover]} quote={quote} live={false} /></div>
+              ) : null}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (studio && phone) {
     const base = (title || symbol || "").replace(/(USDT|KRW|BTC)$/, "") || symbol;

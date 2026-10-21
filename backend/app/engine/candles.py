@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Deque, List, Optional
 
 from ..exchanges import min_order_floor
-from .fill_ledger import Ledger, buy_numbers
+from .fill_ledger import Ledger, buy_numbers, sell_numbers
 from .leverage import liquidation_price
 from .schema import Macro, PositionSide, RuleType
 from .stepper import Fill, _fill_meta, buy_fill, sell_fill
@@ -44,6 +44,10 @@ def _report_time(report: dict) -> datetime:
     except (TypeError, ValueError):
         ms = 0
     return datetime.fromtimestamp(ms / 1000, timezone.utc) if ms > 0 else datetime.now(timezone.utc)
+
+
+def _ms_time(ms) -> datetime:
+    return _report_time({"ts_ms": ms})
 
 
 def _close(a, b) -> bool:
@@ -251,8 +255,10 @@ class CandleSim:
             side = str(report.get("side") or "")
             if side == "buy":
                 event = self._fold_buy(str(report.get("ref") or ""), report)
+            elif side == "sell":
+                event = self._fold_sell(str(report.get("ref") or ""), report)
             else:
-                raise NotImplementedError(f"fill side {side!r}")
+                continue  # 모르는 방향 — 장부에 넣지 않는다(키는 기억해 같은 행을 다시 보지 않는다)
             if event:
                 out["events"].append(event)
         for item in resolutions:
@@ -285,6 +291,13 @@ class CandleSim:
         avg_before = self.avg_entry()
         lot = next((lot for lot in self.lots if ref and lot.ref == ref), None)
         late = order is None
+        opens = not self._confirmed_lots() and (late or (order.get("kind") == "base" and not order.get("actual")))
+        if opens and self.ledger.dust:
+            # 결정 3: 팔 수 없던 잔량을 새 포지션 평단에 합친다(원가 가중 평균) — 새 매수분만 익절인데 합치면 손실인 일이 없게.
+            dust = self.ledger.dust
+            self.lots.insert(0, _Lot(qty=float(dust["qty"]), fill=float(dust["fill"]), margin=float(dust["margin"]),
+                                     ref="dust"))
+            self.ledger.dust = None
         if order is not None and not order.get("actual") and lot is not None:
             self.cash += float(order["margin"]) + float(order["fee"])  # 신호 때 잡아 둔 가상 금액을 풀고
             lot.qty, lot.fill, lot.margin = numbers.qty, numbers.price, numbers.qty * numbers.price
@@ -294,10 +307,9 @@ class CandleSim:
             lot.qty = total
             lot.margin += numbers.qty * numbers.price
         else:
-            was_flat = not self.lots
             lot = _Lot(qty=numbers.qty, fill=numbers.price, margin=numbers.qty * numbers.price, ref=ref or "late")
             self.lots.append(lot)
-            if was_flat:
+            if opens:
                 self._entry_time = _report_time(report)
                 self._on_base_filled(numbers.price)  # 비어 있던 장부에 산 것 — 새 포지션의 첫 매수가
         self.cash -= numbers.cash_out
@@ -320,13 +332,17 @@ class CandleSim:
         """
         ledger = self.ledger
         order = ledger.orders[ref]
-        if order.get("side") != "buy":
-            raise NotImplementedError(f"resolve {order.get('side')} {status}")
+        if order.get("side") == "sell":
+            # 청산 주문이 끝났는데 포지션이 남았다(0 체결 · 일부 체결로 끝남) — 대기만 푼다. 다음 봉에서 다시 판단한다.
+            # 다 팔렸다면 그 체결이 이미 포지션을 끝내며 이 주문을 정리했다(여기 오지 않는다).
+            ledger.close_order(ref)
+            return {"kind": "exit_unfilled" if not order.get("sold") else "exit_partial", "ref": ref,
+                    "status": status, "sold": float(order.get("sold") or 0.0), "left": self.total_qty()}
         event = None
         if not order.get("actual"):
             lot = next((lot for lot in self.lots if lot.ref == ref), None)
             if lot is not None:
-                self.lots.remove(lot)
+                self.lots = [other for other in self.lots if other is not lot]
                 self.cash += float(order["margin"]) + float(order["fee"])
             if not self.lots:
                 self._entry_time = None
@@ -342,6 +358,83 @@ class CandleSim:
                          "remaining": remaining}
         ledger.close_order(ref)
         return event
+
+    def _confirmed_lots(self) -> List["_Lot"]:
+        """실행기가 실제로 가진 몫 — 보고 전 진입(가상 롯)을 뺀 롯."""
+        virtual = {ref for ref, order in self.ledger.orders.items() if order.get("side") == "buy" and not order.get("actual")}
+        return [lot for lot in self.lots if lot.ref not in virtual]
+
+    def _fold_sell(self, ref: str, report: dict) -> Optional[dict]:
+        """매도 체결 한 건(서버 청산 명령이든 실행기 로컬 손절이든) — 실제로 가진 몫을 같은 비율로 줄인다.
+
+        남은 평단은 그대로다(실행기 장부와 같은 규칙). 남은 평가액이 재주문 불가 금액 미만이면 포지션 끝 — 남은 것은 먼지.
+        """
+        numbers = sell_numbers(report)
+        if numbers is None:
+            return None
+        ledger = self.ledger
+        held = self._confirmed_lots()
+        total = sum(lot.qty for lot in held)
+        if total <= 1e-12:
+            return {"kind": "sell_without_position", "ref": ref, "qty": numbers.qty, "price": numbers.price}
+        sold = min(numbers.qty, total)
+        fraction = sold / total
+        pnl = -numbers.fee
+        for lot in held:
+            qty, margin = lot.qty * fraction, lot.margin * fraction
+            self.cash += margin + qty * (numbers.price - lot.fill)
+            pnl += qty * (numbers.price - lot.fill)
+            lot.qty -= qty
+            lot.margin -= margin
+        self.cash -= numbers.fee
+        self.closed_trades.append(pnl)
+        held_ids = {id(lot) for lot in held}
+        self.lots = [lot for lot in self.lots if lot.qty > 1e-12 or id(lot) not in held_ids]
+        exit_ref = ref if ref in ledger.orders and ledger.orders[ref].get("side") == "sell" else ledger.exit
+        order = ledger.orders.get(exit_ref) if exit_ref else None
+        if order is not None:
+            order["sold"] = float(order.get("sold") or 0.0) + sold
+        left = sum(lot.qty for lot in self._confirmed_lots())
+        ended = left <= 1e-12 or left * numbers.price < self._reorder_floor()
+        if ended:
+            if order is not None:
+                is_stop, at = bool(order.get("is_stop")), _ms_time(order.get("signal_ms"))
+            else:
+                is_stop, at = str(report.get("reason") or "") == "stop_loss", _report_time(report)
+            self._end_position(is_stop=is_stop, at=at)
+        return {"kind": "exit_filled", "ref": ref, "source": str(report.get("source") or ""), "qty": sold,
+                "price": numbers.price, "fee": numbers.fee, "pnl": pnl, "ended": ended,
+                "dust_qty": float(ledger.dust["qty"]) if ended and ledger.dust else 0.0, "left": 0.0 if ended else left}
+
+    def _end_position(self, *, is_stop: bool, at: datetime) -> None:
+        """다 팔렸다 — 남은 실제 몫은 먼지로 옮기고 포지션 끝 처리를 한다(백테스트의 _close_all 끝과 같은 일)."""
+        ledger = self.ledger
+        held = self._confirmed_lots()
+        rest = [lot for lot in held if lot.qty > 1e-12]
+        if rest:
+            qty = sum(lot.qty for lot in rest) + float((ledger.dust or {}).get("qty") or 0.0)
+            cost = sum(lot.qty * lot.fill for lot in rest) + float((ledger.dust or {}).get("qty") or 0.0) * float(
+                (ledger.dust or {}).get("fill") or 0.0)
+            margin = sum(lot.margin for lot in rest) + float((ledger.dust or {}).get("margin") or 0.0)
+            ledger.dust = {"qty": qty, "fill": cost / qty, "margin": margin}
+        held_ids = {id(lot) for lot in held}
+        self.lots = [lot for lot in self.lots if id(lot) not in held_ids]
+        self._entry_time = None
+        if is_stop and self.cooldown_minutes > 0:
+            self._cooldown_until = at + timedelta(minutes=self.cooldown_minutes)
+        self._after_close()
+        if ledger.exit:
+            ledger.close_order(ledger.exit)
+        ledger.epoch += 1
+
+    def _after_close(self) -> None:
+        """포지션이 끝났다(청산이 다 됐다) — 포지션에 묶인 전략 상태를 비운다. H 는 물타기 차수."""
+
+    def _dust_value(self, price: float) -> float:
+        dust = self.ledger.dust if self.ledger is not None else None
+        if not dust:
+            return 0.0
+        return float(dust["margin"]) + float(dust["qty"]) * (price - float(dust["fill"]))
 
     def _entry_left(self, order: dict, remaining: float, status: str) -> bool:
         """덜 찬 진입의 남은 예산 — 차수를 쓰는 규칙(H 물타기)이 그 가격선에 다시 연다. 다시 열었으면 True."""
@@ -380,6 +473,9 @@ class CandleSim:
             return
         self.lots = [_Lot(qty=float(row["qty"]), fill=float(row["fill"]), margin=float(row["margin"]),
                           ref=str(row.get("ref") or "")) for row in lots]
+        if self.ledger.dust:
+            # restore() 는 현금을 '자산 − 롯 평가액' 으로 되짚었다 — 먼지도 자산에 들어가므로 그 몫을 현금에서 뺀다.
+            self.cash -= self._dust_value(float(getattr(self, "_restored_price", 0.0) or self.ledger.dust["fill"]))
 
     # -- position helpers (long book) ------------------------------------
     def total_qty(self) -> float:
@@ -414,7 +510,7 @@ class CandleSim:
         # At leverage 1 (margin == qty*fill) this equals cash + total_qty*price.
         margin = sum(l.margin for l in self.lots)
         unreal = sum(l.qty * (price - l.fill) for l in self.lots)
-        return self.cash + margin + unreal
+        return self.cash + margin + unreal + self._dust_value(price)
 
     def state(self) -> dict:
         """리더보드가 그리는 포지션 상태 — 조회만, 부작용 없음(stepper.PositionSim.state 와 같은 키)."""
@@ -503,6 +599,7 @@ class CandleSim:
         self.lots = []
         self.cash = float(equity)
         self._entry_time = None
+        self._restored_price = float(last_price)  # 체결 기준 장부가 먼지 몫의 현금을 맞출 때 쓴다(_restore_ledger)
         if in_position and qty > 0 and entry_price > 0:
             margin = float(qty) * float(entry_price) / self.leverage
             self.lots.append(_Lot(qty=float(qty), fill=float(entry_price), margin=margin))
@@ -578,6 +675,8 @@ class CandleSim:
     def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime, reason: Optional[str] = None) -> Optional[Fill]:
         if not self.in_position():
             return None
+        if self.ledger is not None:
+            return self._signal_exit(close, mark, is_stop=is_stop, ts=ts, reason=reason)
         qty = self.total_qty()
         avg = self.avg_entry()
         margin = sum(l.margin for l in self.lots)
@@ -599,7 +698,30 @@ class CandleSim:
         self._entry_time = None
         if is_stop and self.cooldown_minutes > 0:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, f, qty, mark, reason if reason is not None else ("손절" if is_stop else "청산"))
+        fill = self._fill(side, f, qty, mark, reason if reason is not None else ("손절" if is_stop else "청산"))
+        self._after_close()
+        return fill
+
+    def _signal_exit(self, close: float, mark: float, *, is_stop: bool, ts: datetime,
+                     reason: Optional[str]) -> Optional[Fill]:
+        """체결 기준 장부의 청산 신호 — 장부는 그대로 두고 '청산 대기' 주문을 남긴다. 체결 보고만큼 줄인다(_fold_sell).
+
+        Fill 의 직전 수량은 지금 보유 그대로다(명령 비율 1.0) — _fill_meta 는 장부가 이미 줄었다고 보고 두 배를 낸다.
+        """
+        ledger = self.ledger
+        if ledger.exit is not None:
+            return None  # 청산 대기 중 — 두 번째 청산 신호는 없다
+        qty = self.total_qty()
+        f = sell_fill(close, self.slip)
+        fill = self._fill("sell", f, qty, mark, reason if reason is not None else ("손절" if is_stop else "청산"))
+        fill.qty_before = qty
+        ref = ledger.next_ref()
+        fill.order_ref = ref
+        ledger.orders[ref] = {"side": "sell", "kind": "stop" if is_stop else "exit", "epoch": ledger.epoch,
+                              "qty": float(qty), "price": float(f), "is_stop": bool(is_stop),
+                              "signal_ms": int(ts.timestamp() * 1000), "sold": 0.0}
+        ledger.exit = ref
+        return fill
 
     def _reduce_long(self, fraction: float, close: float, mark: float, ts: datetime) -> Optional[Fill]:
         """Sell ``fraction`` (0<f<=1) of the long book at ``close``.
@@ -608,6 +730,8 @@ class CandleSim:
         proportionally (dust lots dropped). Long book only — used by the SAR
         defense partial exit. ``_close_all`` remains the full-close path.
         """
+        if self.ledger is not None:
+            raise RuntimeError("partial reduce is not part of the fill ledger")
         if fraction <= 0 or self.side is PositionSide.SHORT or not self.in_position():
             return None
         fraction = min(fraction, 1.0)
@@ -635,6 +759,8 @@ class CandleSim:
         Long lots removed their margin from cash at entry, so equity already floors
         at cash; short kept its margin in cash, so wipe it here. Loss is capped at
         the committed margin."""
+        if self.ledger is not None:
+            raise RuntimeError("liquidation is not part of the fill ledger (spot only)")
         if not self.in_position():
             return None
         qty = self.total_qty()
@@ -651,7 +777,9 @@ class CandleSim:
         self._entry_time = None
         if self.cooldown_minutes > 0:
             self._cooldown_until = ts + timedelta(minutes=self.cooldown_minutes)
-        return self._fill(side, px, qty, mark, "강제 청산")
+        fill = self._fill(side, px, qty, mark, "강제 청산")
+        self._after_close()
+        return fill
 
     # -- common risk ------------------------------------------------------
     def hold_entries_until(self, until_ms: Optional[int]) -> None:
@@ -1026,6 +1154,10 @@ class MartingaleSim(CandleSim):
         # 물타기선은 최초 매수가 기준 — 그 값을 가상 체결가에서 실제 체결가로(설계 §3: 출처만 바뀐다).
         self._base_price = float(price)
 
+    def _after_close(self) -> None:
+        self._so_done = 0
+        self._reopen = {}
+
     def _entry_left(self, order: dict, remaining: float, status: str) -> bool:
         # 결정 1: 덜 찬 물타기는 그 차수 가격선에 남은 예산(배정 − 실제 체결 금액 − 수수료)으로 다시 연다.
         # 재주문 불가(최소 주문 미만)면 그 차수 완료. 일부러 취소한 주문(로컬 손절 등)은 다시 열지 않는다.
@@ -1075,9 +1207,9 @@ class MartingaleSim(CandleSim):
             both_touch = l <= sl_px and h >= tp_px
         forced = self._common_risk(o, h, l, c, ts, fills)
         if forced:
+            # 차수는 포지션 끝 훅(_after_close)이 비운다 — 백테스트는 청산 즉시, 체결 기준 장부는 실제로 다 팔린 뒤.
             if both_touch:
                 self.same_bar_sl += 1
-            self._so_done = 0
             return
         if self.in_position():
             avg = self.avg_entry()
@@ -1086,7 +1218,6 @@ class MartingaleSim(CandleSim):
                 f = self._close_all(tp_px, tp_px, is_stop=False, ts=ts)
                 if f:
                     fills.append(f)
-                self._so_done = 0
                 return
             if self._reopen and not self._entries_held(ts):
                 self._rebuy_reopened(l, c, ts, fills)

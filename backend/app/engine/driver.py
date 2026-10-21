@@ -145,6 +145,10 @@ class StrategyDriver:
             raise RuntimeError("fill ledger is off")
         leg = self.legs[0]
         result = leg.sim.fold(list(fills), list(resolutions))
+        hold = result.get("hold_until_ms")
+        if hold:
+            # 진입이 나가지 않았다(실패 · 만료) — 잔고 부족 같은 실패를 봉마다 실주문으로 두드리지 않게 다시 사기 전 기다린다.
+            self.hold_entries_until(max(int(hold), int(self.entry_hold_until_ms or 0)))
         if leg.last_price > 0:
             leg.equity = leg.sim.equity(leg.last_price)
             leg.ret = (leg.equity - leg.initial) / leg.initial * 100.0

@@ -28,12 +28,22 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Deque, List, Optional
 
+from ..exchanges import min_order_floor
 from .fill_ledger import Ledger, buy_numbers
 from .leverage import liquidation_price
 from .schema import Macro, PositionSide, RuleType
 from .stepper import Fill, _fill_meta, buy_fill, sell_fill
 
 _INTERVAL_UNIT_SECONDS = {"m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def _report_time(report: dict) -> datetime:
+    """체결 보고의 실행기 시각(ms). 없으면 지금."""
+    try:
+        ms = int(report.get("ts_ms") or 0)
+    except (TypeError, ValueError):
+        ms = 0
+    return datetime.fromtimestamp(ms / 1000, timezone.utc) if ms > 0 else datetime.now(timezone.utc)
 
 
 def _close(a, b) -> bool:
@@ -195,6 +205,8 @@ class CandleSim:
         self.bundle_gate = None
         # 체결 기준 장부 — 실행기 정책 세션만 켠다(enable_fill_ledger). None 이면 지금 동작 그대로(백테스트 · 모의).
         self.ledger: Optional[Ledger] = None
+        self.exchange = getattr(macro, "exchange", "binance") or "binance"  # 재주문 불가 금액(최소 주문)을 고른다
+        self.market = macro.resolved_market()
 
     # -- 체결 기준 장부(fill_ledger_v1) ----------------------------------------
     # 신호 순간에는 가상 체결로 장부를 바꾸고(진입 · 현금 예약), 실행기가 보고한 실제 체결로 그 주문의 몫을 고친다.
@@ -211,72 +223,136 @@ class CandleSim:
     def fold(self, fills=(), resolutions=()) -> dict:
         """실행기가 보고한 체결 · 끝난 주문을 장부에 접는다. 같은 체결 키는 한 번만.
 
-        체결을 먼저(보고 순서 그대로), 끝난 주문을 나중에 — 한 주문의 체결은 그 주문을 정리하기 전에 장부에 있어야 한다.
-        돌려주는 값: 접은 키 · 정리한 주문 번호 · 사람이 읽을 사건(``events``).
+        순서: ① 체결 없이 끝난 진입(가상 롯을 뺀다) → ② 체결(보고 순서 그대로) → ③ 나머지 끝난 주문.
+        ①을 먼저 하는 까닭 — 로컬 손절이 판 수량은 실행기가 실제로 가진 것뿐이라, 안 산 진입의 가상 롯이 남은 채로
+        팔면 그 가상 몫이 보유로 남는다. 체결이 있는 주문은 그 체결이 장부에 들어간 뒤에 정리한다.
+        돌려주는 값: 접은 키 · 정리한 주문 번호 · 사람이 읽을 사건(``events``) · 진입 대기(``hold_until_ms``).
         """
         ledger = self.ledger
         if ledger is None:
             raise RuntimeError("fill ledger is off")
-        applied, resolved, events = [], [], []
+        out = {"applied": [], "resolved": [], "events": [], "hold_until_ms": None}
+        fill_refs = {str(report.get("ref") or "") for report in fills}
+
+        def unfilled_entry(item) -> bool:
+            order = ledger.orders.get(str(item.get("ref") or ""))
+            return (order is not None and order.get("side") == "buy" and not order.get("actual")
+                    and str(item.get("ref") or "") not in fill_refs)
+
+        first = [item for item in resolutions if unfilled_entry(item)]
+        for item in first:
+            self._fold_resolution(item, out)
         for report in fills:
             key = str(report.get("key") or "")
             if not key or ledger.seen(key):
                 continue
             ledger.remember(key)
-            applied.append(key)
+            out["applied"].append(key)
             side = str(report.get("side") or "")
             if side == "buy":
                 event = self._fold_buy(str(report.get("ref") or ""), report)
             else:
                 raise NotImplementedError(f"fill side {side!r}")
             if event:
-                events.append(event)
+                out["events"].append(event)
         for item in resolutions:
-            ref = str(item.get("ref") or "")
-            if ref not in ledger.orders:
-                continue
-            event = self._resolve_order(ref, str(item.get("status") or ""), item.get("hold_until_ms"))
-            resolved.append(ref)
-            if event:
-                events.append(event)
-        return {"applied": applied, "resolved": resolved, "events": events}
+            if item not in first:
+                self._fold_resolution(item, out)
+        return out
+
+    def _fold_resolution(self, item: dict, out: dict) -> None:
+        ref = str(item.get("ref") or "")
+        if ref not in self.ledger.orders:
+            return
+        status = str(item.get("status") or "")
+        event = self._resolve_order(ref, status)
+        out["resolved"].append(ref)
+        if event:
+            out["events"].append(event)
+        hold = item.get("hold_until_ms")
+        if hold and status in ("failed", "expired"):
+            out["hold_until_ms"] = max(int(hold), int(out["hold_until_ms"] or 0))
 
     def _fold_buy(self, ref: str, report: dict) -> Optional[dict]:
-        """매수 체결 한 건 — 그 주문의 가상 롯을 실제 값으로 바꾸거나(첫 체결), 같은 롯에 더한다(뒤 체결)."""
+        """매수 체결 한 건 — 그 주문의 가상 롯을 실제 값으로 바꾸거나(첫 체결), 같은 롯에 더한다(뒤 체결).
+
+        이미 정리한 주문의 체결(늦은 체결)도 넣는다 — 실행기가 산 것은 산 것이다. 비어 있던 장부면 새 포지션이 된다.
+        """
         numbers = buy_numbers(report)
         if numbers is None:
             return None
         order = self.ledger.orders.get(ref)
         avg_before = self.avg_entry()
         lot = next((lot for lot in self.lots if ref and lot.ref == ref), None)
-        if order is not None and lot is not None and not order.get("actual"):
+        late = order is None
+        if order is not None and not order.get("actual") and lot is not None:
             self.cash += float(order["margin"]) + float(order["fee"])  # 신호 때 잡아 둔 가상 금액을 풀고
             lot.qty, lot.fill, lot.margin = numbers.qty, numbers.price, numbers.qty * numbers.price
-            order["actual"] = True
         elif lot is not None:
             total = lot.qty + numbers.qty
             lot.fill = (lot.qty * lot.fill + numbers.qty * numbers.price) / total
             lot.qty = total
             lot.margin += numbers.qty * numbers.price
         else:
-            raise NotImplementedError("late buy fill")
+            was_flat = not self.lots
+            lot = _Lot(qty=numbers.qty, fill=numbers.price, margin=numbers.qty * numbers.price, ref=ref or "late")
+            self.lots.append(lot)
+            if was_flat:
+                self._entry_time = _report_time(report)
+                self._on_base_filled(numbers.price)  # 비어 있던 장부에 산 것 — 새 포지션의 첫 매수가
         self.cash -= numbers.cash_out
         if order is not None:
+            order["actual"] = True
             order["filled_qty"] = float(order.get("filled_qty") or 0.0) + numbers.qty
             order["spent"] = float(order.get("spent") or 0.0) + numbers.cash_out
             if order.get("kind") == "base":
                 self._on_base_filled(lot.fill)
-        return {"kind": "entry_filled", "ref": ref, "virtual_price": order["price"] if order else None,
-                "price": numbers.price, "qty": numbers.qty, "fee": numbers.fee,
-                "avg_before": avg_before, "avg_after": self.avg_entry()}
+        else:
+            self._late_entry_spent(ref, numbers.cash_out)
+        return {"kind": "entry_filled", "ref": ref, "late": late,
+                "virtual_price": order["price"] if order else None, "price": numbers.price, "qty": numbers.qty,
+                "fee": numbers.fee, "avg_before": avg_before, "avg_after": self.avg_entry()}
 
-    def _resolve_order(self, ref: str, status: str, hold_until_ms) -> Optional[dict]:
-        """끝난 주문 하나를 정리한다(명령의 끝 상태 acked · failed · expired · cancelled)."""
-        order = self.ledger.orders[ref]
-        if order.get("side") == "buy" and order.get("actual"):
-            self.ledger.close_order(ref)
-            return None
-        raise NotImplementedError(f"resolve {order.get('side')} {status}")
+    def _resolve_order(self, ref: str, status: str) -> Optional[dict]:
+        """끝난 주문 하나를 정리한다(명령의 끝 상태 acked · failed · expired · cancelled).
+
+        진입: 체결이 하나도 없었으면 가상 롯을 빼고 잡아 둔 돈을 돌린다. 이전 포지션(epoch)의 주문이면 차수는 건드리지 않는다.
+        """
+        ledger = self.ledger
+        order = ledger.orders[ref]
+        if order.get("side") != "buy":
+            raise NotImplementedError(f"resolve {order.get('side')} {status}")
+        event = None
+        if not order.get("actual"):
+            lot = next((lot for lot in self.lots if lot.ref == ref), None)
+            if lot is not None:
+                self.lots.remove(lot)
+                self.cash += float(order["margin"]) + float(order["fee"])
+            if not self.lots:
+                self._entry_time = None
+                if order.get("kind") == "base":
+                    self._reset_position_state()  # 사지 못한 첫 매수 — 포지션은 없었다
+            event = {"kind": "entry_unfilled", "ref": ref, "status": status, "order_kind": order.get("kind"),
+                     "tier": order.get("tier"), "price": order.get("price")}
+        if int(order.get("epoch", ledger.epoch)) == ledger.epoch:
+            remaining = float(order["margin"]) - float(order.get("spent") or 0.0)
+            reopened = self._entry_left(order, remaining, status)
+            if reopened and order.get("actual"):
+                event = {"kind": "entry_partial", "ref": ref, "tier": order.get("tier"), "line": order.get("line"),
+                         "remaining": remaining}
+        ledger.close_order(ref)
+        return event
+
+    def _entry_left(self, order: dict, remaining: float, status: str) -> bool:
+        """덜 찬 진입의 남은 예산 — 차수를 쓰는 규칙(H 물타기)이 그 가격선에 다시 연다. 다시 열었으면 True."""
+        return False
+
+    def _late_entry_spent(self, ref: str, spent: float) -> None:
+        """정리한 뒤 온 매수 체결이 쓴 돈 — 다시 연 차수의 남은 예산에서 뺀다(H)."""
+
+    def _reorder_floor(self) -> float:
+        """새 주문을 낼 수 있는 최소 금액(견적 통화, 여유 포함). 이보다 적은 남은 예산 · 잔량은 재주문 불가다."""
+        return float(min_order_floor(self.exchange, self.market) or 0.0)
 
     def _on_base_filled(self, price: float) -> None:
         """첫 매수가 실제로 체결된 값 — 기준가를 쓰는 규칙(H 물타기선)이 덮어쓴다."""
@@ -916,14 +992,21 @@ class MartingaleSim(CandleSim):
         self.tp = float(self.p["take_profit"])
         self._so_done = 0
         self._base_price = 0.0  # price of the base order (deviation reference)
+        # 체결 기준 장부만: 덜 찬 물타기 차수 → {가격선, 남은 예산}. 그 가격선 이하에서만 남은 예산을 다시 쓴다(결정 1).
+        # 백테스트 · 모의는 주문이 늘 다 차므로 비어 있다.
+        self._reopen: dict = {}
 
     def _reset_position_state(self) -> None:
         self._so_done = 0
         self._base_price = 0.0
+        self._reopen = {}
 
     # 봉에서 다시 못 구한다 — 잊으면 추가매수 차수가 0 으로 돌아가 이미 채운 단계를 다시 산다.
     def strategy_state(self) -> dict:
-        return {"so_done": int(self._so_done), "base_price": float(self._base_price), **self._ledger_state()}
+        state = {"so_done": int(self._so_done), "base_price": float(self._base_price), **self._ledger_state()}
+        if self.ledger is not None:
+            state["reopen"] = {str(tier): dict(slot) for tier, slot in self._reopen.items()}
+        return state
 
     def restore_strategy(self, state: Optional[dict]) -> None:
         if not state:
@@ -932,6 +1015,9 @@ class MartingaleSim(CandleSim):
             self._so_done = int(state["so_done"])
         if state.get("base_price") is not None:
             self._base_price = float(state["base_price"])
+        if state.get("reopen") is not None:
+            self._reopen = {int(tier): {"line": float(slot["line"]), "remaining": float(slot["remaining"])}
+                            for tier, slot in state["reopen"].items()}
 
     def restore_strategy_lots(self, state: Optional[dict]) -> None:
         self._restore_ledger(state)
@@ -939,6 +1025,35 @@ class MartingaleSim(CandleSim):
     def _on_base_filled(self, price: float) -> None:
         # 물타기선은 최초 매수가 기준 — 그 값을 가상 체결가에서 실제 체결가로(설계 §3: 출처만 바뀐다).
         self._base_price = float(price)
+
+    def _entry_left(self, order: dict, remaining: float, status: str) -> bool:
+        # 결정 1: 덜 찬 물타기는 그 차수 가격선에 남은 예산(배정 − 실제 체결 금액 − 수수료)으로 다시 연다.
+        # 재주문 불가(최소 주문 미만)면 그 차수 완료. 일부러 취소한 주문(로컬 손절 등)은 다시 열지 않는다.
+        if order.get("kind") != "so" or status == "cancelled":
+            return False
+        if remaining < max(self._reorder_floor(), 1e-9):
+            return False
+        self._reopen[int(order["tier"])] = {"line": float(order["line"]), "remaining": float(remaining)}
+        return True
+
+    def _late_entry_spent(self, ref: str, spent: float) -> None:
+        info = self.ledger.recent.get(ref) or {}
+        slot = self._reopen.get(int(info.get("tier") or 0)) if info.get("kind") == "so" else None
+        if slot is None or int(info.get("epoch", -1)) != self.ledger.epoch:
+            return
+        slot["remaining"] -= spent
+        if slot["remaining"] < max(self._reorder_floor(), 1e-9):
+            del self._reopen[int(info["tier"])]
+
+    def _rebuy_reopened(self, l: float, c: float, ts: datetime, fills: List[Fill]) -> None:
+        """다시 연 차수 — 봉 저가가 그 가격선 이하일 때만 남은 예산을 산다(비싸게 쫓아 사지 않는다)."""
+        for tier in sorted(self._reopen):
+            slot = self._reopen[tier]
+            if l <= slot["line"] and self.cash > 1e-9:
+                del self._reopen[tier]
+                f = self._open_long(slot["remaining"], slot["line"], ts, c, kind="so", tier=tier, line=slot["line"])
+                if f:
+                    fills.append(f)
 
     def _next_so_price(self) -> float:
         # cumulative deviation with step scaling
@@ -973,6 +1088,8 @@ class MartingaleSim(CandleSim):
                     fills.append(f)
                 self._so_done = 0
                 return
+            if self._reopen and not self._entries_held(ts):
+                self._rebuy_reopened(l, c, ts, fills)
             # safety orders on the way down
             while self._so_done < self.max_so and not self._entries_held(ts):
                 so_px = self._next_so_price()

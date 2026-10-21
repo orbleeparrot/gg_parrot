@@ -177,3 +177,97 @@ def test_command_row_keeps_the_order_number_and_duplicate_check_respects_it():
                 db.delete(c)
             db.delete(db.get(RunSession, sid))
             db.commit()
+
+
+# --- 과제 5: 진입 0 체결 · 부분 체결(결정 1 차수 잔예산) ----------------------------------------
+def ms(minutes: int) -> int:
+    return int((T0 + timedelta(minutes=minutes)).timestamp() * 1000)
+
+
+def opened(d):
+    """기본 매수 o1 을 426 에 실제로 체결시킨 드라이버(실제 = 가상)."""
+    bar(d, 0, 426, 427, 425, 426)
+    d.fold(fills=[buy("k1", "o1", 50000 / 426, 426.0, 25.0)], resolutions=[done("o1")])
+    return sim_of(d)
+
+
+def test_base_buy_that_never_filled_leaves_no_position_and_waits_out_the_hold():
+    d = driver()
+    bar(d, 0, 426, 427, 425, 426)
+    sim = sim_of(d)
+    result = d.fold(resolutions=[{"ref": "o1", "status": "failed", "hold_until_ms": ms(45)}])
+    assert result["resolved"] == ["o1"]
+    assert sim.lots == [] and sim.cash == pytest.approx(300000) and not sim.in_position()
+    assert sim._entry_time is None and sim.ledger.orders == {}
+    assert bar(d, 1, 426, 427, 425, 426) == []  # 30분에 판단 — 45분까지 기다린다
+    [again] = bar(d, 2, 426, 427, 425, 426)
+    assert again.side == "buy" and again.order_ref == "o2"
+
+
+def test_safety_order_that_never_filled_reopens_its_tier_and_later_tiers_do_not_wait():
+    d = driver()
+    sim = opened(d)
+    [so1] = bar(d, 1, 426, 426, 421.0, 422)  # 1차선 426 × 0.99 = 421.74
+    assert so1.order_ref == "o2" and so1.price == pytest.approx(421.74)
+    d.fold(resolutions=[done("o2", "failed")])
+    assert sim._reopen == {1: {"line": pytest.approx(421.74), "remaining": pytest.approx(50000)}}
+    assert sim._so_done == 1 and [lot.ref for lot in sim.lots] == ["o1"]
+    assert bar(d, 2, 422, 425, 422.5, 424) == []  # 1차선 위 — 비싸게 쫓아 사지 않는다
+    fills = bar(d, 3, 424, 424, 417.0, 418)  # 2차선 426 × 0.98 = 417.48 까지
+    assert [(f.order_ref, round(f.price, 2)) for f in fills] == [("o3", 421.74), ("o4", 417.48)]
+    assert sim.ledger.orders["o3"]["tier"] == 1 and sim.ledger.orders["o4"]["tier"] == 2
+
+
+def test_partial_safety_order_keeps_the_remaining_budget_for_its_line_only():
+    d = driver()
+    sim = opened(d)
+    bar(d, 1, 426, 426, 421.0, 422)
+    d.fold(fills=[buy("k2", "o2", 30000 / 421.74, 421.74, 15.0)], resolutions=[done("o2", "failed")])
+    left = 50000 - 30000 - 15
+    assert sim._reopen[1]["remaining"] == pytest.approx(left)
+    assert bar(d, 2, 422, 425, 422.5, 424) == []
+    [rest] = bar(d, 3, 424, 424, 421.5, 423)
+    assert rest.order_ref == "o3" and rest.price == pytest.approx(421.74)
+    assert rest.qty == pytest.approx(left / 421.74)
+    assert sim._reopen == {}
+
+
+def test_remaining_budget_below_the_minimum_order_finishes_the_tier():
+    d = driver()
+    sim = opened(d)
+    bar(d, 1, 426, 426, 421.0, 422)
+    d.fold(fills=[buy("k2", "o2", 46000 / 421.74, 421.74, 23.0)], resolutions=[done("o2", "failed")])
+    assert sim._reopen == {}  # 남은 3,977원 < 업비트 최소 주문 5,100원(여유 포함) — 그 차수 완료
+    assert bar(d, 2, 422, 425, 421.0, 424) == []
+
+
+def test_cancelled_entry_does_not_reopen():
+    d = driver()
+    sim = opened(d)
+    bar(d, 1, 426, 426, 421.0, 422)
+    d.fold(resolutions=[done("o2", "cancelled")])
+    assert sim._reopen == {} and [lot.ref for lot in sim.lots] == ["o1"]
+
+
+def test_unresolved_orders_hold_their_reserved_money():
+    """미결 주문 금액은 현금에서 빠져 있다 — 전체 예산 제한에 보고 전 주문까지 들어간다(결정 1)."""
+    d = driver()
+    sim = opened(d)
+    fills = bar(d, 1, 426, 426, 417.0, 418)  # 1 · 2차 같은 봉 — 둘 다 보고 전
+    assert [f.order_ref for f in fills] == ["o2", "o3"]
+    assert sim.cash == pytest.approx(300000 - 3 * 50025)
+    d.fold(resolutions=[done("o2", "failed"), done("o3", "failed")])
+    assert sim.cash == pytest.approx(300000 - 50025)  # 안 산 두 차수의 예약이 풀렸다
+
+
+def test_late_fill_after_the_order_was_closed_is_still_booked():
+    """만료 · 실패로 정리한 주문의 체결이 나중에 오면 장부에 그대로 넣는다 — 실행기가 산 건 산 것이다."""
+    d = driver()
+    sim = opened(d)
+    bar(d, 1, 426, 426, 421.0, 422)
+    d.fold(resolutions=[done("o2", "expired")])
+    assert sim._reopen[1]["remaining"] == pytest.approx(50000)
+    qty = 49975.01 / 421.74
+    d.fold(fills=[buy("k-late", "o2", qty, 421.74, 24.99)])
+    assert [lot.ref for lot in sim.lots] == ["o1", "o2"] and sim.total_qty() == pytest.approx(50000 / 426 + qty)
+    assert sim._reopen == {}  # 그 차수 예산을 늦은 체결이 다 썼다

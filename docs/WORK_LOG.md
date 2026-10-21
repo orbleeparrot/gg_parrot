@@ -588,12 +588,29 @@
 - 공식 거래소 공지는 이번 뉴스/커뮤니티 기능과 구분해 `not_configured`로 표시한다. 업비트 공식 공지 socket은 private 인증이 필요하므로 사용자 키를 자동으로 사용하지 않으며, 아직 연결하지 않은 공지를 수집 완료로 표시하지 않는다. 전체 UI 적용·운영 배포·원격 push는 이번 요청에 포함하지 않는다. 첫 전체 검사에서 확인된 기존 AI 호출 목록 계약 누락과 기능 전용 브랜치의 UI 없는 테스트 참조를 보완했다.
 - `verification-before-completion` 검증: 백엔드 전체 4,079 passed/5 skipped/기존 Starlette 경고 2개. 전체 검사 실행 중 반영한 최신 main 두 파일과 정적 소스 목록 API는 최종 통합 86개로 별도 재검증해 모두 통과했다. 저장소 diff/check 통과, 프론트/실행기/Render/디자인 변경 0개다. 국내 뉴스 4곳의 실제 공개 수집·커뮤니티 실제 HTML·PostgreSQL JSONB 공개 projection/공유 캐시·ORM BIGINT 왕복도 확인했다. 마이그레이션/RLS 검증용 PostgreSQL 컨테이너와 임시 HTML 3개는 제거했으며 다른 세션/원본 첨부/기존 미리보기는 보존했다. 운영 DB·회원·주문·실제 AI 호출·키 변경 없이 검증했고, 기능 코드/테스트/새 migration/이 단일 작업 기록만 새 브랜치에 로컬 커밋으로 보존한다.
 
+## 2026-10-21 · 업비트 공지 — 공식 Private WebSocket 연결
+
+- 사용자가 운영용 업비트 키를 발급해 `UPBIT_ACCESS_KEY` · `UPBIT_SECRET_KEY` 로 넣음(발급 화면 upbit.com/mypage/open_api_management — 권한은 최소 하나 필수라 '자산조회'만, 허용 IP = Render Outbound). 사무실 서버(211.206.125.193)에서 접속하면 401 `V1::Exceptions::NoAuthorizationIp` — 키는 유효하고 허용 IP 가 Render 쪽이라는 뜻, 운영에서만 연결된다.
+- 서버: `exchange_notices.run_upbit_once` — 키가 있을 때만, 임대(`EXCHANGE_NOTICES_UPBIT`)를 잡은 한 프로세스가 `wss://api.upbit.com/websocket/v1/private` 에 HS512 JWT 로 붙어 `announcement` 구독, 새 공지마다 저장(빗썸과 같은 표 · 티커 연결). PING 프레임 20초(업비트 유휴 120초 끊김), 60초마다 임대 갱신, 끊기면 5초 · 실패가 이어지면 최대 15분, 허용 IP 거절은 상태에 이름만 남기고 15분 간격. 분류는 업비트 category + 제목(유의 → 거래유의 · 거래지원 종료 · 신규 거래지원 → 마켓 추가).
+- 공식 스트림은 연결 뒤 새 공지만 주므로 지난 공지는 없다(웹 내부 api-manager 는 쓰지 않음). 그래서 업비트 탭은 서버 `available`(받은 코인 공지가 생긴 뒤)일 때만 — 빈 탭을 먼저 보이지 않게. 탭 이름은 거래소를 따라 '빗썸 공지' · '업비트 공지'.
+- render.yaml 웹 서비스에 두 키를 `sync: false` 로 선언(값은 Render 에 따로). requirements 에 websockets 명시.
+- 검증: 백엔드 4,157 passed / 5 skipped(새 시험 13 — 업비트 메시지 · 분류 · 가짜 연결로 저장 · 임대 반납 · IP 거절 기록). 실제 업비트에 사무실에서 한 번 붙여 NoAuthorizationIp 가 상태에 기록되는 것 확인(임시 SQLite). node 980 · lint · build · coinTrendsBrowser 12가지.
+
+## 2026-10-20 · 거래소 공식 공지 — 빗썸 공지 탭(시안 B)
+
+- 사용자 문제: 국내 원화 코인은 대부분 잡코인이라 뉴스가 없다. 운영 측정(7일): 업비트 296개 중 국내 뉴스가 붙은 코인 74개(25%), 빗썸 487개 중 106개(21%) — 매체 4곳의 최신 기사 목록에서 이름을 찾는 방식이라 잡코인 기사는 목록에 들어오지 않는다.
+- 소스 조사: 빗썸 `feed.bithumb.com/notice` 403 은 Cloudflare 가 막는 사람용 화면. 공식 REST `GET api.bithumb.com/v1/notices`(API 2.0 문서 '공지사항 조회' — 1.0 문서엔 없음, 키 없음, IP별 초당 1회, `count` 최대 20, 쪽 넘기기 없음)는 302 로 `feed-api.bithumb.com` 에 보낸다. 업비트 공식은 Private WebSocket `announcement`(JWT 필요 · 권한 불필요 · 연결 중 새 공지만, 지난 공지 조회 없음)뿐 — `api-manager.upbit.com` 공지 목록은 웹 내부용이라 쓰지 않음. 업비트는 운영 키 발급(허용 IP = Render Connect → Outbound) 뒤에.
+- 서버: `exchange_notices.py` — 1분마다 빗썸 20개, 302 는 feed-api 한 곳만, JSON · 크기 검사, KST 시각 → UTC. `exchangenotice` 표(30일 · 최대 1,000) · `exchangenoticestate`, 제목 괄호 속 티커(`콘크리트(CT)`, `셀레스티아(TIA), 만타(MANTA)`)로 `feedasset`(kr:notice) 연결(마켓 목록 '(KRW, BTC, USDT 마켓)' · '(KRW)' 는 제외). `/api/trends?sections=notices` — 빗썸만, **티커가 적힌 공지만**(점검 · 고객센터 · 회사 홍보는 저장만, 시안 749NoEghhC8uGBig6qm966 에서 사용자가 B 고름), 코인 · 검색어 거르기, 첫 쪽 total, 커서. 업비트 · 바이낸스는 `not_configured`. 마이그레이션 `20261020090000_exchange_notices.sql`(RLS · anon/authenticated 회수).
+- 화면: 빗썸일 때만 국내 소식 세 번째 탭 '빗썸 공지 n'(업비트에선 탭도 요청도 없음). 줄 = 기존 소식 줄 + 앞에 분류(거래유의 · 거래지원 종료만 붉은 `ct-risk`, 나머지는 글자), 출처 '빗썸 공지', 코인 칩 3개. '최근 30일 · n개', 출처 고르기 · 커뮤니티 고지 없음. 코인을 고르면 커뮤니티 → 뉴스 → 공지 순으로 글 있는 탭을 연다. 탭 줄은 칸 수만큼 한 줄 균등(두 칸 고정이면 셋째가 둘째 줄로 떨어짐), 소식 칸이 460px 보다 좁으면 '국내 · 빗썸' 앞말을 눈에서만 감춤(320px 에서 '국내 커뮤니티 45'가 옆 칸과 겹침). 공지 탭을 연 채 업비트로 바꾸면 한 번 목록 없는 탭이 와 화면이 깨지던 것을 커뮤니티로 그리게.
+- 검증: 실제 빗썸 공지 20개 받아 티커 연결 확인(템코 · 네스트리 · 스탯 등 거래지원 종료 6종, 울트라 · 메이플라워 등 거래유의 4종). 백엔드 전체 4,154 passed / 5 skipped, 새 시험 10(302 대상 검사 · 모양 오류 · 다시 받기 · 실패 시 보존 · 경로). PostgreSQL 17 에서 마이그레이션 두 번 · 새 시험 통과. node 980 · lint · build, coinTrendsBrowser 12가지(빗썸에서 탭 세 칸 한 줄 · 잘림 없음, 공지 2줄 · 배지 · 칩, 업비트로 돌아가면 탭 두 칸 · 커뮤니티).
+
 ## 2026-10-19 · 하단 '오늘의 경주마' 띠에서 거래소 고르기(시안 B)
 
 - 사용자 요청: 띠가 업비트 → 빗썸 → 바이낸스로 도는데, 거래소 부분을 누르면 드롭다운으로 고를 수 있게. 시안(artifact Dtymy7cnsocnw6upeBpF3e)에서 A 고정 · 기억 / B 고른 거래소부터 다시 차례로 중 사용자가 B 를 고름.
 - 구현: `HotCoinsMarquee` 왼쪽 칸의 로고 자리에 공용 `SelectMenu`(`.marquee-ex` — 32px 납작한 버튼, 목록은 위로). 고르면 기다리던 '다음 거래소' 타이머를 버리고 그 거래소부터 한 바퀴 + 5초. 왼쪽 칸에 마우스가 있는 동안은 넘기지 않는다(고르는 중에 바뀌지 않게). 목록은 받은 거래소만(`marqueeChoices`), 받은 거래소가 바뀔 때만 새로 만든다(시세 갱신마다 바뀌면 열린 목록의 키보드 위치가 처음으로 돌아감).
 - 띠는 767px 이하 · 터치 태블릿에선 원래 숨으므로 시안의 휴대폰 모양(로고만)은 나올 일이 없다.
 - 검증: node 983(marqueeChoices 추가) · lint · build. coinTrendsBrowser 12가지 — 띠가 보이는 768 · 1099 · 1280 · 1440 × 2테마에서 목록 3개 · 지금 거래소 체크 · 목록이 버튼 위 · 화면 안, 바이낸스를 고르면 로고 · 흐르는 코인이 바뀜. 띠 첫 코인 확인은 거래소 버튼이 아닌 흐르는 목록에서.
+- 배포: PR #173(merge `f751e389`, 프론트만 — Vercel). 운영 1440 라이트 · 1280 다크에서 목록 3개 · 버튼 위로 열림 · 바이낸스를 고르면 로고 · 흐르는 코인(AMP 등) 바뀜, 화면 오류 없음.
 
 ## 2026-10-18 · 국내 커뮤니티 글에서 욕설 제목 거르기
 

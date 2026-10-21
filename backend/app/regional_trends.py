@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import BigInteger, Index, func, or_
 from sqlmodel import Field, SQLModel, delete, select
 
-from . import domestic_community, feed_index, market_trends, news, news_ai_budget
+from . import domestic_community, exchange_notices, feed_index, market_trends, news, news_ai_budget
 from .ai_runtime import get_ai_client, get_ai_runtime
 from .cache_runtime import ResponseCache
 from .db import get_session
@@ -754,8 +754,8 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
                 sections: str = Query("rankings,news,community", max_length=40)):
     exchange = exchange or ("upbit" if region == "kr" else "binance")
     wanted = {part.strip() for part in sections.split(",") if part.strip()}
-    if not wanted or not wanted <= {"rankings", "news", "community"}:
-        raise HTTPException(422, "sections 는 rankings·news·community 중에서 고르세요.")
+    if not wanted or not wanted <= {"rankings", "news", "community", "notices"}:
+        raise HTTPException(422, "sections 는 rankings·news·community·notices 중에서 고르세요.")
     if exchange not in ({"upbit","bithumb"} if region == "kr" else {"binance"}):
         raise HTTPException(422, "국내는 업비트·빗썸, 해외는 바이낸스를 선택하세요.")
     valid_sources = {row["id"] for row in source_registry(region)}
@@ -812,13 +812,19 @@ def trends_feed(response: Response, region: Region = "kr", exchange: str | None 
             community = {"items":[], "collection":{"status":"error"}, "message":"저장된 커뮤니티 글을 확인하지 못했어요."}
         if content_type not in {"all","community"}:
             community.update(items=[], total=0)
+    # 거래소 공식 공지 — 국내만(빗썸 공식 REST, 업비트는 키 연결 전 not_configured). 고른 코인이 있으면 그 티커가 적힌 공지만.
+    notices = {"items":[], "collection":{"status":"not_configured"}, "message":"공식 공지는 별도 소스 연결 전입니다."}
+    if "notices" in wanted and region == "kr":
+        try:
+            notices = exchange_notices.get_exchange_notices(exchange, selected, q=q, limit=min(limit, 50), cursor=position)
+        except Exception:
+            notices = {"items":[], "collection":{"status":"error"}, "message":"저장된 공지를 확인하지 못했어요."}
     if "rankings" not in wanted:
         rankings = None
     response.headers["Cache-Control"] = "public, max-age=5"
     return {"region":region, "exchange":exchange, "query":q, "symbol":symbol,
             "rankings":rankings, "news":articles, "community":community, "offset":offset,
-            "notices":{"items":[], "collection":{"status":"not_configured"},
-                       "message":"공식 공지는 별도 소스 연결 전입니다."},
+            "notices":notices,
             "filters":{"source":source, "content_type":content_type},
             "sources":content_sources(region), "refresh_seconds":30}
 

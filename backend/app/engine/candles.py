@@ -390,13 +390,17 @@ class CandleSim:
         self.closed_trades.append(pnl)
         held_ids = {id(lot) for lot in held}
         self.lots = [lot for lot in self.lots if lot.qty > 1e-12 or id(lot) not in held_ids]
-        exit_ref = ref if ref in ledger.orders and ledger.orders[ref].get("side") == "sell" else ledger.exit
-        order = ledger.orders.get(exit_ref) if exit_ref else None
-        if order is not None:
+        local = str(report.get("source") or "") == "local"
+        order = ledger.orders.get(ref) if ref and not local else None
+        if order is not None and order.get("side") == "sell":
             order["sold"] = float(order.get("sold") or 0.0) + sold
+        else:
+            order = None
         left = sum(lot.qty for lot in self._confirmed_lots())
         ended = left <= 1e-12 or left * numbers.price < self._reorder_floor()
         if ended:
+            # 포지션을 끝낸 그 매도의 성격으로 손절 대기를 정한다 — 실행기 로컬 손절이면 그 체결 시각부터,
+            # 서버 손절 명령이면 신호 봉 시각부터(백테스트와 같은 기준). 기다리던 익절 주문의 성격을 빌리지 않는다.
             if order is not None:
                 is_stop, at = bool(order.get("is_stop")), _ms_time(order.get("signal_ms"))
             else:

@@ -728,12 +728,16 @@ def pending_commands(db, row: RunSession, now_ms: int) -> List[dict]:
     return [_view(c) for c in _deliverable(row, rows)]
 
 
-def exchange_commands(db, row: RunSession, acks: list, now_ms: int, *, previous_qty: float) -> List[dict]:
+def exchange_commands(db, row: RunSession, acks: list, now_ms: int, *, previous_qty: float,
+                      local_fills=()) -> List[dict]:
     """heartbeat 한 번의 명령 주고받기: ack 반영 → 만료 → 주문이 안 나간 진입 되돌리기 → 보낼 명령.
 
     ``previous_qty`` 는 이번 스냅샷 **전** 실행기가 보고한 보유 수량 — 추가매수가 일부라도 체결됐는지 가린다.
+    체결 기준 장부 세션은 되돌리지 않는다 — ``_exchange_ledger_commands``.
     """
     changed = apply_acks(db, row, acks, now_ms)
+    if row.exec_policy == FILL_LEDGER_POLICY:
+        return _exchange_ledger_commands(db, row, local_fills, now_ms)
     rows = _pending_rows(db, row)
     expired = _expire_entries(db, rows, now_ms)
     settle_unexecuted_entries(db, row, changed, expired, now_ms, previous_qty=previous_qty, pending=rows)
@@ -741,6 +745,37 @@ def exchange_commands(db, row: RunSession, acks: list, now_ms: int, *, previous_
     if floor is not None:
         # 되돌리기를 다음 heartbeat 로 미뤘다 — 그 뒤 명령이 그사이 실행되면 되돌릴 수 없게 된다. 끝날 때까지 붙잡는다.
         rows = [c for c in rows if c.seq < floor]
+    return [_view(c) for c in _deliverable(row, rows)]
+
+
+def _exchange_ledger_commands(db, row: RunSession, local_fills, now_ms: int) -> List[dict]:
+    """체결 기준 장부 세션: 로컬 체결 넣기 → (새로 들어왔으면) 그 포지션을 전제로 만든 대기 명령 취소 → 진입 만료 → 보낼 명령.
+
+    장부는 서버 전략 루프가 체결 기록표를 접어 맞춘다 — 여기서 서버 전략을 되돌리지 않는다(옛 settle_unexecuted_entries 없음).
+    로컬 손절 · 안전 규칙 정리가 팔았으면 그 포지션에 얹을 물타기 · 재진입은 보내지 않는다. 실행기가 무포지션이라고 하면
+    남은 익절 · 청산도 취소한다(팔 것이 없다). 같은 보고가 다시 와 새 행이 없으면 그 뒤에 생긴 명령은 건드리지 않는다.
+    """
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    added = runner_fills.record_local_fills(db, row, list(local_fills or []), now_ms)
+    rows = _pending_rows(db, row)
+    if added:
+        flat = not row.in_position and not row.position_uncertain
+        events = []
+        for c in rows:
+            if c.action in ENTRY_SIDES or (flat and c.action in EXIT_SIDES):
+                c.status = "cancelled"
+                db.add(c)
+                event = _command_event(c, "command.cancelled", "warn", "WARN",
+                                       f"[명령 #{c.seq}] 실행기가 혼자 정리해서(로컬 손절 · 안전 규칙) 이 {c.action.upper()} "
+                                       "명령은 보내지 않아요.", verification="server_command_state")
+                event["ts"] = _now_iso()
+                events.append(event)
+        rows = [c for c in rows if c.status == "pending"]
+        if events:
+            db.add(row)
+            _append_events(db, row, events, component="engine")
+    _expire_entries(db, rows, now_ms)
     return [_view(c) for c in _deliverable(row, rows)]
 
 
@@ -1249,6 +1284,9 @@ def check_position_mismatch(db, row: RunSession, reported_in_position: bool) -> 
     pending = db.exec(select(RunnerCommand.id).where(RunnerCommand.session_id == row.id, RunnerCommand.status == "pending")).first()
     if pending is not None:
         return
+    if row.exec_policy == FILL_LEDGER_POLICY:
+        _check_ledger_mismatch(db, row, state)
+        return
     expected = bool(state.get("in_position"))
     if expected == bool(reported_in_position):
         _MISMATCH_NOTED.discard(row.id)
@@ -1265,6 +1303,34 @@ def check_position_mismatch(db, row: RunSession, reported_in_position: bool) -> 
                               "message": ("서버 전략은 포지션 보유 중인데 실행기는 비어 있어요" if expected
                                           else "서버 전략은 비어 있는데 실행기는 포지션을 들고 있어요")
                                          + " — 거래소 포지션을 확인해 주세요."}], component="engine")
+
+
+def _check_ledger_mismatch(db, row: RunSession, state: dict) -> None:
+    """체결 기준 장부 세션: 서버 장부 보유(먼지 포함)와 실행기 보고 수량을 견준다. 다르면 한 번 경고.
+
+    접지 않은 체결 행이 있거나 장부에 미결 주문이 있으면 아직 정리 중이라 견주지 않는다(반영 전 잠깐의 차이).
+    """
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    legs = state.get("legs") or [{}]
+    ledger = ((legs[0] or {}).get("strategy") or {}).get("ledger") or {}
+    if ledger.get("orders") or runner_fills.has_unapplied(db, row.id):
+        return
+    server = sum(float(lot.get("qty") or 0.0) for lot in ledger.get("lots") or [])
+    server += float((ledger.get("dust") or {}).get("qty") or 0.0)
+    runner = float(row.position_qty or 0.0)
+    if abs(server - runner) <= max(1e-9, max(server, runner) * 0.002):
+        _MISMATCH_NOTED.discard(row.id)
+        return
+    if row.id in _MISMATCH_NOTED:
+        return
+    _MISMATCH_NOTED.add(row.id)
+    _append_events(db, row, [{"ts": _now_iso(), "kind": "warn", "severity": "WARN", "event_name": "engine.ledger_mismatch",
+                              "operation_id": f"session:{row.id}",
+                              "details": {"server_qty": server, "runner_qty": runner,
+                                          "verification": "runner_reported_not_exchange_verified"},
+                              "message": f"서버 장부 수량과 실행기 보유 수량이 달라요 · 서버 {server:g} · 실행기 {runner:g}"
+                                         " — 거래소 보유를 확인해 주세요."}], component="engine")
 
 
 # --- 재기동 복구 -------------------------------------------------------------

@@ -810,6 +810,8 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
     """
     events = snapshot.pop("events", None)
     acks = snapshot.pop("acks", None)
+    # 실행기가 서버 명령 없이 낸 주문의 체결(로컬 손절 · 안전 규칙 정리, 레벨 21+) — 체결 기준 장부 세션만 쓴다.
+    local_fills = snapshot.pop("local_fills", None)
     # Capture before commit: a shared authenticated User expires on commit;
     # reading user.id afterwards would start a second transaction/checkout.
     user_id = user.id
@@ -845,7 +847,8 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         if supports_signals(row.runner_version):
             # ack 반영 → 만료 → 주문이 안 나간 진입은 서버 전략도 되돌림 → 보낼 명령 → 포지션 유무 대조(경고만).
             now_ms = runner_engine._now_ms()
-            commands = runner_engine.exchange_commands(db, row, acks or [], now_ms, previous_qty=previous_qty)
+            commands = runner_engine.exchange_commands(db, row, acks or [], now_ms, previous_qty=previous_qty,
+                                                       local_fills=local_fills if isinstance(local_fills, list) else [])
             if not row.position_uncertain:
                 # 실행기 스스로 포지션을 모르는 상태면 대조할 근거가 없다.
                 runner_engine.check_position_mismatch(db, row, row.in_position)

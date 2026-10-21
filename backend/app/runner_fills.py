@@ -121,3 +121,9 @@ def record_local_fills(db, row: RunSession, local_fills, now_ms: int) -> int:
         fact["side"] = "sell"  # 로컬 주문은 정리뿐이다(손절 · 안전 규칙)
         added += _insert(db, row, fact, command_id=None, source="local", now_ms=now_ms)
     return added
+
+
+def has_unapplied(db, session_id: int) -> bool:
+    """아직 장부에 접지 않은 체결 행이 있는가."""
+    return db.exec(select(RunnerFill.id).where(RunnerFill.session_id == session_id,
+                                               RunnerFill.applied_ms == 0)).first() is not None

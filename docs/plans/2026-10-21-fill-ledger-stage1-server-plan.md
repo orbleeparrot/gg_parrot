@@ -232,7 +232,7 @@ env -u DATABASE_URL NEWS_IMAGES_DISABLED=1 /data/aires/playground/clcleh123/mini
 
 ## 과제 9 — 하트비트 흐름(정책 세션)
 
-파일: `backend/app/runner.py`(heartbeat), `backend/app/runner_engine.py`(`exchange_commands` · `check_position_mismatch`), `backend/tests/test_runner_fill_ledger_heartbeat.py`
+파일: `backend/app/main.py`(`RunnerHeartbeatRequest.local_fills` — 요청 모델이 모르는 칸을 버린다), `backend/app/runner.py`(heartbeat), `backend/app/runner_engine.py`(`exchange_commands` · `check_position_mismatch`), `backend/tests/test_runner_fill_ledger_heartbeat.py`(API 경로로 시험)
 
 - heartbeat 가 `snapshot` 에서 `local_fills` 를 꺼내 `exchange_commands` 에 넘긴다(옛 실행기는 안 보낸다 — 빈 목록).
 - 정책 세션 `exchange_commands`: ack 반영 → 로컬 체결 넣기 → 로컬 체결이 있으면 대기 중인 진입 명령을 cancelled(그 포지션을 전제로 만든 신호), 실행기가 무포지션으로 보고했으면 대기 중인 청산 명령도 cancelled → 진입 만료 → 보낼 명령. `settle_unexecuted_entries`(옛 되돌리기)는 부르지 않는다.

@@ -430,7 +430,10 @@ class RunnerHeartbeatRequest(BaseModel):
     # 실행기 창 로그를 서버에 쌓는다(v7+). [{ts, kind, message}] — 한 번에 100개까지.
     events: list[dict] = []
     # v8: 직전 heartbeat 로 받은 명령의 실행 결과 [{command_id, ok, executed_qty, fill_price, error}]
+    # 레벨 21+: 각 ack 에 그 명령으로 낸 주문 사실 orders(주문 키 · 체결 수량 · 평균가 · 수수료)가 실린다.
     acks: list[dict] = []
+    # 레벨 21+: 서버 명령 없이 실행기가 낸 주문의 체결(로컬 손절 · 안전 규칙 정리). 체결 기준 장부 세션만 쓴다.
+    local_fills: list[dict] = []
 
 
 class RunnerStoppedRequest(BaseModel):

@@ -60,6 +60,17 @@ def test_existing_runner_tables_add_fill_ledger_columns():
     ]
 
 
+def test_existing_runner_commands_add_limit_order_columns():
+    """체결 기준 장부 2단계(지정가 IOC): 옛 명령은 빈 주문 방식 = 시장가."""
+    state = current_schema()
+    state["columns"].pop(("runnercommand", "order_type"))
+    state["columns"].pop(("runnercommand", "limit_price"))
+    assert db._pg_migration_statements(state) == [
+        "ALTER TABLE runnercommand ADD COLUMN IF NOT EXISTS order_type TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE runnercommand ADD COLUMN IF NOT EXISTS limit_price DOUBLE PRECISION NOT NULL DEFAULT 0",
+    ]
+
+
 def test_existing_fill_journal_gets_its_lookup_indexes():
     state = current_schema()
     state["indexes"] -= {"ux_runnerfill_session_key", "ix_runnerfill_session_applied"}

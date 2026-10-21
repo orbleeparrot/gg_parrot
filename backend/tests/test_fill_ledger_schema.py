@@ -52,7 +52,7 @@ def _cleanup():
 def test_fresh_schema_has_policy_order_ref_and_fill_journal():
     found = inspect(db._engine)
     assert "exec_policy" in {c["name"] for c in found.get_columns("runsession")}
-    assert "order_ref" in {c["name"] for c in found.get_columns("runnercommand")}
+    assert {"order_ref", "order_type", "limit_price"} <= {c["name"] for c in found.get_columns("runnercommand")}
     assert {"id", "session_id", "command_id", "fill_key", "exchange_order_id", "source", "side", "status",
             "executed_qty", "acquired_qty", "price", "fee_quote", "fee_known", "reason", "runner_ts_ms",
             "created_ms", "applied_ms"} <= {c["name"] for c in found.get_columns("runnerfill")}
@@ -65,6 +65,8 @@ def test_new_rows_default_to_the_old_path():
     """칸이 생겨도 옛 세션 · 옛 명령은 빈 값 — 실행 방식이 없는 세션은 지금 경로로 돈다(결정 4)."""
     assert RunSession(user_id=1, started_at="x").exec_policy == ""
     assert RunnerCommand(session_id=1).order_ref == ""
+    command = RunnerCommand(session_id=1)
+    assert command.order_type == "" and command.limit_price == 0.0  # 빈 값 = 시장가(2단계 지정가 IOC 전과 같다)
     fill = RunnerFill(session_id=1, fill_key="ggp-x")
     assert fill.applied_ms == 0 and fill.command_id is None and fill.fee_known is False
 
@@ -90,6 +92,8 @@ def test_existing_sqlite_runner_tables_gain_the_columns_and_journal(tmp_path, mo
     with engine.begin() as conn:
         conn.exec_driver_sql("ALTER TABLE runsession DROP COLUMN exec_policy")
         conn.exec_driver_sql("ALTER TABLE runnercommand DROP COLUMN order_ref")
+        conn.exec_driver_sql("ALTER TABLE runnercommand DROP COLUMN order_type")
+        conn.exec_driver_sql("ALTER TABLE runnercommand DROP COLUMN limit_price")
         conn.exec_driver_sql("DROP TABLE runnerfill")
     try:
         db.init_db()
@@ -97,6 +101,7 @@ def test_existing_sqlite_runner_tables_gain_the_columns_and_journal(tmp_path, mo
         with db.get_session() as s:
             assert s.get(RunSession, 5).exec_policy == "" and s.get(RunSession, 5).runner_version == "20"
             assert s.get(RunnerCommand, 8).order_ref == "" and s.get(RunnerCommand, 8).reason == "진입"
+            assert s.get(RunnerCommand, 8).order_type == "" and s.get(RunnerCommand, 8).limit_price == 0.0
             s.add(RunnerFill(session_id=5, fill_key="ggp-new", executed_qty=1.0, price=1.0))
             s.commit()
     finally:

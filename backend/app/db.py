@@ -599,6 +599,11 @@ class RunnerCommand(SQLModel, table=True):
     rollback_state: str = ""
     # 서버 전략이 이 주문에 매긴 번호("o17") — fill_ledger_v1 세션만. 체결 보고를 장부의 그 주문(가상 롯 · 차수)에 잇는다.
     order_ref: str = ""
+    # 주문 방식 — 빈 값 = 시장가(지금까지의 모든 명령). "limit_ioc" = 지정가 IOC(fill_ledger_v1 세션의 익절 · 물타기,
+    # 2026-10-21 설계 §6): limit_price 보다 불리하게는 체결하지 않고 바로 체결되지 않은 수량은 취소한다. 호가 단위
+    # 반올림(매도 올림 · 매수 내림)은 실행기가 거래소 규칙으로 한다 — 여기는 전략이 정한 가격선 그대로.
+    order_type: str = ""
+    limit_price: float = 0.0
 
 
 class RunnerFill(SQLModel, table=True):
@@ -1446,6 +1451,8 @@ def _migrate() -> None:
     added.setdefault("runnercommand", {}).update({
         "rollback_state": "ALTER TABLE runnercommand ADD COLUMN rollback_state TEXT NOT NULL DEFAULT ''",
         "order_ref": "ALTER TABLE runnercommand ADD COLUMN order_ref TEXT NOT NULL DEFAULT ''",
+        "order_type": "ALTER TABLE runnercommand ADD COLUMN order_type TEXT NOT NULL DEFAULT ''",
+        "limit_price": "ALTER TABLE runnercommand ADD COLUMN limit_price REAL NOT NULL DEFAULT 0",
     })
     added.setdefault("runsession", {}).update({
         "exec_policy": "ALTER TABLE runsession ADD COLUMN exec_policy TEXT NOT NULL DEFAULT ''",
@@ -1607,7 +1614,8 @@ _PG_ADDED_COLUMNS = {
         "next_collection_ms": "BIGINT DEFAULT 0", "observation_seq": "BIGINT DEFAULT 0",
         "latest_observation_seq": "BIGINT DEFAULT 0", "latest_observed_ms": "BIGINT DEFAULT 0",
     },
-    "runnercommand": {"rollback_state": "TEXT NOT NULL DEFAULT ''", "order_ref": "TEXT NOT NULL DEFAULT ''"},
+    "runnercommand": {"rollback_state": "TEXT NOT NULL DEFAULT ''", "order_ref": "TEXT NOT NULL DEFAULT ''",
+                      "order_type": "TEXT NOT NULL DEFAULT ''", "limit_price": "DOUBLE PRECISION NOT NULL DEFAULT 0"},
     "runnerlaunchticket": {
         "rejected_at": "TEXT DEFAULT ''",
         "rejected_version": "TEXT DEFAULT ''",

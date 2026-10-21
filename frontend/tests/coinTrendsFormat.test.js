@@ -3,7 +3,7 @@ import test from "node:test";
 
 import {
   formatPct, formatPrice, formatTurnover, matchScore, mergeById, neighborsByTurnover, premiumPct,
-  raceRows, rangePosition, refreshFirstPage, relativeTime, searchCoins, sortCoins, thumbGeometry, turnoverRank,
+  raceRows, refreshFirstPage, relativeTime, searchCoins, sortCoins, thumbGeometry, turnoverRank,
 } from "../src/features/coinTrends/trendsFormat.js";
 
 const coin = (base, extra = {}) => ({ base, symbol: `KRW-${base}`, korean_name: base, english_name: base,
@@ -69,11 +69,9 @@ test("neighbors stay inside the list at both ends", () => {
   assert.deepEqual(neighborsByTurnover(coins, "ZZZ"), []);
 });
 
-test("premium, range and relative time", () => {
+test("premium and relative time", () => {
   assert.equal(Math.round(premiumPct(109_922_000, 81_608.45, 1334.89) * 100) / 100, 0.9);
   assert.equal(premiumPct(100, 0, 1300), null);
-  assert.equal(rangePosition(1766, 1759, 1773), 0.5);
-  assert.equal(rangePosition(10, 10, 10), null);
   const now = Date.parse("2026-10-17T03:51:00Z");
   assert.equal(relativeTime("2026-10-17T03:45:00Z", { now }), "6분 전");
   assert.equal(relativeTime("2026-10-17T01:00:00Z", { now }), "2시간 전");

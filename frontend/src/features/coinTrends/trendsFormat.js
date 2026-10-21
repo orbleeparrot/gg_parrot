@@ -1,10 +1,9 @@
 // 코인동향 — 순위 정렬 · 검색 · 숫자 서식. 화면 밖에서 시험하는 순수 함수만 둔다.
 
 export const EXCHANGE_META = {
-  upbit: { name: "업비트", region: "kr", quote: "KRW", market: "원화 마켓", changeLabel: "전일 대비", rangeLabel: "오늘" },
-  bithumb: { name: "빗썸", region: "kr", quote: "KRW", market: "원화 마켓", changeLabel: "전일 대비", rangeLabel: "오늘" },
-  // 바이낸스 고가 · 저가는 지난 24시간 기준(rolling) — '오늘'이라 쓰지 않는다.
-  binance: { name: "바이낸스", region: "global", quote: "USDT", market: "USDT 마켓", changeLabel: "24시간", rangeLabel: "24시간" },
+  upbit: { name: "업비트", region: "kr", quote: "KRW", market: "원화 마켓", changeLabel: "전일 대비" },
+  bithumb: { name: "빗썸", region: "kr", quote: "KRW", market: "원화 마켓", changeLabel: "전일 대비" },
+  binance: { name: "바이낸스", region: "global", quote: "USDT", market: "USDT 마켓", changeLabel: "24시간" },
 };
 export const REGION_EXCHANGES = { kr: ["upbit", "bithumb"], global: ["binance"] };
 export const EXCHANGES = Object.keys(EXCHANGE_META);
@@ -136,11 +135,6 @@ export function turnoverRank(coins, base) {
 export function premiumPct(krwPrice, usdtPrice, usdkrw) {
   if (![krwPrice, usdtPrice, usdkrw].every((value) => number(value) > 0)) return null;
   return (krwPrice / (usdtPrice * usdkrw) - 1) * 100;
-}
-
-export function rangePosition(price, low, high) {
-  if (![price, low, high].every((value) => number(value) != null) || high <= low) return null;
-  return Math.max(0, Math.min(1, (price - low) / (high - low)));
 }
 
 const KST_MS = 9 * 60 * 60 * 1000;

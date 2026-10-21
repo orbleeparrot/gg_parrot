@@ -6,6 +6,7 @@ COIN_TRENDS_OUTPUT overrides /tmp/ggp-coin-trends-check. External traffic is blo
 mobileShellBrowser.smoke.py 가 Handler · Fixture · BUILD 를 가져다 쓴다.
 """
 import json
+import time
 import os
 import threading
 from functools import partial
@@ -119,6 +120,14 @@ class Fixture:
             data = {**RANKINGS[exchange], "exchange": exchange, "updated_at": NOW, "status": "ready", "stale": False}
         elif url.path == "/api/trends":
             data = self.trends(query)
+        elif url.path in ("/api/candles", "/api/candles/live"):
+            # 코인 정보 칸 차트(직접 만들기와 같은 CandleChart) — 지금 시각에 맞춘 1,700원대 봉.
+            step = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}[query.get("interval", ["1h"])[0]] * 1000
+            now_ms = int(time.time() * 1000) // step * step
+            count = 2 if url.path.endswith("/live") else 120
+            data = {"candles": [{"t": now_ms - (count - 1 - i) * step, "o": 1750 + i % 9, "h": 1760 + i % 7, "l": 1740 + i % 5,
+                                 "c": 1752 + i % 11, "v": 1000 + i, "closed": i < count - 1} for i in range(count)],
+                    "server_time": now_ms, "fetched_at_ms": now_ms, "source": "fixture", "market": "spot", "fallback": False}
         elif url.path == "/api/usdkrw":
             data = {"usdkrw": 1334.89}
         elif url.path == "/api/news/market":
@@ -273,6 +282,27 @@ def main():
                     # 커뮤니티 글이 없는 코인은 뉴스 탭이 먼저 열린다.
                     expect(page.get_by_role("tab", name="국내 뉴스", exact=False)).to_have_attribute("aria-selected", "true")
                     expect(page.get_by_text("해외 대비")).to_be_visible()
+                    # 코인 정보 — 저가 · 고가 게이지 대신 직접 만들기 차트(embed, 2026-10-21 시안): 높이 320 · 휴대폰 260,
+                    # 봉 간격 6칸 한 줄(누르면 그 간격으로 다시 받음), 휴대폰은 확대/축소 단추 없음.
+                    chart = page.locator(".ct-coin .candle-chart.is-embed")
+                    expect(chart).to_be_visible()
+                    expect(page.locator(".ct-coin .ct-range")).to_have_count(0)
+                    expect(chart.locator(".candle-chart-plot svg").first).to_be_attached()
+                    picks = chart.locator(".candle-chart-pick .seg-item")
+                    expect(picks).to_have_count(6)
+                    expect(picks.nth(3)).to_have_attribute("aria-pressed", "true")
+                    narrow = head["rank"]["w"] < 470
+                    geo = page.evaluate("""() => { const box = document.querySelector('.ct-coin-chart').getBoundingClientRect();
+                      const items = [...document.querySelectorAll('.ct-coin .candle-chart-pick .seg-item')];
+                      return { h: Math.round(box.height), rows: new Set(items.map(e => Math.round(e.getBoundingClientRect().top))).size,
+                               clipped: items.filter(e => e.scrollWidth > e.clientWidth || e.getBoundingClientRect().right > box.right + 1).length }; }""")
+                    assert geo == {"h": 260 if narrow else 320, "rows": 1, "clipped": 0}, geo
+                    zoom = chart.locator(".candle-chart-controls")
+                    expect(zoom).to_be_hidden() if narrow else expect(zoom).to_be_visible()
+                    picks.nth(4).click()
+                    expect(picks.nth(4)).to_have_attribute("aria-pressed", "true")
+                    page.wait_for_function("() => true")
+                    assert any(call.startswith("/api/candles?") and "interval=4h" in call for call in fixture.calls), [c for c in fixture.calls if "candles" in c][-3:]
                     if two_columns:  # 고른 코인 정보도 필터(제목줄 검색칸) 끝에 맞음 — 목록 상자를 넓힌 만큼 안쪽을 채움
                         edges = page.evaluate("""() => { const r = (s) => document.querySelector(s).getBoundingClientRect();
                           return [Math.round(r('.ct-coin-top').left), Math.round(r('.ct-kv').right), Math.round(r('.ct-rank .ct-col-head').left), Math.round(r('.ct-rank .ct-col-head').right)]; }""")

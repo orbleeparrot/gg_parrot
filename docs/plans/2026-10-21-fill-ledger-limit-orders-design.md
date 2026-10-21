@@ -1,6 +1,6 @@
 # 체결 기준 장부 · 가격 보장 주문 설계 — 마틴게일 '익절인데 손해' 문제
 
-작성 2026-10-21 · 상태: 설계 확정(9절 2차 검토 반영) · 1단계 서버 구현 완료(미배포 — [서버 계획](2026-10-21-fill-ledger-stage1-server-plan.md)), 1단계 실행기 · 2단계 진행 전 · 대상: 서버(gg_parrot) + 실행기(ggparrot-desktop)
+작성 2026-10-21 · 상태: 설계 확정(9절 2차 검토 반영) · 1 · 2단계 구현 완료(서버 · 실행기, 미배포 — [1단계 서버](2026-10-21-fill-ledger-stage1-server-plan.md) · [1단계 실행기](2026-10-21-fill-ledger-stage1-runner-plan.md) · [2단계](2026-10-21-fill-ledger-stage2-plan.md)), 3단계 설계 전 · 대상: 서버(gg_parrot) + 실행기(ggparrot-desktop)
 
 ## 1. 왜 — 운영 근거
 

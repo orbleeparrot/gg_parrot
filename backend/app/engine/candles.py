@@ -485,7 +485,11 @@ class CandleSim:
         ref = self.ledger.next_ref()
         lot.ref = ref
         fill.order_ref = ref
+        if kind == "so" and line > 0:
+            # 설계 §4: 물타기는 그 가격선 이하에서만 산다(지정가 IOC). 호가 단위 내림은 실행기가 한다.
+            fill.order_type, fill.limit_price = "limit_ioc", float(line)
         self.ledger.orders[ref] = {
+            "order_type": fill.order_type,
             "side": "buy", "kind": kind, "tier": int(tier), "line": float(line), "epoch": self.ledger.epoch,
             "qty": float(lot.qty), "price": float(lot.fill), "margin": float(margin), "fee": float(fee),
             "signal_ms": int(ts.timestamp() * 1000), "actual": False, "filled_qty": 0.0, "spent": 0.0,
@@ -702,11 +706,13 @@ class CandleSim:
         self._entry_time = ts
         return self._remember_entry(self._fill("short", f, qty, mark, reason), before)
 
-    def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime, reason: Optional[str] = None) -> Optional[Fill]:
+    def _close_all(self, close: float, mark: float, *, is_stop: bool, ts: datetime, reason: Optional[str] = None,
+                   limit: bool = False) -> Optional[Fill]:
+        """``limit`` — 지정가형 가격선(익절)의 청산. 체결 기준 장부에서만 뜻이 있다(지정가 IOC 명령). 백테스트는 같다."""
         if not self.in_position():
             return None
         if self.ledger is not None:
-            return self._signal_exit(close, mark, is_stop=is_stop, ts=ts, reason=reason)
+            return self._signal_exit(close, mark, is_stop=is_stop, ts=ts, reason=reason, limit=limit)
         qty = self.total_qty()
         avg = self.avg_entry()
         margin = sum(l.margin for l in self.lots)
@@ -733,7 +739,7 @@ class CandleSim:
         return fill
 
     def _signal_exit(self, close: float, mark: float, *, is_stop: bool, ts: datetime,
-                     reason: Optional[str]) -> Optional[Fill]:
+                     reason: Optional[str], limit: bool = False) -> Optional[Fill]:
         """체결 기준 장부의 청산 신호 — 장부는 그대로 두고 '청산 대기' 주문을 남긴다. 체결 보고만큼 줄인다(_fold_sell).
 
         Fill 의 직전 수량은 지금 보유 그대로다(명령 비율 1.0) — _fill_meta 는 장부가 이미 줄었다고 보고 두 배를 낸다.
@@ -747,9 +753,12 @@ class CandleSim:
         fill.qty_before = qty
         ref = ledger.next_ref()
         fill.order_ref = ref
+        if limit and not is_stop:
+            # 설계 §4: 익절은 그 가격 이상에서만 판다(지정가 IOC). 호가 단위 올림은 실행기가 한다.
+            fill.order_type, fill.limit_price = "limit_ioc", float(close)
         ledger.orders[ref] = {"side": "sell", "kind": "stop" if is_stop else "exit", "epoch": ledger.epoch,
                               "qty": float(qty), "price": float(f), "is_stop": bool(is_stop),
-                              "signal_ms": int(ts.timestamp() * 1000), "sold": 0.0}
+                              "signal_ms": int(ts.timestamp() * 1000), "sold": 0.0, "order_type": fill.order_type}
         ledger.exit = ref
         return fill
 
@@ -1247,7 +1256,7 @@ class MartingaleSim(CandleSim):
             avg = self.avg_entry()
             tp_px = avg * (1 + self.tp / 100.0)
             if h >= tp_px:
-                f = self._close_all(tp_px, tp_px, is_stop=False, ts=ts)
+                f = self._close_all(tp_px, tp_px, is_stop=False, ts=ts, limit=True)
                 if f:
                     fills.append(f)
                 return

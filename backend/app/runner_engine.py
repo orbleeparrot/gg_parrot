@@ -710,15 +710,17 @@ def _persist_fill(live: _Live, fill: Fill, state_json: str, rollback_json: str =
 def command_from_fill(fill: Fill, initial: float) -> dict:
     """진입은 초기자본 대비 금액 비율, 청산은 직전 보유 수량 대비 비율(모르면 전량). 주문 번호는 체결 기준 장부 세션만."""
     ref = getattr(fill, "order_ref", "") or ""
+    limit = {"order_type": getattr(fill, "order_type", "") or "",
+             "limit_price": float(getattr(fill, "limit_price", 0.0) or 0.0)}
     if fill.side in EXIT_SIDES:
         frac = 1.0 if fill.qty_before <= 0 else min(1.0, fill.qty / fill.qty_before)
         if frac >= 0.999:
             frac = 1.0
         return {"action": fill.side, "notional_frac": 0.0, "qty_frac": float(frac),
-                "signal_price": float(fill.price), "reason": fill.reason or "청산", "order_ref": ref}
+                "signal_price": float(fill.price), "reason": fill.reason or "청산", "order_ref": ref, **limit}
     notional = fill.qty * fill.price
     return {"action": fill.side, "notional_frac": float(notional / initial) if initial > 0 else 0.0, "qty_frac": 0.0,
-            "signal_price": float(fill.price), "reason": fill.reason or "진입", "order_ref": ref}
+            "signal_price": float(fill.price), "reason": fill.reason or "진입", "order_ref": ref, **limit}
 
 
 def upsert_command(db, row: RunSession, cmd: dict, now_ms: int, *, rollback_state: str = "") -> tuple[RunnerCommand, bool]:
@@ -745,7 +747,9 @@ def upsert_command(db, row: RunSession, cmd: dict, now_ms: int, *, rollback_stat
                          notional_frac=cmd["notional_frac"], qty_frac=cmd["qty_frac"], signal_price=cmd["signal_price"],
                          reason=str(cmd["reason"])[:200], status="pending", created_at=_now_iso(), created_ms=now_ms,
                          expires_ms=now_ms + int(COMMAND_TTL_SECONDS * 1000),
-                         rollback_state=rollback_state if cmd["action"] in ENTRY_SIDES else "", order_ref=ref)
+                         rollback_state=rollback_state if cmd["action"] in ENTRY_SIDES else "", order_ref=ref,
+                         order_type=str(cmd.get("order_type") or "")[:16],
+                         limit_price=float(cmd.get("limit_price") or 0.0) if cmd.get("order_type") else 0.0)
     db.add(item)
     db.flush()
     return item, True
@@ -759,8 +763,12 @@ def insert_command(db, row: RunSession, cmd: dict, now_ms: int) -> RunnerCommand
 def _view(c: RunnerCommand) -> dict:
     # expires_ms 는 응답 형식 유지를 위해 항상 실린다. 서버는 진입(buy/short)만 이 시각에 만료시키고 청산(sell/cover)은
     # ack 될 때까지 pending 으로 둔다 — 실행기 쪽에서는 청산의 expires_ms 를 만료 근거로 쓰면 안 된다.
-    return {"id": c.id, "seq": c.seq, "action": c.action, "notional_frac": c.notional_frac, "qty_frac": c.qty_frac,
+    view = {"id": c.id, "seq": c.seq, "action": c.action, "notional_frac": c.notional_frac, "qty_frac": c.qty_frac,
             "signal_price": c.signal_price, "reason": c.reason, "expires_ms": c.expires_ms}
+    if c.order_type:
+        # 지정가 IOC(체결 기준 장부 세션의 익절 · 물타기) — 정책 세션은 레벨 21 실행기로만 생기니 받는 쪽도 레벨 21+.
+        view.update(order_type=c.order_type, limit_price=c.limit_price)
+    return view
 
 
 def _command_event(cmd: RunnerCommand, event_name: str, kind: str, severity: str,

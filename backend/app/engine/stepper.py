@@ -41,6 +41,10 @@ class Fill:
     qty_before: float = 0.0
     # 체결 기준 장부(fill_ledger_v1) 세션만: 서버 전략이 이 주문에 매긴 번호("o17"). 명령 행에 실려 체결 보고를 잇는다.
     order_ref: str = ""
+    # 체결 기준 장부만: 지정가형 가격선(익절 · 물타기)은 "limit_ioc" — limit_price 보다 불리하게 체결하지 않는다.
+    # 빈 값이면 시장가(첫 매수 · 손절 · 강제 정리, 그리고 정책이 꺼진 모든 sim).
+    order_type: str = ""
+    limit_price: float = 0.0
 
 
 EXIT_SIDES = frozenset({"sell", "cover"})

@@ -39,6 +39,8 @@ class Fill:
     # 청산 비율(qty / qty_before)을 낼 때 쓴다. 장부가 이미 바뀐 뒤 _fill 이 불리므로 되계산한다.
     reason: str = ""
     qty_before: float = 0.0
+    # 체결 기준 장부(fill_ledger_v1) 세션만: 서버 전략이 이 주문에 매긴 번호("o17"). 명령 행에 실려 체결 보고를 잇는다.
+    order_ref: str = ""
 
 
 EXIT_SIDES = frozenset({"sell", "cover"})

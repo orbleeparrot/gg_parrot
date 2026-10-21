@@ -522,16 +522,17 @@ def _persist_fill(live: _Live, fill: Fill, state_json: str, rollback_json: str =
 
 # --- Fill → 명령 -----------------------------------------------------------
 def command_from_fill(fill: Fill, initial: float) -> dict:
-    """진입은 초기자본 대비 금액 비율, 청산은 직전 보유 수량 대비 비율(모르면 전량)."""
+    """진입은 초기자본 대비 금액 비율, 청산은 직전 보유 수량 대비 비율(모르면 전량). 주문 번호는 체결 기준 장부 세션만."""
+    ref = getattr(fill, "order_ref", "") or ""
     if fill.side in EXIT_SIDES:
         frac = 1.0 if fill.qty_before <= 0 else min(1.0, fill.qty / fill.qty_before)
         if frac >= 0.999:
             frac = 1.0
         return {"action": fill.side, "notional_frac": 0.0, "qty_frac": float(frac),
-                "signal_price": float(fill.price), "reason": fill.reason or "청산"}
+                "signal_price": float(fill.price), "reason": fill.reason or "청산", "order_ref": ref}
     notional = fill.qty * fill.price
     return {"action": fill.side, "notional_frac": float(notional / initial) if initial > 0 else 0.0, "qty_frac": 0.0,
-            "signal_price": float(fill.price), "reason": fill.reason or "진입"}
+            "signal_price": float(fill.price), "reason": fill.reason or "진입", "order_ref": ref}
 
 
 def upsert_command(db, row: RunSession, cmd: dict, now_ms: int, *, rollback_state: str = "") -> tuple[RunnerCommand, bool]:
@@ -539,12 +540,15 @@ def upsert_command(db, row: RunSession, cmd: dict, now_ms: int, *, rollback_stat
 
     직전 명령이 같은 action·signal_price 이고 COMMAND_DEDUPE_SECONDS 안에 만들어졌으며 아직 살아 있으면(pending/acked)
     같은 신호의 중복으로 보고 그 행을 그대로 돌려준다(롤링 배포 겹침 대비). failed/expired 는 다시 넣는다.
+    체결 기준 장부 세션은 주문 번호까지 같아야 중복이다 — 물타기 잔예산 재매수는 같은 가격선에서 60초 안에도 나온다.
     """
+    ref = str(cmd.get("order_ref") or "")[:32]
     last = db.exec(select(RunnerCommand).where(RunnerCommand.session_id == row.id).order_by(RunnerCommand.seq.desc())).first()
     if (
         last is not None
         and last.action == cmd["action"]
         and float(last.signal_price) == float(cmd["signal_price"])
+        and (last.order_ref or "") == ref
         and last.status in ("pending", "acked")
         and 0 <= now_ms - int(last.created_ms) <= int(COMMAND_DEDUPE_SECONDS * 1000)
     ):
@@ -555,7 +559,7 @@ def upsert_command(db, row: RunSession, cmd: dict, now_ms: int, *, rollback_stat
                          notional_frac=cmd["notional_frac"], qty_frac=cmd["qty_frac"], signal_price=cmd["signal_price"],
                          reason=str(cmd["reason"])[:200], status="pending", created_at=_now_iso(), created_ms=now_ms,
                          expires_ms=now_ms + int(COMMAND_TTL_SECONDS * 1000),
-                         rollback_state=rollback_state if cmd["action"] in ENTRY_SIDES else "")
+                         rollback_state=rollback_state if cmd["action"] in ENTRY_SIDES else "", order_ref=ref)
     db.add(item)
     db.flush()
     return item, True

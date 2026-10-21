@@ -126,8 +126,30 @@ class StrategyDriver:
 
     # -- 체결 기준 장부 -----------------------------------------------------
     def enable_fill_ledger(self) -> None:
-        """장부를 실행기가 보고한 실제 체결로 확정한다(세션 exec_policy = fill_ledger_v1)."""
+        """장부를 실행기가 보고한 실제 체결로 확정한다(세션 exec_policy = fill_ledger_v1). 지원하지 않는 sim 이면 ValueError."""
+        if self.is_portfolio():
+            raise ValueError("fill ledger is for a single-symbol session")
+        enable = getattr(_inner_sim(self.legs[0].sim), "enable_fill_ledger", None)
+        if enable is None:
+            raise ValueError("fill ledger is not available for this sim")
+        enable()
         self.fill_ledger = True
+
+    def fold(self, fills=(), resolutions=()) -> dict:
+        """실행기가 보고한 체결 · 끝난 주문을 장부에 접는다(runner_engine 이 체결 기록표에서 읽어 넘긴다).
+
+        반환: ``applied``(접은 체결 키) · ``resolved``(정리한 주문 번호) · ``events``(사람이 읽을 사건).
+        자산은 마지막 시세로 다시 잰다 — 다음 틱 전에 저장되는 state_json 이 고친 장부를 싣게.
+        """
+        if not self.fill_ledger:
+            raise RuntimeError("fill ledger is off")
+        leg = self.legs[0]
+        result = leg.sim.fold(list(fills), list(resolutions))
+        if leg.last_price > 0:
+            leg.equity = leg.sim.equity(leg.last_price)
+            leg.ret = (leg.equity - leg.initial) / leg.initial * 100.0
+            self.aggregate()
+        return result
 
     # -- 체결 직전 상태 -----------------------------------------------------
     def enable_fill_snapshots(self) -> None:

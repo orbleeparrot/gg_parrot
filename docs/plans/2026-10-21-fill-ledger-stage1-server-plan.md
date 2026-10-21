@@ -64,8 +64,8 @@ ack 에 `orders` — 이 명령으로 낸 주문마다 하나(보통 0~1개):
 
 | 파일 | 새/고침 | 맡는 일 |
 |---|---|---|
-| `backend/app/engine/fill_ledger.py` | 새 | 장부 자료(주문 번호 · 미결 주문 · 롯 번호 · 먼지 · 보류 봉 · 접은 키 · epoch)와 장부 바꾸기(진입 체결로 고치기 · 청산 체결만큼 줄이기). DB 를 모른다 |
-| `backend/app/engine/candles.py` | 고침 | CandleSim: 정책 켜기 · 청산 대기 · 판단 보류 · 포지션 끝 훅 `_after_close` · 먼지 포함 자산. MartingaleSim: 차수 잔예산 · 실제 최초 매수가. LiveCandleSim: 접기 위임 |
+| `backend/app/engine/fill_ledger.py` | 새 | 장부 자료(주문 번호 · 미결 주문 · 접은 키 · 먼지 · 보류 봉 · epoch · 체크포인트 칸)와 체결 보고 한 건의 계산(보유 증가 · 현금 유출 · 수수료). DB 를 모른다 |
+| `backend/app/engine/candles.py` | 고침 | 장부를 바꾸는 일은 기존 장부 메서드(`_open_long` · `_close_all`) 옆에: CandleSim 정책 켜기 · `fold` · 진입 체결로 고치기 · 청산 대기 · 체결만큼 줄이기 · 판단 보류 · 포지션 끝 훅 `_after_close` · 먼지 포함 자산. MartingaleSim: 차수 잔예산 · 실제 최초 매수가. LiveCandleSim: 접기 위임 |
 | `backend/app/engine/stepper.py` | 고침 | `Fill.order_ref`(기본 "") |
 | `backend/app/engine/driver.py` | 고침 | `enable_fill_ledger()` · `fold(fills, resolutions)` |
 | `backend/app/runner_fills.py` | 새 | 체결 기록표 읽기 · 쓰기: ack · 로컬 체결 넣기(한 번만) · 명령 누적 체결 · 접을 행 읽기 · 접은 결과 저장 |

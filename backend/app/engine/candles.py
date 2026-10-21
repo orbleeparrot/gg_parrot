@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Deque, List, Optional
 
+from .fill_ledger import Ledger, buy_numbers
 from .leverage import liquidation_price
 from .schema import Macro, PositionSide, RuleType
 from .stepper import Fill, _fill_meta, buy_fill, sell_fill
@@ -134,6 +135,7 @@ class _Lot:
     qty: float
     fill: float  # entry fill price (already slippage-adjusted)
     margin: float  # equity committed to this lot (notional / leverage; == notional at 1x)
+    ref: str = ""  # 체결 기준 장부 세션만: 이 롯을 만든 주문 번호 — 체결 보고가 그 롯을 실제 값으로 바꾼다
 
 
 class CandleSim:
@@ -191,6 +193,117 @@ class CandleSim:
         # 묶음 한도 — 묶음을 조립하는 쪽(백테스트 루프 · paper.start_session)이 밖에서 꽂는다.
         # 심은 자기가 묶음의 일부인지 모른다.
         self.bundle_gate = None
+        # 체결 기준 장부 — 실행기 정책 세션만 켠다(enable_fill_ledger). None 이면 지금 동작 그대로(백테스트 · 모의).
+        self.ledger: Optional[Ledger] = None
+
+    # -- 체결 기준 장부(fill_ledger_v1) ----------------------------------------
+    # 신호 순간에는 가상 체결로 장부를 바꾸고(진입 · 현금 예약), 실행기가 보고한 실제 체결로 그 주문의 몫을 고친다.
+    # 1단계는 롱 · 현물 · 레버리지 1 의 마틴게일만 — 다른 규칙은 포지션 끝 처리 · 전략 상태를 하나씩 확인한 뒤 연다.
+    supports_fill_ledger = False
+
+    def enable_fill_ledger(self) -> None:
+        if not self.supports_fill_ledger:
+            raise ValueError(f"fill ledger is not available for rule {self.rule_type}")
+        if self.side is not PositionSide.LONG or self.leverage != 1:
+            raise ValueError("fill ledger needs a long spot book at leverage 1")
+        self.ledger = Ledger()
+
+    def fold(self, fills=(), resolutions=()) -> dict:
+        """실행기가 보고한 체결 · 끝난 주문을 장부에 접는다. 같은 체결 키는 한 번만.
+
+        체결을 먼저(보고 순서 그대로), 끝난 주문을 나중에 — 한 주문의 체결은 그 주문을 정리하기 전에 장부에 있어야 한다.
+        돌려주는 값: 접은 키 · 정리한 주문 번호 · 사람이 읽을 사건(``events``).
+        """
+        ledger = self.ledger
+        if ledger is None:
+            raise RuntimeError("fill ledger is off")
+        applied, resolved, events = [], [], []
+        for report in fills:
+            key = str(report.get("key") or "")
+            if not key or ledger.seen(key):
+                continue
+            ledger.remember(key)
+            applied.append(key)
+            side = str(report.get("side") or "")
+            if side == "buy":
+                event = self._fold_buy(str(report.get("ref") or ""), report)
+            else:
+                raise NotImplementedError(f"fill side {side!r}")
+            if event:
+                events.append(event)
+        for item in resolutions:
+            ref = str(item.get("ref") or "")
+            if ref not in ledger.orders:
+                continue
+            event = self._resolve_order(ref, str(item.get("status") or ""), item.get("hold_until_ms"))
+            resolved.append(ref)
+            if event:
+                events.append(event)
+        return {"applied": applied, "resolved": resolved, "events": events}
+
+    def _fold_buy(self, ref: str, report: dict) -> Optional[dict]:
+        """매수 체결 한 건 — 그 주문의 가상 롯을 실제 값으로 바꾸거나(첫 체결), 같은 롯에 더한다(뒤 체결)."""
+        numbers = buy_numbers(report)
+        if numbers is None:
+            return None
+        order = self.ledger.orders.get(ref)
+        avg_before = self.avg_entry()
+        lot = next((lot for lot in self.lots if ref and lot.ref == ref), None)
+        if order is not None and lot is not None and not order.get("actual"):
+            self.cash += float(order["margin"]) + float(order["fee"])  # 신호 때 잡아 둔 가상 금액을 풀고
+            lot.qty, lot.fill, lot.margin = numbers.qty, numbers.price, numbers.qty * numbers.price
+            order["actual"] = True
+        elif lot is not None:
+            total = lot.qty + numbers.qty
+            lot.fill = (lot.qty * lot.fill + numbers.qty * numbers.price) / total
+            lot.qty = total
+            lot.margin += numbers.qty * numbers.price
+        else:
+            raise NotImplementedError("late buy fill")
+        self.cash -= numbers.cash_out
+        if order is not None:
+            order["filled_qty"] = float(order.get("filled_qty") or 0.0) + numbers.qty
+            order["spent"] = float(order.get("spent") or 0.0) + numbers.cash_out
+            if order.get("kind") == "base":
+                self._on_base_filled(lot.fill)
+        return {"kind": "entry_filled", "ref": ref, "virtual_price": order["price"] if order else None,
+                "price": numbers.price, "qty": numbers.qty, "fee": numbers.fee,
+                "avg_before": avg_before, "avg_after": self.avg_entry()}
+
+    def _resolve_order(self, ref: str, status: str, hold_until_ms) -> Optional[dict]:
+        """끝난 주문 하나를 정리한다(명령의 끝 상태 acked · failed · expired · cancelled)."""
+        order = self.ledger.orders[ref]
+        if order.get("side") == "buy" and order.get("actual"):
+            self.ledger.close_order(ref)
+            return None
+        raise NotImplementedError(f"resolve {order.get('side')} {status}")
+
+    def _on_base_filled(self, price: float) -> None:
+        """첫 매수가 실제로 체결된 값 — 기준가를 쓰는 규칙(H 물타기선)이 덮어쓴다."""
+
+    def _register_entry(self, lot: "_Lot", fill: Fill, *, margin: float, fee: float, ts: datetime,
+                        kind: str, tier: int, line: float) -> None:
+        ref = self.ledger.next_ref()
+        lot.ref = ref
+        fill.order_ref = ref
+        self.ledger.orders[ref] = {
+            "side": "buy", "kind": kind, "tier": int(tier), "line": float(line), "epoch": self.ledger.epoch,
+            "qty": float(lot.qty), "price": float(lot.fill), "margin": float(margin), "fee": float(fee),
+            "signal_ms": int(ts.timestamp() * 1000), "actual": False, "filled_qty": 0.0, "spent": 0.0,
+        }
+
+    def _ledger_state(self) -> dict:
+        return {"ledger": self.ledger.to_state(self.lots)} if self.ledger is not None else {}
+
+    def _restore_ledger(self, state: Optional[dict]) -> None:
+        """체크포인트의 장부 칸으로 롯을 번호째 다시 깐다 — restore() 가 합친 평단 하나를 바꿔 놓는다(현금은 같다)."""
+        if self.ledger is None or not state:
+            return
+        lots = self.ledger.load(state.get("ledger"))
+        if lots is None:
+            return
+        self.lots = [_Lot(qty=float(row["qty"]), fill=float(row["fill"]), margin=float(row["margin"]),
+                          ref=str(row.get("ref") or "")) for row in lots]
 
     # -- position helpers (long book) ------------------------------------
     def total_qty(self) -> float:
@@ -352,7 +465,9 @@ class CandleSim:
             self._entry_marks.append((fill, mark))
         return fill
 
-    def _open_long(self, margin: float, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
+    def _open_long(self, margin: float, close: float, ts: datetime, mark: float, *, reason: str = "진입",
+                   kind: str = "entry", tier: int = 0, line: float = 0.0) -> Optional[Fill]:
+        """``kind`` · ``tier`` · ``line`` 은 체결 기준 장부만 쓴다(기본 매수 base · 물타기 so 와 그 차수 · 가격선)."""
         margin = min(margin, self.cash)
         if margin <= 1e-9:
             return None
@@ -361,10 +476,15 @@ class CandleSim:
         f = buy_fill(close, self.slip)
         qty = notional / f
         self.cash -= margin + notional * self.comm / 100.0
-        self.lots.append(_Lot(qty=qty, fill=f, margin=margin))
+        lot = _Lot(qty=qty, fill=f, margin=margin)
+        self.lots.append(lot)
         if self._entry_time is None:
             self._entry_time = ts
-        return self._remember_entry(self._fill("buy", f, qty, mark, reason), before)
+        fill = self._fill("buy", f, qty, mark, reason)
+        if self.ledger is not None:
+            self._register_entry(lot, fill, margin=margin, fee=notional * self.comm / 100.0, ts=ts,
+                                 kind=kind, tier=tier, line=line)
+        return self._remember_entry(fill, before)
 
     def _open_short(self, close: float, ts: datetime, mark: float, *, reason: str = "진입") -> Optional[Fill]:
         margin = self.invest_ratio * self.cash
@@ -783,6 +903,8 @@ class GridSim(CandleSim):
 
 # --- H: martingale / safety orders (long, multi-order) ------------------
 class MartingaleSim(CandleSim):
+    supports_fill_ledger = True
+
     def __init__(self, macro, initial_capital=None):
         super().__init__(macro, initial_capital)
         self.base = float(self.p["base_order_size"])
@@ -801,7 +923,7 @@ class MartingaleSim(CandleSim):
 
     # 봉에서 다시 못 구한다 — 잊으면 추가매수 차수가 0 으로 돌아가 이미 채운 단계를 다시 산다.
     def strategy_state(self) -> dict:
-        return {"so_done": int(self._so_done), "base_price": float(self._base_price)}
+        return {"so_done": int(self._so_done), "base_price": float(self._base_price), **self._ledger_state()}
 
     def restore_strategy(self, state: Optional[dict]) -> None:
         if not state:
@@ -810,6 +932,13 @@ class MartingaleSim(CandleSim):
             self._so_done = int(state["so_done"])
         if state.get("base_price") is not None:
             self._base_price = float(state["base_price"])
+
+    def restore_strategy_lots(self, state: Optional[dict]) -> None:
+        self._restore_ledger(state)
+
+    def _on_base_filled(self, price: float) -> None:
+        # 물타기선은 최초 매수가 기준 — 그 값을 가상 체결가에서 실제 체결가로(설계 §3: 출처만 바뀐다).
+        self._base_price = float(price)
 
     def _next_so_price(self) -> float:
         # cumulative deviation with step scaling
@@ -849,7 +978,7 @@ class MartingaleSim(CandleSim):
                 so_px = self._next_so_price()
                 if l <= so_px and self.cash > 1e-9:
                     size = self.so_size * (self.vol_scale ** self._so_done)
-                    f = self._open_long(size, so_px, ts, c)
+                    f = self._open_long(size, so_px, ts, c, kind="so", tier=self._so_done + 1, line=so_px)
                     if f:
                         fills.append(f)
                     self._so_done += 1
@@ -859,7 +988,7 @@ class MartingaleSim(CandleSim):
         # flat -> base order
         if self._entry_blocked(ts):
             return
-        f = self._open_long(self.base, c, ts, c)
+        f = self._open_long(self.base, c, ts, c, kind="base")
         if f:
             fills.append(f)
             self._base_price = self.avg_entry()
@@ -1380,6 +1509,10 @@ class LiveCandleSim:
         self._queue_marks.clear()
         if self.inner._entry_marks is not None:
             self.inner._entry_marks.clear()
+
+    def fold(self, fills=(), resolutions=()) -> dict:
+        """체결 기준 장부 — 실행기가 보고한 체결 · 끝난 주문을 안쪽 sim 장부에 접는다."""
+        return self.inner.fold(fills, resolutions)
 
     def warmup(self, candles) -> None:
         # 웜업의 가상 체결은 버린다 — 진입 기록도 끈 채로 돈다(그리드 칸이 많으면 수백 봉 동안 버릴 기록이 쌓여 루프를 막는다).

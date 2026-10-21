@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ChatsCircleIcon } from "@phosphor-icons/react/dist/csr/ChatsCircle";
 import { CurrencyDollarIcon } from "@phosphor-icons/react/dist/csr/CurrencyDollar";
@@ -11,10 +11,12 @@ import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import CoinIcon from "../../components/CoinIcon.jsx";
 import InfoTooltip from "../../components/InfoTooltip.jsx";
 import ScrollThumb from "./ScrollThumb.jsx";
+// 직접 만들기와 같은 차트 — 코인을 고를 때만 받는다(코인동향 첫 화면 무게를 늘리지 않게).
+const CandleChart = lazy(() => import("../../components/CandleChart.jsx"));
 import InfiniteSentinel, { useChunks } from "./InfiniteSentinel.jsx";
 import {
   EXCHANGE_META, changeTone, coinName, formatPct, formatPrice, formatTurnover, kstClock, neighborsByTurnover,
-  premiumPct, raceRows, rangePosition, searchCoins, sortCoins, turnoverRank,
+  premiumPct, raceRows, searchCoins, sortCoins, turnoverRank,
 } from "./trendsFormat.js";
 
 const SORTS = [
@@ -278,7 +280,6 @@ function CoinView({ base, exchange, coins, lists, usdkrw, mentions, onSelect }) 
   const rank = turnoverRank(coins, base);
   const binance = lists.binance?.find((row) => row.base === base);
   const premium = meta.quote === "KRW" ? premiumPct(coin.last_price, binance?.last_price, usdkrw) : null;
-  const at = rangePosition(coin.last_price, coin.low, coin.high);
   const near = neighborsByTurnover(coins, base, 5);
   const topTurnover = sortCoins(coins, "turnover")[0]?.quote_volume || 0;
   return (
@@ -295,14 +296,12 @@ function CoinView({ base, exchange, coins, lists, usdkrw, mentions, onSelect }) 
         <small>{meta.quote}</small>
         <b className={"num " + toneClass(coin.change_pct)}>{formatPct(coin.change_pct)}</b>
       </p>
-      {at != null ? (
-        <>
-          <div className="ct-range"><span className="num">{formatPrice(coin.low, meta.quote)}</span>
-            <span className="ct-range-track" aria-hidden="true"><i style={{ "--p": at }} /></span>
-            <span className="num">{formatPrice(coin.high, meta.quote)}</span></div>
-          <p className="ct-range-cap t-caption"><span>{meta.rangeLabel} 저가</span><span>{meta.rangeLabel} 고가</span></p>
-        </>
-      ) : null}
+      {/* 저가–고가 게이지 대신 직접 만들기와 같은 봉 차트(중간 높이, 2026-10-21 요청). 이름 · 가격은 위에 이미 있다. */}
+      <div className="ct-coin-chart">
+        <Suspense fallback={<div className="ct-coin-chart-wait t-small" role="status">차트 불러오는 중…</div>}>
+          <CandleChart key={`${exchange}:${coin.symbol}`} symbol={coin.symbol} exchange={exchange} variant="embed" defaultInterval="1h" />
+        </Suspense>
+      </div>
       <dl className="ct-kv">
         <div><dt>24시간 거래대금</dt><dd><span className="num">{formatTurnover(coin.quote_volume, meta.quote)}</span>{rank ? <small>{meta.name} <span className="num">{rank}</span>위</small> : null}</dd></div>
         {premium != null ? (

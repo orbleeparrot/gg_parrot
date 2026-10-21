@@ -205,6 +205,15 @@
 .ct-range-track { position: relative; height: 4px; border-radius: 2px; background: rgb(var(--c-slate-200)); }
 .ct-range-track i { position: absolute; top: 50%; left: calc(var(--p, .5) * 100%); width: 12px; height: 12px; margin: -6px 0 0 -6px; border-radius: 999px; background: rgb(var(--c-slate-900)); box-shadow: 0 0 0 3px rgb(var(--c-slate-50)); }
 .ct-range-cap { display: flex; justify-content: space-between; margin-top: 4px; color: rgb(var(--c-slate-500)); }
+.ct-coin-chart { height: 320px; margin-top: 16px; }
+.ct-coin-chart-wait { height: 100%; display: grid; place-items: center; color: rgb(var(--c-slate-500)); }
+/* 휴대폰(순위 칸 470px 미만) — 봉 간격 6칸이 폭을 나눠 쓰고 확대/축소 단추는 뺀다(손가락으로 벌려 확대). 한 줄에 다 안 들어가 '4시간'이 잘렸다. */
+@container ct-rank (max-width: 469px) {
+  .ct-coin-chart { height: 260px; }
+  .ct-coin-chart .candle-chart.is-embed .candle-chart-controls { display: none; }
+  .ct-coin-chart .candle-chart.is-embed .candle-chart-pick { flex: 1 1 auto; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .ct-coin-chart .candle-chart.is-embed .candle-chart-pick .seg-item { padding: 0; justify-content: center; }
+}
 .ct-kv { margin: 14px 0 0; }
 .ct-kv > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid rgb(var(--c-slate-200)); }
 .ct-kv dt { color: rgb(var(--c-slate-700)); font-size: 15px; font-weight: 500; white-space: nowrap; }

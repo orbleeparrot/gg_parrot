@@ -27,7 +27,7 @@ def clean(monkeypatch):
         db.exec(delete(notices.ExchangeNotice))
         db.exec(delete(notices.ExchangeNoticeState))
         db.exec(delete(feed_index.FeedAsset).where(feed_index.FeedAsset.feed == notices.FEED))
-        db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope == notices.SCOPE))
+        db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope.in_([notices.SCOPE, notices.UPBIT_SCOPE])))
         db.commit()
     # 읽기는 '최근 30일' 을 지금 시각으로 자르므로 저장 시각을 지금 근처로 맞춘다.
     monkeypatch.setattr(notices, "RETENTION_SECONDS", 10 * 365 * 86400)
@@ -142,3 +142,90 @@ def test_trends_route_serves_notices_for_bithumb_and_marks_upbit_not_connected(m
     assert upbit["notices"]["items"] == [] and upbit["notices"]["collection"]["status"] == "not_configured"
     assert client.get("/api/trends?region=kr&sections=rumors").status_code == 422
     assert json.dumps(data, ensure_ascii=False).count("feed.bithumb.com/notice/") == 2 and data["notices"]["total"] == 2
+
+
+# 업비트 공식 공지 WebSocket 문서의 수신 메시지 모양.
+UPBIT_MESSAGE = {"type": "announcement", "event_type": "CREATED", "uuid": "562593104",
+                 "title": "[거래] 콘크리트(CT) 신규 거래지원 안내 (KRW, BTC, USDT 마켓)", "category": "trade",
+                 "url": "https://www.upbit.com/service_center/notice?id=562593104&view=share",
+                 "first_listed_at": "2026-10-19T16:40:00+09:00", "listed_at": "2026-10-19T16:40:00+09:00",
+                 "timestamp": 1792395600000, "stream_type": "REALTIME"}
+
+
+def test_upbit_message_is_parsed_like_bithumb_with_titles_deciding_risk_categories():
+    item = notices.parse_upbit(UPBIT_MESSAGE, now_ms=NOW)
+    assert item["id"] == "upbit:562593104" and item["title"].startswith("콘크리트(CT)")
+    assert item["url"] == "https://upbit.com/service_center/notice?id=562593104"
+    assert item["asset_symbols"] == ["CT"] and item["categories"] == ["마켓 추가"]
+    assert item["published"] == "2026-10-19T07:40:00+00:00"
+    assert notices.upbit_categories("trade", "만트라(OM) 거래 유의 종목 지정 안내") == ["거래유의"]
+    assert notices.upbit_categories("trade", "템코(TEMCO) 거래지원 종료 안내") == ["거래지원종료"]
+    assert notices.upbit_categories("wallet", "아이오텍스(IOTX) 입출금 일시 중단 안내") == ["입출금"]
+    assert notices.parse_upbit({"status": "UP"}, now_ms=NOW) is None
+    assert notices.parse_upbit(dict(UPBIT_MESSAGE, url="https://evil.example/notice?id=1"), now_ms=NOW) is None
+    with pytest.raises(ValueError):
+        notices.parse_upbit({"error": {"name": "INVALID_PARAM"}}, now_ms=NOW)
+
+
+class FakeSocket:
+    def __init__(self, messages, stop):
+        self.messages, self.stop, self.sent = list(messages), stop, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def send(self, data):
+        self.sent.append(json.loads(data))
+
+    def recv(self, timeout=None):
+        if not self.messages:
+            self.stop.set()
+            raise TimeoutError
+        return json.dumps(self.messages.pop(0))
+
+
+def test_upbit_stream_needs_keys_stores_new_notices_and_releases_the_lease(monkeypatch):
+    stop = __import__("threading").Event()
+    monkeypatch.delenv("UPBIT_ACCESS_KEY", raising=False)
+    assert notices.run_upbit_once(stop) == "not_configured"
+    assert notices.get_exchange_notices("upbit")["collection"]["status"] == "not_configured"
+    monkeypatch.setenv("UPBIT_ACCESS_KEY", "access")
+    monkeypatch.setenv("UPBIT_SECRET_KEY", "secret")
+    # 키는 있어도 아직 받은 공지가 없으면 탭을 두지 않는다.
+    assert notices.get_exchange_notices("upbit")["available"] is False
+    sockets, tokens = [], []
+
+    def connect(token):
+        tokens.append(token)
+        sockets.append(FakeSocket([{"status": "UP"}, UPBIT_MESSAGE], stop))
+        return sockets[-1]
+    assert notices.run_upbit_once(stop, connect=connect) == "closed"
+    assert sockets[0].sent[0][1] == {"type": "announcement", "include_body": False}  # 구독 요청은 배열 하나
+    assert __import__("jwt").decode(tokens[0], "secret", algorithms=["HS512"])["access_key"] == "access"
+    page = notices.get_exchange_notices("upbit")
+    assert page["available"] is True and page["collection"]["status"] == "ready"
+    assert [(item["id"], item["source"]) for item in page["items"]] == [("upbit:562593104", "업비트 공지")]
+    assert notices.get_exchange_notices("bithumb")["items"] == []  # 거래소별로 따로
+    with database.get_session() as db:
+        lease = db.get(public_news.PublicNewsLease, notices.UPBIT_SCOPE)
+    assert lease.token == ""
+
+
+def test_upbit_ip_rejection_is_recorded_by_name_and_backs_off(monkeypatch):
+    monkeypatch.setenv("UPBIT_ACCESS_KEY", "access")
+    monkeypatch.setenv("UPBIT_SECRET_KEY", "secret")
+
+    class Rejected(Exception):
+        response = type("R", (), {"body": b'{"error":{"name":"unauthorized","message":"{\\"error\\":{\\"name\\":\\"V1::Exceptions::NoAuthorizationIp\\"}}"}}'})()
+
+    def connect(token):
+        raise Rejected()
+    assert notices.run_upbit_once(__import__("threading").Event(), connect=connect) == "error"
+    with database.get_session() as db:
+        state = db.get(notices.ExchangeNoticeState, "upbit")
+        lease = db.get(public_news.PublicNewsLease, notices.UPBIT_SCOPE)
+    assert (state.status, state.error) == ("error", "NoAuthorizationIp")
+    assert lease.next_run_ms >= int(time.time() * 1000) + 800_000  # 허용 IP 는 사람이 고쳐야 하니 15분 간격

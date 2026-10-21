@@ -588,6 +588,14 @@
 - 공식 거래소 공지는 이번 뉴스/커뮤니티 기능과 구분해 `not_configured`로 표시한다. 업비트 공식 공지 socket은 private 인증이 필요하므로 사용자 키를 자동으로 사용하지 않으며, 아직 연결하지 않은 공지를 수집 완료로 표시하지 않는다. 전체 UI 적용·운영 배포·원격 push는 이번 요청에 포함하지 않는다. 첫 전체 검사에서 확인된 기존 AI 호출 목록 계약 누락과 기능 전용 브랜치의 UI 없는 테스트 참조를 보완했다.
 - `verification-before-completion` 검증: 백엔드 전체 4,079 passed/5 skipped/기존 Starlette 경고 2개. 전체 검사 실행 중 반영한 최신 main 두 파일과 정적 소스 목록 API는 최종 통합 86개로 별도 재검증해 모두 통과했다. 저장소 diff/check 통과, 프론트/실행기/Render/디자인 변경 0개다. 국내 뉴스 4곳의 실제 공개 수집·커뮤니티 실제 HTML·PostgreSQL JSONB 공개 projection/공유 캐시·ORM BIGINT 왕복도 확인했다. 마이그레이션/RLS 검증용 PostgreSQL 컨테이너와 임시 HTML 3개는 제거했으며 다른 세션/원본 첨부/기존 미리보기는 보존했다. 운영 DB·회원·주문·실제 AI 호출·키 변경 없이 검증했고, 기능 코드/테스트/새 migration/이 단일 작업 기록만 새 브랜치에 로컬 커밋으로 보존한다.
 
+## 2026-10-21 · 업비트 공지 — 공식 Private WebSocket 연결
+
+- 사용자가 운영용 업비트 키를 발급해 `UPBIT_ACCESS_KEY` · `UPBIT_SECRET_KEY` 로 넣음(발급 화면 upbit.com/mypage/open_api_management — 권한은 최소 하나 필수라 '자산조회'만, 허용 IP = Render Outbound). 사무실 서버(211.206.125.193)에서 접속하면 401 `V1::Exceptions::NoAuthorizationIp` — 키는 유효하고 허용 IP 가 Render 쪽이라는 뜻, 운영에서만 연결된다.
+- 서버: `exchange_notices.run_upbit_once` — 키가 있을 때만, 임대(`EXCHANGE_NOTICES_UPBIT`)를 잡은 한 프로세스가 `wss://api.upbit.com/websocket/v1/private` 에 HS512 JWT 로 붙어 `announcement` 구독, 새 공지마다 저장(빗썸과 같은 표 · 티커 연결). PING 프레임 20초(업비트 유휴 120초 끊김), 60초마다 임대 갱신, 끊기면 5초 · 실패가 이어지면 최대 15분, 허용 IP 거절은 상태에 이름만 남기고 15분 간격. 분류는 업비트 category + 제목(유의 → 거래유의 · 거래지원 종료 · 신규 거래지원 → 마켓 추가).
+- 공식 스트림은 연결 뒤 새 공지만 주므로 지난 공지는 없다(웹 내부 api-manager 는 쓰지 않음). 그래서 업비트 탭은 서버 `available`(받은 코인 공지가 생긴 뒤)일 때만 — 빈 탭을 먼저 보이지 않게. 탭 이름은 거래소를 따라 '빗썸 공지' · '업비트 공지'.
+- render.yaml 웹 서비스에 두 키를 `sync: false` 로 선언(값은 Render 에 따로). requirements 에 websockets 명시.
+- 검증: 백엔드 4,157 passed / 5 skipped(새 시험 13 — 업비트 메시지 · 분류 · 가짜 연결로 저장 · 임대 반납 · IP 거절 기록). 실제 업비트에 사무실에서 한 번 붙여 NoAuthorizationIp 가 상태에 기록되는 것 확인(임시 SQLite). node 980 · lint · build · coinTrendsBrowser 12가지.
+
 ## 2026-10-20 · 거래소 공식 공지 — 빗썸 공지 탭(시안 B)
 
 - 사용자 문제: 국내 원화 코인은 대부분 잡코인이라 뉴스가 없다. 운영 측정(7일): 업비트 296개 중 국내 뉴스가 붙은 코인 74개(25%), 빗썸 487개 중 106개(21%) — 매체 4곳의 최신 기사 목록에서 이름을 찾는 방식이라 잡코인 기사는 목록에 들어오지 않는다.

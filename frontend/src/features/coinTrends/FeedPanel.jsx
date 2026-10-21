@@ -49,13 +49,13 @@ function PostItem({ item, coinsByBase, onCoin, now }) {
 
 const CHECK_LINE = {
   kr: { community: "디시인사이드 · 토큰포스트 · 코인판을 1분마다 확인해요.", news: "블록미디어 · 블루밍비트 · 디지털애셋 · 토큰포스트를 5분마다 확인해요.",
-        notices: "빗썸 공식 공지를 1분마다 확인해요." },
+        notices: "거래소 공식 공지를 모아요." },
   global: { community: "Binance Square 글을 모아 보여 줘요.", news: "CoinDesk · Decrypt · CryptoSlate를 5분마다 확인해요." },
 };
 
-// 소식 칸 — 커뮤니티/뉴스(/빗썸 공지) 탭, 출처 고르기, 안쪽 스크롤에서 다음 쪽을 서버에 이어 받는다.
-// 공지 탭은 feeds.notices 가 있을 때만(지금은 빗썸) — 코인 티커가 적힌 공지만 온다(2026-10-20 시안 B).
-export default function FeedPanel({ region, feeds, tab: wanted, onTab, source, onSource, coin, keyword, coinsByBase, onCoin, onClearCoin }) {
+// 소식 칸 — 커뮤니티/뉴스(/거래소 공지) 탭, 출처 고르기, 안쪽 스크롤에서 다음 쪽을 서버에 이어 받는다.
+// 공지 탭은 feeds.notices 가 있을 때만(서버 available — 빗썸은 늘, 업비트는 받은 공지가 생긴 뒤) — 코인 티커가 적힌 공지만(2026-10-20 시안 B).
+export default function FeedPanel({ region, feeds, tab: wanted, onTab, source, onSource, coin, keyword, coinsByBase, onCoin, onClearCoin, exchangeName = "" }) {
   const listRef = useRef(null);
   // 공지 탭을 연 채 업비트로 바꾸면 페이지가 탭을 되돌리기 전 한 번은 목록 없는 탭이 온다 — 그때는 커뮤니티로 그린다.
   const tab = feeds[wanted] ? wanted : "community";
@@ -63,7 +63,7 @@ export default function FeedPanel({ region, feeds, tab: wanted, onTab, source, o
   const kr = region === "kr";
   // [앞말, 이름] — 세 칸이 좁으면(휴대폰) 앞말을 빼 '커뮤니티 · 뉴스 · 공지'로 줄인다(CSS .ct-tab-pre).
   const labels = { community: kr ? ["국내 ", "커뮤니티"] : ["", "Binance Square"], news: kr ? ["국내 ", "뉴스"] : ["해외 ", "뉴스"],
-    notices: ["빗썸 ", "공지"] };
+    notices: [`${exchangeName} `, "공지"] };
   const tabNames = feeds.notices ? ["community", "news", "notices"] : ["community", "news"];
   const official = tab === "notices";
   const picked = coin ? coinsByBase.get(coin) : null;

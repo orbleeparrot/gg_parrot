@@ -89,6 +89,11 @@ services:
       # 중복 제목은 Postgres 캐시를 재사용하고, 새 영문 제목은 전부 번역합니다.
       - key: OPENAI_API_KEY
         sync: false
+      # 업비트 공식 공지 WebSocket 전용 키(권한 '자산조회'만, 허용 IP = Render Outbound) — 없으면 업비트 공지 탭 없음.
+      - key: UPBIT_ACCESS_KEY
+        sync: false
+      - key: UPBIT_SECRET_KEY
+        sync: false
       - key: OPENAI_MODEL
         value: "gpt-6-luna"
       - key: OPENAI_REASONING_TOKEN_RESERVE

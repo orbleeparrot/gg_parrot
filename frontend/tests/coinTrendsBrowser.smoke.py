@@ -110,8 +110,8 @@ class Fixture:
                       "categories": ["입출금"], "published": NOW, "asset_symbols": ["TIA"], "content_type": "official", "source": "빗썸 공지"}]
             if symbol:
                 items = [item for item in items if symbol.replace("KRW-", "") in item["asset_symbols"]]
-            body["notices"] = ({"items": items, "total": len(items), "next_cursor": None, "collection": {"status": "ready"}}
-                               if exchange == "bithumb" else {"items": [], "collection": {"status": "not_configured"}})
+            body["notices"] = ({"items": items, "total": len(items), "next_cursor": None, "available": True, "collection": {"status": "ready"}}
+                               if exchange == "bithumb" else {"items": [], "available": False, "collection": {"status": "not_configured"}})
         return body
 
     def route(self, route):
@@ -293,10 +293,9 @@ def main():
                     page.locator(".ct-clear").click()
                     expect(page.locator(".ct-coin")).to_have_count(0)
                     expect(page.locator("#ct-side-title")).to_have_text("국내 소식")
-                    # 거래소 공지 탭 — 빗썸에서만 세 번째 탭(한 줄 균등), 업비트에선 탭도 요청도 없다(2026-10-20 시안 B).
+                    # 거래소 공지 탭 — 서버가 available 일 때만 세 번째 탭(한 줄 균등). 업비트는 키 · 받은 공지가 없으면 탭 없음(2026-10-20 시안 B).
                     side_tabs = page.locator(".ct-side-tabs .seg-item")
                     expect(side_tabs).to_have_count(2)
-                    assert not any("sections=notices" in call for call in fixture.calls), fixture.calls[-3:]
                     page.locator(".ct-mini .seg-item").nth(1).click()
                     expect(side_tabs).to_have_count(3)
                     row = page.evaluate("""() => { const items = [...document.querySelectorAll('.ct-side-tabs .seg-item')];

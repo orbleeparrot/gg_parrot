@@ -3,7 +3,8 @@
 빗썸: 공식 REST `GET https://api.bithumb.com/v1/notices?count=20`(키 없음, IP별 초당 1회, 최신순 최대 20개).
 이 주소는 공지 전용 서버 `feed-api.bithumb.com` 으로 302 를 보내므로 그 한 곳만 따라간다. 웹 공지 화면
 (`feed.bithumb.com/notice`)은 Cloudflare 가 막는 사람용 페이지라 읽지 않는다(2026-10-20 조사).
-업비트: 공식은 Private WebSocket(API 키 필요, 새 공지만 실시간)뿐이라 키를 받기 전에는 '연결 전'.
+업비트: 공식은 Private WebSocket `announcement`(JWT 필요, 키 권한 무관 · 허용 IP 필수, 연결 중 새 공지만 실시간 —
+지난 공지 조회 없음)뿐. 운영 키 `UPBIT_ACCESS_KEY` · `UPBIT_SECRET_KEY` 가 있을 때만 한 프로세스가 임대를 잡고 연결을 유지한다.
 
 공지 제목의 괄호 속 티커(`콘크리트(CT) 원화 마켓 추가`, `셀레스티아(TIA), 만타(MANTA) …`)로 코인을 잇는다 —
 제목에 거래소가 직접 적은 표기라 기사처럼 이름이 겹쳐 잘못 잇는 일이 적다.
@@ -16,17 +17,19 @@ import os
 import re
 import threading
 import time
+import uuid
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
+import jwt
 from sqlalchemy import BigInteger, delete, func
 from sqlmodel import Field, SQLModel, select
 
 from . import feed_index
 from .db import get_session
 from .http_runtime import get_http_client
-from .public_news import PublicNewsLease, claim_work, finish_work
+from .public_news import PublicNewsLease, claim_work, finish_work, renew_work
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +46,14 @@ _KST = timezone(timedelta(hours=9))
 # 괄호 하나에 티커 하나 — "(KRW, BTC, USDT 마켓)" 같은 마켓 목록이나 "(10/20 오전 9시~)" 는 잡히지 않는다.
 _TICKER = re.compile(r"\(([A-Z0-9]{2,15})\)")
 _NOT_COINS = frozenset({"KRW"})
+SOURCE_NAMES = {"bithumb": "빗썸 공지", "upbit": "업비트 공지"}
+
+UPBIT_SCOPE = "EXCHANGE_NOTICES_UPBIT"
+UPBIT_WS_URL = "wss://api.upbit.com/websocket/v1/private"
+_UPBIT_NOTICE_URL = re.compile(r"https://(?:www\.)?upbit\.com/service_center/notice\?id=(\d{1,15})(?:&[A-Za-z0-9_=&-]{0,60})?")
+# 업비트 공지 분류 → 빗썸과 같은 글자. 거래 공지는 제목으로 유의 · 종료 · 상장을 가른다(화면이 유의 · 종료만 붉게).
+_UPBIT_CATEGORY = {"trade": "거래", "wallet": "입출금", "maintenance": "점검", "digital_asset": "디지털 자산",
+                   "notice": "안내", "nft": "NFT", "service": "서비스+", "event": "이벤트"}
 
 _runtime_lock = threading.Lock()
 _runtime = None
@@ -106,6 +117,117 @@ def parse_bithumb(payload, *, now_ms: int) -> list[dict]:
                       "published": datetime.fromtimestamp(published_ms / 1000, timezone.utc).isoformat(),
                       "asset_symbols": notice_assets(title)})
     return items
+
+
+def upbit_categories(category: str, title: str) -> list[str]:
+    if category == "trade":
+        if "유의" in title:
+            return ["거래유의"]
+        if re.search(r"거래\s*지원\s*종료", title):
+            return ["거래지원종료"]
+        if re.search(r"신규\s*거래\s*지원|마켓\s*추가", title):
+            return ["마켓 추가"]
+    return [_UPBIT_CATEGORY.get(category, "안내")]
+
+
+def parse_upbit(message: dict, *, now_ms: int) -> dict | None:
+    """공지 WebSocket 한 건 → 저장할 모양(모양이 다르면 None). 오류 메시지는 예외로."""
+    if not isinstance(message, dict) or message.get("status") == "UP":
+        return None
+    if message.get("error"):
+        raise ValueError(str((message["error"] or {}).get("name") or "upbit error")[:60])
+    if message.get("type") != "announcement":
+        return None
+    title = re.sub(r"^\[[^\]]{1,10}\]\s*", "", " ".join(str(message.get("title") or "").split()))[:300]
+    match = _UPBIT_NOTICE_URL.fullmatch(str(message.get("url") or ""))
+    notice_id = str(message.get("uuid") or "")
+    try:
+        published = datetime.fromisoformat(str(message.get("first_listed_at") or message.get("listed_at")))
+        listed = datetime.fromisoformat(str(message.get("listed_at") or message.get("first_listed_at")))
+    except ValueError:
+        return None
+    published = published if published.tzinfo else published.replace(tzinfo=_KST)
+    listed = listed if listed.tzinfo else listed.replace(tzinfo=_KST)
+    published_ms, modified_ms = int(published.timestamp() * 1000), int(listed.timestamp() * 1000)
+    if not title or not match or not re.fullmatch(r"\d{1,15}", notice_id) or published_ms > now_ms + 86_400_000:
+        return None
+    return {"id": f"upbit:{notice_id}", "exchange": "upbit", "title": title,
+            "url": f"https://upbit.com/service_center/notice?id={match.group(1)}",
+            "categories": upbit_categories(str(message.get("category") or ""), title),
+            "published_ms": published_ms, "modified_ms": modified_ms,
+            "published": datetime.fromtimestamp(published_ms / 1000, timezone.utc).isoformat(),
+            "asset_symbols": notice_assets(title)}
+
+
+def upbit_keys() -> tuple[str, str] | None:
+    access, secret = os.environ.get("UPBIT_ACCESS_KEY", "").strip(), os.environ.get("UPBIT_SECRET_KEY", "").strip()
+    return (access, secret) if access and secret else None
+
+
+def _upbit_token(access: str, secret: str) -> str:
+    return jwt.encode({"access_key": access, "nonce": str(uuid.uuid4())}, secret, algorithm="HS512")
+
+
+def _save_state(exchange: str, *, status: str, error: str = "", success: bool = False) -> None:
+    now_ms = int(time.time() * 1000)
+    with get_session() as db:
+        state = db.get(ExchangeNoticeState, exchange) or ExchangeNoticeState(exchange=exchange)
+        state.status, state.error, state.last_attempt_ms = status, error[:120], now_ms
+        state.failures = 0 if success or status == "ready" else min(state.failures + 1, 10)
+        if success:
+            state.last_success_ms = now_ms
+        db.add(state)
+        db.commit()
+
+
+def _connect_upbit(token: str):
+    from websockets.sync.client import connect
+    # 업비트는 120초 동안 오가는 게 없으면 끊는다 — 라이브러리 PING 프레임(20초)으로 유지한다.
+    return connect(UPBIT_WS_URL, additional_headers={"Authorization": f"Bearer {token}"},
+                   open_timeout=10, ping_interval=20, ping_timeout=20, max_size=1_000_000)
+
+
+def run_upbit_once(stop: threading.Event, *, connect=_connect_upbit, write_lock=None) -> str:
+    """임대를 잡으면 연결해 새 공지를 받아 저장한다. 끊기거나 멈추면 돌아온다(다음 시도는 부르는 쪽이 정한다)."""
+    keys = upbit_keys()
+    if not keys:
+        return "not_configured"
+    token = claim_work(UPBIT_SCOPE)
+    if not token:
+        return "skipped"
+    retry = 5
+    try:
+        with connect(_upbit_token(*keys)) as ws:
+            ws.send(json.dumps([{"ticket": f"ggparrot-notice-{uuid.uuid4().hex[:8]}"},
+                                {"type": "announcement", "include_body": False}, {"format": "DEFAULT"}]))
+            _save_state("upbit", status="ready", success=True)
+            renewed = time.monotonic()
+            while not stop.is_set():
+                if time.monotonic() - renewed > 60:
+                    renew_work(UPBIT_SCOPE, token)
+                    renewed = time.monotonic()
+                try:
+                    raw = ws.recv(timeout=30)
+                except TimeoutError:
+                    continue
+                item = parse_upbit(json.loads(raw), now_ms=int(time.time() * 1000))
+                if item:
+                    with write_lock or nullcontext(), get_session() as db:
+                        _store(db, [item], int(time.time() * 1000))
+                        db.commit()
+                    logger.info(json.dumps({"event": "upbit_notice", "id": item["id"], "assets": item["asset_symbols"]}))
+        return "closed"
+    except Exception as exc:
+        # 허용 IP 밖이면 401 본문에 NoAuthorizationIp — 이름만 남긴다(키 · 토큰은 남기지 않는다).
+        body = getattr(getattr(exc, "response", None), "body", b"") or b""
+        name = re.search(rb"V1::Exceptions::(\w+)", body)
+        error = name.group(1).decode() if name else type(exc).__name__
+        _save_state("upbit", status="error", error=error)
+        logger.warning("upbit notices stream failed type=%s", error)
+        retry = 900 if error == "NoAuthorizationIp" else 60
+        return "error"
+    finally:
+        finish_work(UPBIT_SCOPE, token, retry_seconds=retry)
 
 
 def fetch_bithumb() -> list | dict:
@@ -208,8 +330,8 @@ def get_exchange_notices(exchange: str, symbol_base: str | None = None, *, q: st
 
     티커가 없는 공지(점검 · 고객센터 · 회사 홍보)는 소식 칸에 내지 않는다(2026-10-20 시안 B) — 저장은 해 둔다.
     """
-    if exchange != "bithumb":
-        return {"items": [], "total": 0, "next_cursor": None,
+    if exchange not in SOURCE_NAMES or (exchange == "upbit" and not upbit_keys()):
+        return {"items": [], "total": 0, "next_cursor": None, "available": False,
                 "collection": {"status": "not_configured", "exchange": exchange}}
     now_ms = int(time.time() * 1000)
     notice = ExchangeNotice
@@ -230,8 +352,10 @@ def get_exchange_notices(exchange: str, symbol_base: str | None = None, *, q: st
     items = [{"id": row.id, "exchange": row.exchange, "title": row.title, "url": row.url,
               "categories": json.loads(row.categories_json), "published": row.published,
               "asset_symbols": json.loads(row.asset_symbols_json), "content_type": "official",
-              "source": "빗썸 공지", "language": "ko", "region": "kr"} for row in rows]
-    return {"items": items, "total": total, "next_cursor": feed_index.encode_cursor(rows[-1].published_ms, rows[-1].id) if more else None,
+              "source": SOURCE_NAMES[row.exchange], "language": "ko", "region": "kr"} for row in rows]
+    # 탭을 둘지 — 빗썸은 늘, 업비트는 실시간으로만 받으니 코인 공지가 하나라도 쌓인 뒤부터(빈 탭을 먼저 보이지 않게).
+    available = exchange == "bithumb" or bool(items) or bool(total) or (cursor is not None)
+    return {"items": items, "total": total, "available": available, "next_cursor": feed_index.encode_cursor(rows[-1].published_ms, rows[-1].id) if more else None,
             "collection": {"status": state.status if state else "pending", "exchange": exchange,
                            "last_success_ms": state.last_success_ms if state else 0}}
 
@@ -241,6 +365,7 @@ class _Runtime:
         self.stop = threading.Event()
         self.write_lock = threading.Lock()
         self.thread = threading.Thread(target=self.run, name="exchange-notices", daemon=True)
+        self.upbit = threading.Thread(target=self.run_upbit, name="exchange-notices-upbit", daemon=True)
 
     def run(self):
         while not self.stop.is_set():
@@ -249,6 +374,21 @@ class _Runtime:
             except Exception as exc:
                 logger.warning("exchange notices collection failed type=%s", type(exc).__name__)
             self.stop.wait(REFRESH_SECONDS)
+
+    def run_upbit(self):
+        # 키가 없으면 한 번 확인하고 끝 — 키는 환경변수라 바꾸면 재배포로 다시 뜬다.
+        failures = 0
+        while not self.stop.is_set():
+            try:
+                result = run_upbit_once(self.stop, write_lock=self.write_lock)
+            except Exception as exc:
+                logger.warning("upbit notices loop failed type=%s", type(exc).__name__)
+                result = "error"
+            if result == "not_configured":
+                return
+            failures = failures + 1 if result == "error" else 0
+            # 임대를 다른 프로세스가 가졌으면 1분 뒤, 끊기면 5초 뒤, 실패가 이어지면 최대 15분까지 늘려 다시.
+            self.stop.wait(60 if result == "skipped" else min(900, 5 * 2 ** failures) if failures else 5)
 
 
 def start_runtime() -> None:
@@ -259,6 +399,7 @@ def start_runtime() -> None:
         if _runtime is None:
             _runtime = _Runtime()
             _runtime.thread.start()
+            _runtime.upbit.start()
 
 
 def stop_runtime() -> None:

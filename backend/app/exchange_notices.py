@@ -5,6 +5,8 @@
 (`feed.bithumb.com/notice`)은 Cloudflare 가 막는 사람용 페이지라 읽지 않는다(2026-10-20 조사).
 업비트: 공식은 Private WebSocket `announcement`(JWT 필요, 키 권한 무관 · 허용 IP 필수, 연결 중 새 공지만 실시간 —
 지난 공지 조회 없음)뿐. 운영 키 `UPBIT_ACCESS_KEY` · `UPBIT_SECRET_KEY` 가 있을 때만 한 프로세스가 임대를 잡고 연결을 유지한다.
+지난 공지와 끊긴 동안의 빈틈은 업비트 웹 공지 목록(`api-manager.upbit.com/api/v1/announcements`, 키 없음 · 공식 문서엔 없는
+사이트 내부 주소)으로 채운다 — 처음 · 6시간 넘게 못 채웠으면 30일치, 평소엔 10분마다 첫 쪽(2026-10-21 사용자 결정).
 
 공지 제목의 괄호 속 티커(`콘크리트(CT) 원화 마켓 추가`, `셀레스티아(TIA), 만타(MANTA) …`)로 코인을 잇는다 —
 제목에 거래소가 직접 적은 표기라 기사처럼 이름이 겹쳐 잘못 잇는 일이 적다.
@@ -52,6 +54,14 @@ UPBIT_SCOPE = "EXCHANGE_NOTICES_UPBIT"
 UPBIT_WS_URL = "wss://api.upbit.com/websocket/v1/private"
 _UPBIT_NOTICE_URL = re.compile(r"https://(?:www\.)?upbit\.com/service_center/notice\?id=(\d{1,15})(?:&[A-Za-z0-9_=&-]{0,60})?")
 # 업비트 공지 분류 → 빗썸과 같은 글자. 거래 공지는 제목으로 유의 · 종료 · 상장을 가른다(화면이 유의 · 종료만 붉게).
+UPBIT_LIST_URL = "https://api-manager.upbit.com/api/v1/announcements"
+UPBIT_LIST_STATE = "upbit_list"  # ExchangeNoticeState 줄 — 채우기 진행(공식 연결 상태 'upbit' 과 따로)
+UPBIT_LIST_EVERY_MS = 10 * 60_000
+UPBIT_LIST_DEEP_AFTER_MS = 6 * 3600_000
+UPBIT_LIST_MAX_PAGES = 20
+# 웹 목록의 분류는 한글 — 공식 WebSocket 의 category 값으로 바꿔 같은 규칙(upbit_categories)을 쓴다.
+_UPBIT_LIST_CATEGORY = {"거래": "trade", "입출금": "wallet", "점검": "maintenance", "디지털 자산": "digital_asset",
+                        "안내": "notice", "NFT": "nft", "서비스+": "service", "이벤트": "event"}
 _UPBIT_CATEGORY = {"trade": "거래", "wallet": "입출금", "maintenance": "점검", "digital_asset": "디지털 자산",
                    "notice": "안내", "nft": "NFT", "service": "서비스+", "event": "이벤트"}
 
@@ -125,7 +135,7 @@ def upbit_categories(category: str, title: str) -> list[str]:
             return ["거래유의"]
         if re.search(r"거래\s*지원\s*종료", title):
             return ["거래지원종료"]
-        if re.search(r"신규\s*거래\s*지원|마켓\s*추가", title):
+        if re.search(r"신규\s*거래\s*지원|마켓\s*(?:디지털\s*자산\s*)?추가", title):
             return ["마켓 추가"]
     return [_UPBIT_CATEGORY.get(category, "안내")]
 
@@ -230,6 +240,69 @@ def run_upbit_once(stop: threading.Event, *, connect=_connect_upbit, write_lock=
         finish_work(UPBIT_SCOPE, token, retry_seconds=retry)
 
 
+def parse_upbit_list(payload, *, now_ms: int) -> list[dict]:
+    """웹 공지 목록 한 쪽 → 공식 WebSocket 과 같은 모양(id 는 같은 uuid — 둘이 겹치면 한 줄)."""
+    notices = (payload or {}).get("data", {}).get("notices") if isinstance(payload, dict) else None
+    if not isinstance(notices, list):
+        raise ValueError("upbit notice list must have data.notices")
+    items = []
+    for row in notices[:50]:
+        if not isinstance(row, dict) or not re.fullmatch(r"\d{1,15}", str(row.get("uuid") or "")):
+            continue
+        item = parse_upbit({"type": "announcement", "uuid": str(row["uuid"]), "title": row.get("title"),
+                            "category": _UPBIT_LIST_CATEGORY.get(str(row.get("category") or ""), "notice"),
+                            "url": f"https://upbit.com/service_center/notice?id={row['uuid']}",
+                            "first_listed_at": row.get("first_listed_at"), "listed_at": row.get("listed_at")}, now_ms=now_ms)
+        if item:
+            items.append(item)
+    return items
+
+
+def fetch_upbit_page(page: int) -> dict:
+    with get_http_client().stream("GET", UPBIT_LIST_URL, params={"os": "web", "page": page, "per_page": 20, "category": "all"},
+                                  headers={"Accept": "application/json", "User-Agent": "Mozilla/5.0 (gg-parrot notices)"},
+                                  timeout=8.0, follow_redirects=False) as response:
+        response.raise_for_status()
+        if response.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise ValueError("upbit notice list must be JSON")
+        body, size = [], 0
+        for chunk in response.iter_bytes():
+            size += len(chunk)
+            if size > MAX_BYTES:
+                raise ValueError("upbit notice list exceeds size limit")
+            body.append(chunk)
+        return json.loads(b"".join(body))
+
+
+def fill_upbit(*, now_ms: int, deep: bool, fetch_page=None, pause=0.5) -> list[dict]:
+    """최근 공지를 쪽 단위로 — deep 이면 30일 전 공지가 나올 때까지(최대 20쪽), 아니면 첫 쪽만.
+
+    목록은 '마지막 게시(갱신) 시각' 순이라 오래된 공지가 갱신되면 앞에 온다 — 30일 판단은 쪽 안의 가장 최근 갱신으로 한다.
+    """
+    fetch_page = fetch_page or fetch_upbit_page  # 부를 때 찾는다(시험이 바꿔 끼울 수 있게)
+    cutoff = now_ms - RETENTION_SECONDS * 1000
+    items = []
+    for page in range(1, (UPBIT_LIST_MAX_PAGES if deep else 1) + 1):
+        if page > 1 and pause:
+            time.sleep(pause)
+        rows = parse_upbit_list(fetch_page(page), now_ms=now_ms)
+        items += [item for item in rows if item["published_ms"] >= cutoff]
+        if not rows or max(item["modified_ms"] for item in rows) < cutoff:
+            break
+    return items
+
+
+def _fill_upbit_due(now_ms: int) -> bool | None:
+    """채울 차례면 deep 여부(True/False), 아직이면 None."""
+    with get_session() as db:
+        state = db.get(ExchangeNoticeState, UPBIT_LIST_STATE)
+    if state is None or not state.last_success_ms or now_ms - state.last_success_ms > UPBIT_LIST_DEEP_AFTER_MS:
+        if state is not None and state.last_attempt_ms and now_ms - state.last_attempt_ms < UPBIT_LIST_EVERY_MS:
+            return None  # 깊게 채우다 실패했으면 10분 뒤 다시
+        return True
+    return False if now_ms - state.last_attempt_ms >= UPBIT_LIST_EVERY_MS else None
+
+
 def fetch_bithumb() -> list | dict:
     """문서의 주소 → 공지 서버 302 한 번만 따라간다(다른 곳으로 보내면 오류)."""
     client = get_http_client()
@@ -318,6 +391,26 @@ def collect_once(*, now_ms=None, stop_event=None, write_lock=None) -> dict:
                 state.status, state.error, state.failures, state.last_success_ms = "ready", "", 0, now_ms
             db.add(state)
             db.commit()
+        # 업비트 지난 공지 채우기 — 같은 임대 안에서, 실패해도 빗썸 결과와 따로 기록한다.
+        deep = _fill_upbit_due(now_ms)
+        if deep is not None and not cancelled():
+            upbit_items, upbit_error = [], ""
+            try:
+                upbit_items = fill_upbit(now_ms=now_ms, deep=deep)
+            except Exception as exc:
+                upbit_error = type(exc).__name__
+            with write_lock or nullcontext(), get_session() as db:
+                state = db.get(ExchangeNoticeState, UPBIT_LIST_STATE) or ExchangeNoticeState(exchange=UPBIT_LIST_STATE)
+                state.last_attempt_ms = now_ms
+                if upbit_error:
+                    state.status, state.error, state.failures = "error", upbit_error, min(state.failures + 1, 10)
+                else:
+                    _store(db, upbit_items, now_ms)
+                    state.status, state.error, state.failures, state.last_success_ms = "ready", "", 0, now_ms
+                db.add(state)
+                db.commit()
+            if upbit_error:
+                logger.warning("upbit notice list fill failed type=%s", upbit_error)
         return {"status": "error" if error else "ready", "item_count": len(items), "error": error}
     finally:
         with write_lock or nullcontext():
@@ -330,7 +423,7 @@ def get_exchange_notices(exchange: str, symbol_base: str | None = None, *, q: st
 
     티커가 없는 공지(점검 · 고객센터 · 회사 홍보)는 소식 칸에 내지 않는다(2026-10-20 시안 B) — 저장은 해 둔다.
     """
-    if exchange not in SOURCE_NAMES or (exchange == "upbit" and not upbit_keys()):
+    if exchange not in SOURCE_NAMES:
         return {"items": [], "total": 0, "next_cursor": None, "available": False,
                 "collection": {"status": "not_configured", "exchange": exchange}}
     now_ms = int(time.time() * 1000)
@@ -353,7 +446,7 @@ def get_exchange_notices(exchange: str, symbol_base: str | None = None, *, q: st
               "categories": json.loads(row.categories_json), "published": row.published,
               "asset_symbols": json.loads(row.asset_symbols_json), "content_type": "official",
               "source": SOURCE_NAMES[row.exchange], "language": "ko", "region": "kr"} for row in rows]
-    # 탭을 둘지 — 빗썸은 늘, 업비트는 실시간으로만 받으니 코인 공지가 하나라도 쌓인 뒤부터(빈 탭을 먼저 보이지 않게).
+    # 탭을 둘지 — 빗썸은 늘, 업비트는 코인 공지가 하나라도 쌓인 뒤부터(웹 목록 채우기 전 빈 탭을 먼저 보이지 않게).
     available = exchange == "bithumb" or bool(items) or bool(total) or (cursor is not None)
     return {"items": items, "total": total, "available": available, "next_cursor": feed_index.encode_cursor(rows[-1].published_ms, rows[-1].id) if more else None,
             "collection": {"status": state.status if state else "pending", "exchange": exchange,

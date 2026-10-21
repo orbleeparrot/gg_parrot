@@ -29,6 +29,8 @@ def clean(monkeypatch):
         db.exec(delete(feed_index.FeedAsset).where(feed_index.FeedAsset.feed == notices.FEED))
         db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope.in_([notices.SCOPE, notices.UPBIT_SCOPE])))
         db.commit()
+    # 업비트 웹 목록 채우기는 시험에서 바깥으로 나가지 않는다(필요한 시험만 바꿔 끼운다).
+    monkeypatch.setattr(notices, "fetch_upbit_page", lambda page: {"data": {"notices": []}})
     # 읽기는 '최근 30일' 을 지금 시각으로 자르므로 저장 시각을 지금 근처로 맞춘다.
     monkeypatch.setattr(notices, "RETENTION_SECONDS", 10 * 365 * 86400)
 
@@ -139,7 +141,7 @@ def test_trends_route_serves_notices_for_bithumb_and_marks_upbit_not_connected(m
     picked = client.get("/api/trends?region=kr&exchange=bithumb&sections=notices&symbol=KRW-TIA").json()
     assert [item["id"] for item in picked["notices"]["items"]] == ["bithumb:1655275"]
     upbit = client.get("/api/trends?region=kr&exchange=upbit&sections=notices").json()
-    assert upbit["notices"]["items"] == [] and upbit["notices"]["collection"]["status"] == "not_configured"
+    assert upbit["notices"]["items"] == [] and upbit["notices"]["available"] is False
     assert client.get("/api/trends?region=kr&sections=rumors").status_code == 422
     assert json.dumps(data, ensure_ascii=False).count("feed.bithumb.com/notice/") == 2 and data["notices"]["total"] == 2
 
@@ -191,7 +193,7 @@ def test_upbit_stream_needs_keys_stores_new_notices_and_releases_the_lease(monke
     stop = __import__("threading").Event()
     monkeypatch.delenv("UPBIT_ACCESS_KEY", raising=False)
     assert notices.run_upbit_once(stop) == "not_configured"
-    assert notices.get_exchange_notices("upbit")["collection"]["status"] == "not_configured"
+    assert notices.get_exchange_notices("upbit")["available"] is False
     monkeypatch.setenv("UPBIT_ACCESS_KEY", "access")
     monkeypatch.setenv("UPBIT_SECRET_KEY", "secret")
     # 키는 있어도 아직 받은 공지가 없으면 탭을 두지 않는다.
@@ -229,3 +231,62 @@ def test_upbit_ip_rejection_is_recorded_by_name_and_backs_off(monkeypatch):
         lease = db.get(public_news.PublicNewsLease, notices.UPBIT_SCOPE)
     assert (state.status, state.error) == ("error", "NoAuthorizationIp")
     assert lease.next_run_ms >= int(time.time() * 1000) + 800_000  # 허용 IP 는 사람이 고쳐야 하니 15분 간격
+
+
+def upbit_list_row(uuid, title, category, when):
+    return {"listed_at": when, "first_listed_at": when, "id": 1, "uuid": uuid, "title": title, "category": category}
+
+
+UPBIT_PAGE = {"data": {"total_pages": 2, "notices": [
+    upbit_list_row("298292639", "메타플렉스(MPLX) KRW 마켓 디지털 자산 추가", "거래", "2026-10-20T18:00:00+09:00"),
+    upbit_list_row("298292600", "IOST 네트워크 계열 디지털 자산 입출금 일시 중단 안내", "입출금", "2026-10-20T17:00:00+09:00"),
+    upbit_list_row("298292500", "만트라(OM) 거래 유의 종목 지정 안내", "거래", "2026-10-19T12:00:00+09:00"),
+]}, "success": True}
+
+
+def test_upbit_list_rows_become_the_same_items_as_the_official_stream():
+    items = notices.parse_upbit_list(UPBIT_PAGE, now_ms=NOW)
+    assert [(item["id"], item["categories"], item["asset_symbols"]) for item in items] == [
+        ("upbit:298292639", ["마켓 추가"], ["MPLX"]), ("upbit:298292600", ["입출금"], []), ("upbit:298292500", ["거래유의"], ["OM"])]
+    assert items[0]["url"] == "https://upbit.com/service_center/notice?id=298292639"
+    with pytest.raises(ValueError):
+        notices.parse_upbit_list({"data": {}}, now_ms=NOW)
+
+
+def test_deep_fill_pages_until_thirty_days_back_and_shallow_fill_reads_one_page(monkeypatch):
+    monkeypatch.setattr(notices, "RETENTION_SECONDS", 30 * 86400)
+    old = upbit_list_row("1", "오래된(OLD) 입출금 재개", "입출금", "2026-09-01T00:00:00+09:00")
+    pages = {1: UPBIT_PAGE, 2: {"data": {"notices": [old]}}, 3: {"data": {"notices": [old]}}}
+    seen = []
+
+    def fetch(page):
+        seen.append(page)
+        return pages[page]
+    items = notices.fill_upbit(now_ms=NOW, deep=True, fetch_page=fetch, pause=0)
+    assert seen == [1, 2] and len(items) == 3  # 2쪽이 전부 30일 밖이면 멈춘다
+    seen.clear()
+    assert len(notices.fill_upbit(now_ms=NOW, deep=False, fetch_page=fetch, pause=0)) == 3 and seen == [1]
+
+
+def test_collect_fills_upbit_then_waits_ten_minutes_and_the_tab_needs_no_key(monkeypatch):
+    monkeypatch.delenv("UPBIT_ACCESS_KEY", raising=False)
+    monkeypatch.setattr(notices, "fetch_bithumb", lambda: SAMPLE)
+    pages = []
+    monkeypatch.setattr(notices, "fetch_upbit_page", lambda page: pages.append(page) or (UPBIT_PAGE if page == 1 else {"data": {"notices": []}}))
+
+    def collect(at):
+        with database.get_session() as db:
+            db.exec(delete(public_news.PublicNewsLease).where(public_news.PublicNewsLease.scope == notices.SCOPE))
+            db.commit()
+        notices.collect_once(now_ms=at)
+    collect(NOW)
+    assert pages[:2] == [1, 2]  # 처음엔 깊게
+    page = notices.get_exchange_notices("upbit")
+    assert page["available"] is True and [item["id"] for item in page["items"]] == ["upbit:298292639", "upbit:298292500"]
+    assert page["items"][0]["source"] == "업비트 공지"
+    pages.clear()
+    collect(NOW + 60_000)
+    assert pages == []  # 10분 안엔 다시 안 받는다
+    collect(NOW + notices.UPBIT_LIST_EVERY_MS)
+    assert pages == [1]  # 그 뒤엔 첫 쪽만
+    assert len(notices.get_exchange_notices("bithumb")["items"]) == 2  # 빗썸은 그대로

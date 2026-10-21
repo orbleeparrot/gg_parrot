@@ -6,6 +6,7 @@ COIN_TRENDS_OUTPUT overrides /tmp/ggp-coin-trends-check. External traffic is blo
 mobileShellBrowser.smoke.py 가 Handler · Fixture · BUILD 를 가져다 쓴다.
 """
 import json
+import time
 import os
 import threading
 from functools import partial
@@ -101,6 +102,17 @@ class Fixture:
             else:
                 section["mentions"] = {"BTC": 15, "XRP": 15, "ETH": 15}
             body[kind] = section
+        if "notices" in sections:
+            # 거래소 공식 공지 — 서버처럼 빗썸만, 티커가 적힌 공지만(2026-10-20 시안 B).
+            exchange = query.get("exchange", ["upbit"])[0]
+            items = [{"id": "bithumb:2", "title": "네스트리(EGG) 거래지원 종료 안내", "url": "https://feed.bithumb.com/notice/2",
+                      "categories": ["거래지원종료"], "published": NOW, "asset_symbols": ["EGG"], "content_type": "official", "source": "빗썸 공지"},
+                     {"id": "bithumb:1", "title": "셀레스티아(TIA) 네트워크 입출금 일시 중지 안내", "url": "https://feed.bithumb.com/notice/1",
+                      "categories": ["입출금"], "published": NOW, "asset_symbols": ["TIA"], "content_type": "official", "source": "빗썸 공지"}]
+            if symbol:
+                items = [item for item in items if symbol.replace("KRW-", "") in item["asset_symbols"]]
+            body["notices"] = ({"items": items, "total": len(items), "next_cursor": None, "available": True, "collection": {"status": "ready"}}
+                               if exchange == "bithumb" else {"items": [], "available": False, "collection": {"status": "not_configured"}})
         return body
 
     def route(self, route):
@@ -119,6 +131,14 @@ class Fixture:
             data = {**RANKINGS[exchange], "exchange": exchange, "updated_at": NOW, "status": "ready", "stale": False}
         elif url.path == "/api/trends":
             data = self.trends(query)
+        elif url.path in ("/api/candles", "/api/candles/live"):
+            # 코인 정보 칸 차트(직접 만들기와 같은 CandleChart) — 지금 시각에 맞춘 1,700원대 봉.
+            step = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}[query.get("interval", ["1h"])[0]] * 1000
+            now_ms = int(time.time() * 1000) // step * step
+            count = 2 if url.path.endswith("/live") else 120
+            data = {"candles": [{"t": now_ms - (count - 1 - i) * step, "o": 1750 + i % 9, "h": 1760 + i % 7, "l": 1740 + i % 5,
+                                 "c": 1752 + i % 11, "v": 1000 + i, "closed": i < count - 1} for i in range(count)],
+                    "server_time": now_ms, "fetched_at_ms": now_ms, "source": "fixture", "market": "spot", "fallback": False}
         elif url.path == "/api/usdkrw":
             data = {"usdkrw": 1334.89}
         elif url.path == "/api/news/market":
@@ -273,6 +293,27 @@ def main():
                     # 커뮤니티 글이 없는 코인은 뉴스 탭이 먼저 열린다.
                     expect(page.get_by_role("tab", name="국내 뉴스", exact=False)).to_have_attribute("aria-selected", "true")
                     expect(page.get_by_text("해외 대비")).to_be_visible()
+                    # 코인 정보 — 저가 · 고가 게이지 대신 직접 만들기 차트(embed, 2026-10-21 시안): 높이 320 · 휴대폰 260,
+                    # 봉 간격 6칸 한 줄(누르면 그 간격으로 다시 받음), 휴대폰은 확대/축소 단추 없음.
+                    chart = page.locator(".ct-coin .candle-chart.is-embed")
+                    expect(chart).to_be_visible()
+                    expect(page.locator(".ct-coin .ct-range")).to_have_count(0)
+                    expect(chart.locator(".candle-chart-plot svg").first).to_be_attached()
+                    picks = chart.locator(".candle-chart-pick .seg-item")
+                    expect(picks).to_have_count(6)
+                    expect(picks.nth(3)).to_have_attribute("aria-pressed", "true")
+                    narrow = head["rank"]["w"] < 470
+                    geo = page.evaluate("""() => { const box = document.querySelector('.ct-coin-chart').getBoundingClientRect();
+                      const items = [...document.querySelectorAll('.ct-coin .candle-chart-pick .seg-item')];
+                      return { h: Math.round(box.height), rows: new Set(items.map(e => Math.round(e.getBoundingClientRect().top))).size,
+                               clipped: items.filter(e => e.scrollWidth > e.clientWidth || e.getBoundingClientRect().right > box.right + 1).length }; }""")
+                    assert geo == {"h": 260 if narrow else 320, "rows": 1, "clipped": 0}, geo
+                    zoom = chart.locator(".candle-chart-controls")
+                    expect(zoom).to_be_hidden() if narrow else expect(zoom).to_be_visible()
+                    picks.nth(4).click()
+                    expect(picks.nth(4)).to_have_attribute("aria-pressed", "true")
+                    page.wait_for_function("() => true")
+                    assert any(call.startswith("/api/candles?") and "interval=4h" in call for call in fixture.calls), [c for c in fixture.calls if "candles" in c][-3:]
                     if two_columns:  # 고른 코인 정보도 필터(제목줄 검색칸) 끝에 맞음 — 목록 상자를 넓힌 만큼 안쪽을 채움
                         edges = page.evaluate("""() => { const r = (s) => document.querySelector(s).getBoundingClientRect();
                           return [Math.round(r('.ct-coin-top').left), Math.round(r('.ct-kv').right), Math.round(r('.ct-rank .ct-col-head').left), Math.round(r('.ct-rank .ct-col-head').right)]; }""")
@@ -282,6 +323,30 @@ def main():
                     page.locator(".ct-clear").click()
                     expect(page.locator(".ct-coin")).to_have_count(0)
                     expect(page.locator("#ct-side-title")).to_have_text("국내 소식")
+                    # 거래소 공지 탭 — 서버가 available 일 때만 세 번째 탭(한 줄 균등). 업비트는 키 · 받은 공지가 없으면 탭 없음(2026-10-20 시안 B).
+                    side_tabs = page.locator(".ct-side-tabs .seg-item")
+                    expect(side_tabs).to_have_count(2)
+                    page.locator(".ct-mini .seg-item").nth(1).click()
+                    expect(side_tabs).to_have_count(3)
+                    row = page.evaluate("""() => { const items = [...document.querySelectorAll('.ct-side-tabs .seg-item')];
+                      return { tops: [...new Set(items.map(e => Math.round(e.getBoundingClientRect().top)))].length,
+                               widths: [...new Set(items.map(e => Math.round(e.getBoundingClientRect().width)))].length,
+                               clipped: items.filter(e => e.scrollWidth > e.clientWidth).length }; }""")
+                    assert row == {"tops": 1, "widths": 1, "clipped": 0}, row
+                    side_tabs.nth(2).click()
+                    expect(side_tabs.nth(2)).to_contain_text("빗썸 공지")
+                    expect(page.locator(".ct-post")).to_have_count(2)
+                    expect(page.locator(".ct-post").first.locator(".ct-risk")).to_have_text("거래지원 종료")
+                    expect(page.locator(".ct-post").nth(1).locator(".ct-post-meta")).to_contain_text("입출금")
+                    expect(page.locator(".ct-post").first.locator(".ct-chip")).to_contain_text("네스트리")
+                    expect(page.locator(".ct-side-tools")).to_contain_text("최근 30일")
+                    expect(page.locator(".ct-side-tools select")).to_have_count(0)
+                    expect(page.locator(".ct-side .ct-note")).to_have_count(0)
+                    no_overflow(page)
+                    page.screenshot(path=str(OUTPUT / f"notices-{width}-{theme}.png"), animations="disabled")
+                    page.locator(".ct-mini .seg-item").nth(0).click()
+                    expect(side_tabs).to_have_count(2)
+                    expect(side_tabs.nth(0)).to_have_attribute("aria-selected", "true")
                     page.locator(".ct-mode-item").nth(1).click()
                     expect(page.locator(".ct-ex-static")).to_contain_text("바이낸스")
                     expect(page.locator(".ct-search input")).to_have_attribute("placeholder", "바이낸스에서 검색")

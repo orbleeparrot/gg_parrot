@@ -46,7 +46,8 @@ const blank = (key) => ({ key, items: [], total: 0, nextCursor: null, failures: 
 // 소식 목록 하나(커뮤니티 또는 뉴스). 서버가 DB 에서 한 쪽(20개)만 읽어 준다(2026-10-18).
 // 첫 쪽은 60초마다 조용히 다시 받아 위에 붙이고, 목록 끝에 닿으면 next_cursor(마지막으로 받은 글)로 다음 쪽을 받는다 —
 // 커서는 마지막 글 자체라 머리에 새 글이 쌓여도 다음 쪽이 밀리거나 겹치지 않는다.
-export function useFeedList(kind, { region, exchange, symbol = "", q = "", source = "" }) {
+// enabled=false 면 받지 않는다 — 거래소 공지는 지금 빗썸만 있어 다른 거래소에선 부르지 않는다.
+export function useFeedList(kind, { region, exchange, symbol = "", q = "", source = "", enabled = true }) {
   const key = [kind, region, exchange, symbol, q, source].join("|");
   const [state, setState] = useState(() => blank(key));
   const keyRef = useRef(key);
@@ -81,7 +82,7 @@ export function useFeedList(kind, { region, exchange, symbol = "", q = "", sourc
     }
   }, [key, kind, params]);
 
-  useAdaptivePolling(loadFirst, { intervalMs: 60_000, maxIntervalMs: 5 * 60_000, pollKey: key });
+  useAdaptivePolling(loadFirst, { intervalMs: 60_000, maxIntervalMs: 5 * 60_000, pollKey: key, enabled });
 
   const stateRef = useRef(state);
   stateRef.current = state;

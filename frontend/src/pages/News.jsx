@@ -71,6 +71,10 @@ export default function News() {
   const symbol = coin ? symbolOf(exchange, coin) : "";
   const community = useFeedList("community", { region, exchange, symbol, q: keyword, source: tab === "community" ? source : "" });
   const news = useFeedList("news", { region, exchange, symbol, q: keyword, source: tab === "news" ? source : "" });
+  // 거래소 공식 공지 — 국내만. 탭은 서버가 available 일 때만(빗썸은 늘, 업비트는 실시간으로 받은 코인 공지가 생긴 뒤부터).
+  const notices = useFeedList("notices", { region, exchange, symbol, q: keyword, enabled: region === "kr" });
+  const noticesOn = region === "kr" && !!notices.extra?.available;
+  useEffect(() => { if (tab === "notices" && !noticesOn && !notices.loading) setTab("community"); }, [tab, noticesOn, notices.loading]);
 
   // 언급 수 · 오늘의 요약은 코인을 골라 목록을 다시 받는 동안에도 마지막 값을 쓴다.
   const mentionsRef = useRef({});
@@ -89,10 +93,10 @@ export default function News() {
   const autoTabRef = useRef("");
   useEffect(() => {
     const key = coin || keyword ? `${exchange}|${coin || ""}|${keyword}` : "";
-    if (!key || autoTabRef.current === key || community.loading || news.loading) return;
+    if (!key || autoTabRef.current === key || community.loading || news.loading || (noticesOn && notices.loading)) return;
     autoTabRef.current = key;
-    setTab(community.total || !news.total ? "community" : "news");
-  }, [coin, keyword, exchange, community.loading, community.total, news.loading, news.total]);
+    setTab(community.total ? "community" : news.total ? "news" : noticesOn && notices.total ? "notices" : "community");
+  }, [coin, keyword, exchange, community.loading, community.total, news.loading, news.total, noticesOn, notices.loading, notices.total]);
 
   const revealBoard = useCallback(() => {
     const node = boardRef.current;
@@ -140,7 +144,7 @@ export default function News() {
           sort={sort} onSort={setSort} mentions={mentions} coin={coin} onCoin={pickCoin} keyword={keyword}
           onKeyword={pickKeyword} onClearSelection={clearSelection} usdkrw={usdkrw}
           onSearchActive={(text) => setSearching(!!String(text).trim())} />
-        <FeedPanel region={region} feeds={{ community, news }} tab={tab} onTab={(name) => { setTab(name); setSource(""); }}
+        <FeedPanel region={region} feeds={{ community, news, notices: noticesOn ? notices : null }} exchangeName={EXCHANGE_META[exchange]?.name || ""} tab={tab} onTab={(name) => { setTab(name); setSource(""); }}
           source={source} onSource={setSource} coin={coin} keyword={keyword} coinsByBase={coinsByBase}
           onCoin={pickCoin} onClearCoin={clearSelection} />
       </div>

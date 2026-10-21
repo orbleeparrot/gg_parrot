@@ -62,6 +62,7 @@ from . import kimchi as kimchi_mod
 from . import news as news_mod
 from . import public_news as public_news_mod
 from . import domestic_community as domestic_community_mod
+from . import exchange_notices as exchange_notices_mod
 from . import regional_trends as regional_trends_mod
 from . import board as board_mod
 from . import leaderboard as leaderboard_mod
@@ -148,6 +149,7 @@ async def lifespan(app: FastAPI):
     leaderboard_runtime.start()
     public_news_mod.start()
     domestic_community_mod.start_runtime()
+    exchange_notices_mod.start_runtime()
     regional_trends_mod.start_runtime()
     position_news_runtime.start()
     whale_activity_runtime.start()
@@ -162,6 +164,7 @@ async def lifespan(app: FastAPI):
             whale_activity_runtime.stop(), position_news_runtime.stop(),
             log_retention_runtime.stop(), agent_commentary_runtime.stop(),
             asyncio.to_thread(domestic_community_mod.stop_runtime),
+            asyncio.to_thread(exchange_notices_mod.stop_runtime),
             asyncio.to_thread(regional_trends_mod.stop_runtime),
             return_exceptions=True,
         )

@@ -59,3 +59,12 @@
 .ccp-tab:disabled { color: rgb(var(--c-slate-400)); cursor: default; }
 /* 여러 종목을 겹쳐 볼 때 차트마다 고정 높이(380·360px)를 주는데, 휴대폰 머리가 들어가면 모자라 봉 간격 줄이 잘린다 */
 .is-multi .candle-chart.is-phone { height: auto; }
+
+/* variant="embed" — 다른 화면 안의 차트(코인동향 코인 정보). 높이는 감싸는 칸이 정하고 그림이 나머지를 채운다.
+   봉 간격은 여기선 누를 수 있다(직접 만들기에선 조건 판 값을 비출 뿐). */
+.candle-chart.is-embed { height: 100%; display: flex; flex-direction: column; }
+.candle-chart.is-embed .candle-chart-toolbar { justify-content: space-between; align-items: center; flex-wrap: nowrap; gap: 8px; }
+.candle-chart.is-embed .candle-chart-pick { padding: 3px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.candle-chart.is-embed .candle-chart-pick .seg-item { height: 28px; padding: 0 10px; font-size: 13px; white-space: nowrap; }
+.candle-chart.is-embed .candle-chart-controls { flex: none; }
+.candle-chart.is-embed .candle-chart-stage { margin-top: 8px; }

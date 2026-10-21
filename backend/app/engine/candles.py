@@ -430,6 +430,32 @@ class CandleSim:
     def _after_close(self) -> None:
         """포지션이 끝났다(청산이 다 됐다) — 포지션에 묶인 전략 상태를 비운다. H 는 물타기 차수."""
 
+    def _ledger_holds_candle(self, o, h, l, c, ts: datetime, volume) -> bool:
+        """미결 주문이 있으면 이 봉을 들고만 있는다(True). 들고 있던 묵은 봉은 판단 없이 진입 필터만 갱신하고 버린다.
+
+        가장 최근 봉 하나만 판단한다 — 재기동 되살리기와 같은 규칙. 묵은 봉의 신호로 뒤늦게 사고팔지 않는다.
+        """
+        ledger = self.ledger
+        t_ms = int(ts.timestamp() * 1000)
+        old = ledger.deferred
+        if old is not None and int(old[0]) < t_ms:
+            if self.entry_filter is not None:
+                self.entry_filter.update(float(old[4]), volume=old[5])
+            ledger.deferred = None
+        if not ledger.unresolved():
+            ledger.deferred = None
+            return False
+        ledger.deferred = [t_ms, float(o), float(h), float(l), float(c), volume]
+        return True
+
+    def take_deferred(self) -> Optional[list]:
+        """주문이 다 정리됐으면 들고 있던 봉을 내준다(그 봉으로 판단할 차례). 아니면 None."""
+        ledger = self.ledger
+        if ledger is None or ledger.deferred is None or ledger.unresolved():
+            return None
+        candle, ledger.deferred = ledger.deferred, None
+        return candle
+
     def _dust_value(self, price: float) -> float:
         dust = self.ledger.dust if self.ledger is not None else None
         if not dust:
@@ -878,6 +904,8 @@ class CandleSim:
     # -- driver entry point ----------------------------------------------
     def on_candle(self, o: float, h: float, l: float, c: float, ts: datetime,
                   volume: Optional[float] = None) -> List[Fill]:
+        if self.ledger is not None and self._ledger_holds_candle(o, h, l, c, ts, volume):
+            return []
         fills: List[Fill] = []
         # Funding on held shorts (per bar, prorated only for 1d; kept simple).
         if self.side is PositionSide.SHORT and self.in_position() and self.funding > 0:
@@ -1759,17 +1787,31 @@ class LiveCandleSim:
             self.inner._entry_marks.clear()
 
     def fold(self, fills=(), resolutions=()) -> dict:
-        """체결 기준 장부 — 실행기가 보고한 체결 · 끝난 주문을 안쪽 sim 장부에 접는다."""
-        return self.inner.fold(fills, resolutions)
+        """체결 기준 장부 — 실행기가 보고한 체결 · 끝난 주문을 안쪽 sim 장부에 접는다.
+
+        주문이 다 정리되면 미뤄 둔 봉으로 판단하고, 나온 체결은 큐에 넣는다(다음 틱이 명령으로 만든다).
+        """
+        result = self.inner.fold(fills, resolutions)
+        candle = self.inner.take_deferred()
+        result["judged_deferred"] = None
+        if candle is not None:
+            t_ms, o, h, l, c, volume = candle
+            ts = datetime.fromtimestamp(int(t_ms) / 1000, timezone.utc)
+            self._enqueue(self.inner.on_candle(o, h, l, c, ts, volume=volume))
+            result["judged_deferred"] = int(t_ms)
+        return result
 
     def warmup(self, candles) -> None:
         # 웜업의 가상 체결은 버린다 — 진입 기록도 끈 채로 돈다(그리드 칸이 많으면 수백 봉 동안 버릴 기록이 쌓여 루프를 막는다).
-        marks = self.inner._entry_marks
+        # 체결 기준 장부도 끈다 — 지난 봉의 가상 주문이 장부에 남으면 이후 판단이 계속 보류된다.
+        marks, ledger = self.inner._entry_marks, self.inner.ledger
         self.inner._entry_marks = None
+        self.inner.ledger = None
         try:
             self.inner.warmup(candles)
         finally:
             self.inner._entry_marks = [] if marks is not None else None
+            self.inner.ledger = ledger
         self.discard_queued()
 
     def equity(self, price: float) -> float:

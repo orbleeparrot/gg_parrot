@@ -23,6 +23,7 @@ from typing import Dict, List, Optional
 
 from sqlmodel import select
 
+from . import runner_fills
 from .data import get_ticker_price_cached  # 모듈 이름으로 참조 — 테스트가 monkeypatch 한다
 from .db import RunnerCommand, RunSession, get_session
 from .engine import Macro
@@ -754,6 +755,10 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> List[RunnerComma
     if not isinstance(acks, list):
         return changed
     events = []
+    # 체결 기준 장부 세션은 주문 사실을 체결 기록표에 한 번씩 넣고, 명령의 체결 수량 · 가격은 그 행들의 합 · 가중평균이다
+    # (부분 청산을 다시 보내 두 번에 팔아도 앞 체결을 잃지 않는다). 장부에 접는 일은 서버 전략 루프가 한다.
+    ledger = row.exec_policy == FILL_LEDGER_POLICY
+    ignored = 0
     for ack in acks[:100]:
         if not isinstance(ack, dict):
             continue
@@ -772,15 +777,24 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> List[RunnerComma
         # expired + ok: 실행기가 만료 직전에 이미 실행한 경우 — 실제 주문이 나갔으니 acked 로 기록한다.
         cmd.attempts += 1
         cmd.acked_at = _now_iso()
-        cmd.executed_qty = float(ack.get("executed_qty") or 0.0)
-        cmd.fill_price = float(ack.get("fill_price") or 0.0)
+        if ledger:
+            ignored += runner_fills.record_command_orders(db, row, cmd, ack, now_ms)["ignored"]
+        else:
+            cmd.executed_qty = float(ack.get("executed_qty") or 0.0)
+            cmd.fill_price = float(ack.get("fill_price") or 0.0)
         cmd.error = str(ack.get("error") or "")[:200]
         if ok:
             cmd.status = "acked"
             if cmd.action in EXIT_SIDES and row.note == EXIT_FAIL_NOTE:
                 row.note = ""  # 재시도 끝에 청산이 됐다 — 실패 메모는 더 이상 사실이 아니다
             events.append(_execution_report_event(row, cmd, ack))
-            if late and cmd.executed_qty > 0:
+            if late and cmd.executed_qty > 0 and ledger:
+                # 체결 기준 장부는 늦은 체결도 장부에 넣는다 — 실행기가 산 · 판 것은 그대로 사실이다.
+                events.append(_engine_rollback_event(
+                    cmd, "engine.late_execution_reported", "warn", "WARN",
+                    f"취소한 주문 #{cmd.seq} 이 실제로 체결됐다는 보고가 왔어요 — 서버 장부에 넣었어요.",
+                    executed_qty=cmd.executed_qty, fill_price=cmd.fill_price))
+            elif late and cmd.executed_qty > 0:
                 # 실행기는 받은 명령을 다음 heartbeat 에 꼭 보고하므로 일어나면 안 되는 일이다 — 그래도 났다면 숨기지 않는다.
                 events.append(_engine_rollback_event(
                     cmd, "engine.late_execution_reported", "error", "ERROR",
@@ -816,6 +830,11 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> List[RunnerComma
             ))
         db.add(cmd)
         changed.append(cmd)
+    if ignored:
+        events.append({"ts": _now_iso(), "kind": "warn", "severity": "WARN", "event_name": "engine.fill_report_ignored",
+                       "operation_id": f"session:{row.id}",
+                       "details": {"count": ignored, "verification": "runner_reported_not_exchange_verified"},
+                       "message": f"실행기 체결 보고 {ignored}건을 읽지 못해 서버 장부에 넣지 않았어요(키 · 수량 · 가격 확인 필요)."})
     if events:
         db.add(row)
         _append_events(db, row, events, component="engine")

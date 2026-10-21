@@ -1611,7 +1611,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "newstitletranslation", "communitypostsummary", "newsaiitembudget", "whaletradestate", "onchainholderstate",
     "chatmessage", "chatreadstate", "useravatar",
     "newsarticlefeed", "newsarticle", "newsmaintenancelease", "publicnewslease",
-    "domesticcommunityitem", "domesticcommunitystate",
+    "domesticcommunityitem", "domesticcommunitystate", "exchangenotice", "exchangenoticestate",
     "trendarticle", "trendsourcestate", "trendsummary", "feedasset",
     "leaderboardsnapshotcontrol", "leaderboardsnapshotversion", "leaderboardsnapshotitem",
     "leaderboardentrystats", "leaderboardchallengebot",
@@ -1747,6 +1747,7 @@ def init_db() -> None:
     from .agent_features.position_news import articles  # noqa: F401
     from . import public_news  # noqa: F401
     from . import domestic_community  # noqa: F401
+    from . import exchange_notices  # noqa: F401
     from . import regional_trends  # noqa: F401
     # create_all never ALTERs a pre-existing table, so patch late-added columns on
     # both backends: SQLite via PRAGMA checks, Postgres via ADD COLUMN IF NOT EXISTS.

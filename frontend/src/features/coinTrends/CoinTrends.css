@@ -217,9 +217,16 @@
 .ct-near h4 { margin: 0 0 4px; color: rgb(var(--c-slate-700)); font-size: 15px; font-weight: 600; }
 
 /* 소식 */
-.ct-side-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; margin-top: 14px; }
-.ct-side-tabs .seg-item { justify-content: center; gap: 6px; }
+/* 탭 수만큼 한 줄 균등 분할(빗썸이면 공지까지 세 칸) — 두 칸 고정이면 세 번째가 둘째 줄로 떨어진다(2026-10-20). */
+.ct-side-tabs { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); width: 100%; margin-top: 14px; }
+.ct-side-tabs .seg-item { justify-content: center; gap: 6px; min-width: 0; white-space: nowrap; }
 .ct-side-tabs .num { color: rgb(var(--c-slate-500)); font-size: 13px; font-weight: 600; }
+.ct-side { container: ct-side / inline-size; }
+/* 세 칸(빗썸 공지까지)이 칸 하나 136px 보다 좁아지면 '국내 · 빗썸' 앞말을 뺀다 — 320px 에서 '국내 커뮤니티 45'가 옆 칸과 겹쳤다. */
+@container ct-side (max-width: 459px) {
+  /* 눈에서만 감춘다 — 화면 읽기 프로그램에는 "국내 커뮤니티"로 그대로 읽힌다. */
+  .ct-side-tabs:has(> :nth-child(3)) .ct-tab-pre { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
 .ct-side-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .ct-side-tools > span { min-width: 0; overflow: hidden; color: rgb(var(--c-slate-500)); text-overflow: ellipsis; white-space: nowrap; }
 .ct-select { position: relative; display: inline-flex; flex: 0 1 auto; align-items: center; min-width: 0; }

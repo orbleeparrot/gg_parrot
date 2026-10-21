@@ -101,6 +101,17 @@ class Fixture:
             else:
                 section["mentions"] = {"BTC": 15, "XRP": 15, "ETH": 15}
             body[kind] = section
+        if "notices" in sections:
+            # 거래소 공식 공지 — 서버처럼 빗썸만, 티커가 적힌 공지만(2026-10-20 시안 B).
+            exchange = query.get("exchange", ["upbit"])[0]
+            items = [{"id": "bithumb:2", "title": "네스트리(EGG) 거래지원 종료 안내", "url": "https://feed.bithumb.com/notice/2",
+                      "categories": ["거래지원종료"], "published": NOW, "asset_symbols": ["EGG"], "content_type": "official", "source": "빗썸 공지"},
+                     {"id": "bithumb:1", "title": "셀레스티아(TIA) 네트워크 입출금 일시 중지 안내", "url": "https://feed.bithumb.com/notice/1",
+                      "categories": ["입출금"], "published": NOW, "asset_symbols": ["TIA"], "content_type": "official", "source": "빗썸 공지"}]
+            if symbol:
+                items = [item for item in items if symbol.replace("KRW-", "") in item["asset_symbols"]]
+            body["notices"] = ({"items": items, "total": len(items), "next_cursor": None, "available": True, "collection": {"status": "ready"}}
+                               if exchange == "bithumb" else {"items": [], "available": False, "collection": {"status": "not_configured"}})
         return body
 
     def route(self, route):
@@ -282,6 +293,30 @@ def main():
                     page.locator(".ct-clear").click()
                     expect(page.locator(".ct-coin")).to_have_count(0)
                     expect(page.locator("#ct-side-title")).to_have_text("국내 소식")
+                    # 거래소 공지 탭 — 서버가 available 일 때만 세 번째 탭(한 줄 균등). 업비트는 키 · 받은 공지가 없으면 탭 없음(2026-10-20 시안 B).
+                    side_tabs = page.locator(".ct-side-tabs .seg-item")
+                    expect(side_tabs).to_have_count(2)
+                    page.locator(".ct-mini .seg-item").nth(1).click()
+                    expect(side_tabs).to_have_count(3)
+                    row = page.evaluate("""() => { const items = [...document.querySelectorAll('.ct-side-tabs .seg-item')];
+                      return { tops: [...new Set(items.map(e => Math.round(e.getBoundingClientRect().top)))].length,
+                               widths: [...new Set(items.map(e => Math.round(e.getBoundingClientRect().width)))].length,
+                               clipped: items.filter(e => e.scrollWidth > e.clientWidth).length }; }""")
+                    assert row == {"tops": 1, "widths": 1, "clipped": 0}, row
+                    side_tabs.nth(2).click()
+                    expect(side_tabs.nth(2)).to_contain_text("빗썸 공지")
+                    expect(page.locator(".ct-post")).to_have_count(2)
+                    expect(page.locator(".ct-post").first.locator(".ct-risk")).to_have_text("거래지원 종료")
+                    expect(page.locator(".ct-post").nth(1).locator(".ct-post-meta")).to_contain_text("입출금")
+                    expect(page.locator(".ct-post").first.locator(".ct-chip")).to_contain_text("네스트리")
+                    expect(page.locator(".ct-side-tools")).to_contain_text("최근 30일")
+                    expect(page.locator(".ct-side-tools select")).to_have_count(0)
+                    expect(page.locator(".ct-side .ct-note")).to_have_count(0)
+                    no_overflow(page)
+                    page.screenshot(path=str(OUTPUT / f"notices-{width}-{theme}.png"), animations="disabled")
+                    page.locator(".ct-mini .seg-item").nth(0).click()
+                    expect(side_tabs).to_have_count(2)
+                    expect(side_tabs.nth(0)).to_have_attribute("aria-selected", "true")
                     page.locator(".ct-mode-item").nth(1).click()
                     expect(page.locator(".ct-ex-static")).to_contain_text("바이낸스")
                     expect(page.locator(".ct-search input")).to_have_attribute("placeholder", "바이낸스에서 검색")

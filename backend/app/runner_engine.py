@@ -64,6 +64,15 @@ ROLLBACK_WAIT_SECONDS = 0.5
 ROLLBACK_RETRY_MAX = 5  # 일시적으로 못 되돌린 진입을 다음 heartbeat 들에서 다시 시도하는 횟수
 # 세션 실행 방식(RunSession.exec_policy) — 서버 전략 장부를 실행기가 보고한 실제 체결로 확정한다(runner.fill_ledger_policy).
 FILL_LEDGER_POLICY = "fill_ledger_v1"
+# 체결 기록표를 장부에 접는 때 — 하트비트가 새 보고를 넣거나 명령 상태를 바꾸면 다음 틱에 바로, 그 밖에는 이만큼마다
+# 한 번(다른 프로세스가 받은 하트비트 · 놓친 신호의 안전망). 틱(3초)마다 DB 를 묻지 않는다 — 운영 DB 왕복이 80ms 다.
+FOLD_IDLE_SECONDS = float(os.environ.get("RUNNER_FOLD_IDLE_SECONDS", "30"))
+_FOLD_WANTED: set = set()  # session_id — 다음 틱에 접을 세션
+
+
+def want_fold(session_id: int) -> None:
+    """이 세션의 체결 기록표 · 명령 상태가 바뀌었다 — 다음 틱에 장부에 접는다(같은 프로세스의 드라이버만 본다)."""
+    _FOLD_WANTED.add(int(session_id))
 
 
 def _now_iso() -> str:
@@ -78,7 +87,7 @@ class _Live:
     """돌고 있는 세션 하나 — 드라이버·틱 태스크·마감봉 구독."""
 
     __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved", "exchange", "rolled_back",
-                 "unsaved_fold")
+                 "unsaved_fold", "last_fold")
 
     def __init__(self, session_id: int, driver: StrategyDriver, exchange: str = "binance") -> None:
         self.session_id = session_id
@@ -98,6 +107,7 @@ class _Live:
         self.rolled_back: Dict[int, List[int]] = {}
         # 체결 기준 장부: 접었는데 저장하지 못한 결과(체결 행 id · 되돌림 표시할 명령 id · state_json · 이벤트) — 다음 틱에 먼저 다시 쓴다.
         self.unsaved_fold: Optional[tuple] = None
+        self.last_fold = 0.0  # 마지막으로 체결 기록표를 읽은 때(monotonic) — 0 이면 첫 틱에 읽는다(재기동 뒤 밀린 보고)
 
 
 _drivers: Dict[int, _Live] = {}
@@ -278,7 +288,11 @@ async def _start_driver(session_id: int) -> bool:
         driver.restore(state, leg_equity={}, total_equity=driver.initial)
         driver.trade_count = int(state.get("trade_count") or 0)
     if driver.fill_ledger:
-        await _drop_unsent_orders(session_id, driver)
+        try:
+            await _drop_unsent_orders(session_id, driver)
+        except Exception:
+            # 정리를 못 해도 드라이버는 띄운다 — 못 정리한 주문은 다음 재기동에 다시 본다(판단이 그때까지 미뤄질 뿐).
+            log.exception("runner engine: session %s could not drop unsent ledger orders", session_id)
     # 그 봉 하나만 실시간 봉처럼 넘긴다 — 의도가 서면 첫 틱(≈ 다음 시가)에 체결된다. 더 오래 끊겼어도 묵은 봉의
     # 신호로 한꺼번에 사고팔지 않게 가장 최근 봉 하나만.
     for symbol, candle in replay.items():
@@ -419,10 +433,13 @@ async def _tick_once(live: _Live) -> None:
                           live.session_id, len(live.unsaved))
             return
         live.last_checkpoint = time.monotonic()
-    if live.driver.fill_ledger:
+    if live.driver.fill_ledger and _fold_due(live):
+        _FOLD_WANTED.discard(live.session_id)
+        live.last_fold = time.monotonic()
         try:
             await _fold_once(live)
         except Exception:
+            want_fold(live.session_id)  # 다음 틱에 다시
             log.exception("runner engine: session %s fill fold failed — will retry next tick", live.session_id)
     try:
         price = await asyncio.to_thread(
@@ -508,6 +525,11 @@ def _persist_fold(session_id: int, fill_ids: List[int], rolled_ids: List[int], s
         if events:
             _append_events(db, row, events, component="engine")
         db.commit()
+
+
+def _fold_due(live: _Live) -> bool:
+    return (live.session_id in _FOLD_WANTED or live.unsaved_fold is not None or not live.last_fold
+            or time.monotonic() - live.last_fold >= FOLD_IDLE_SECONDS)
 
 
 async def _fold_once(live: _Live) -> None:
@@ -974,6 +996,8 @@ def _exchange_ledger_commands(db, row: RunSession, local_fills, now_ms: int) -> 
     from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
 
     added = runner_fills.record_local_fills(db, row, list(local_fills or []), now_ms)
+    if added:
+        want_fold(row.id)
     rows = _pending_rows(db, row)
     if added:
         flat = not row.in_position and not row.position_uncertain
@@ -991,7 +1015,8 @@ def _exchange_ledger_commands(db, row: RunSession, local_fills, now_ms: int) -> 
         if events:
             db.add(row)
             _append_events(db, row, events, component="engine")
-    _expire_entries(db, rows, now_ms)
+    if _expire_entries(db, rows, now_ms):
+        want_fold(row.id)
     return [_view(c) for c in _deliverable(row, rows)]
 
 
@@ -1081,6 +1106,8 @@ def apply_acks(db, row: RunSession, acks: list, now_ms: int) -> List[RunnerComma
             ))
         db.add(cmd)
         changed.append(cmd)
+    if ledger and changed:
+        want_fold(row.id)  # 명령이 끝났거나 체결이 들어왔다 — 다음 틱에 장부에 접는다
     if ignored:
         events.append({"ts": _now_iso(), "kind": "warn", "severity": "WARN", "event_name": "engine.fill_report_ignored",
                        "operation_id": f"session:{row.id}",

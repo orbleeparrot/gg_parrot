@@ -858,7 +858,11 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         db.add(row)
         accepted_event_keys = _confirmed_event_keys(db, row, events)
         wait_args = _entry_wait_args(row) if action == "continue" else None
+        # 체결 기준 장부: 보고가 들어왔으면 커밋한 뒤 다음 틱에 접게 한다(커밋 전에 틱이 읽으면 새 행을 못 본다).
+        fold = row.exec_policy == runner_engine.FILL_LEDGER_POLICY and bool(acks or local_fills)
         db.commit()
+    if fold:
+        runner_engine.want_fold(session_id)
     notify_sessions_changed(user_id)
     if any(isinstance(event, dict) and str(event.get("kind") or "").lower() in {"fill", "error"} for event in (events or [])):
         _wake_commentary()  # 체결 · 오류는 껄무새 중계가 바로 말하게

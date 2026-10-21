@@ -185,6 +185,7 @@ def test_lost_applied_mark_does_not_fold_twice(sid, feed):
                 row.applied_ms = 0
                 db.add(row)
             db.commit()
+        live.last_fold -= eng.FOLD_IDLE_SECONDS  # 바뀐 신호가 없으니 30초 안전망이 다시 읽는다
         await eng._tick_once(live)
         assert inner.cash == cash and all(row.applied_ms > 0 for row in _fill_rows(sid))
         await eng.stop_driver(sid)
@@ -226,6 +227,34 @@ def test_open_order_without_a_command_is_dropped_on_restart(sid, feed):
         inner = eng._drivers[sid].driver.legs[0].sim.inner
         assert inner.ledger.orders == {} and inner.lots == []
         assert _ledger(sid)["orders"] == {} and len(_events(sid, "engine.ledger_order_dropped")) == 1
+        await eng.stop_driver(sid)
+
+    run(scenario())
+
+
+def test_ticks_read_the_journal_only_when_something_changed(sid, feed, monkeypatch):
+    """틱(3초)마다 DB 를 묻지 않는다 — 보고가 들어왔을 때 · 30초마다 한 번만."""
+    calls = []
+    real = eng._load_fold
+
+    def counted(*args):
+        calls.append(args[0])
+        return real(*args)
+
+    monkeypatch.setattr(eng, "_load_fold", counted)
+
+    async def scenario():
+        live, cmd = await _base_buy(sid, feed)  # 첫 틱은 밀린 보고를 본다
+        first = len(calls)
+        for _ in range(3):
+            await eng._tick_once(live)
+        assert len(calls) == first, "바뀐 것이 없으면 묻지 않는다"
+        _ack(sid, cmd)  # ack 처리가 '접어라'를 표시한다
+        await eng._tick_once(live)
+        assert len(calls) == first + 1 and _ledger(sid)["orders"] == {}
+        live.last_fold -= eng.FOLD_IDLE_SECONDS  # 30초가 지났다 — 안전망으로 한 번
+        await eng._tick_once(live)
+        assert len(calls) == first + 2
         await eng.stop_driver(sid)
 
     run(scenario())

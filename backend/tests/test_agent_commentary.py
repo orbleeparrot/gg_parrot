@@ -78,19 +78,47 @@ def test_trades_read_like_the_session_276_case():
         fill(13, "BUY", 226.11, 210.0, NOW - 30_000)], now_ms=NOW)
     sell, rebuy = sells
     assert sell["face"] == "signal" and sell["hl"].startswith("익절")
-    assert sell["nums"] == "+1,787원 · +3.98%" and sell["nums_tone"] == "up"
-    assert {"t": "209원 체결 · 수수료 전"} in sell["subs"]
+    # 사고판 수수료(빗썸 0.04% × 2)를 뺀 값 — 가격 차이만으로는 +1,787원 · +3.98%
+    assert sell["nums"] == "+1,750원 · +3.90%" and sell["nums_tone"] == "up"
+    assert {"t": "209원 체결 · 수수료 0.04% × 2 뺀 값"} in sell["subs"]
     assert {"t": "신호 때 가격(212.89원)보다 1.8% 낮게 체결됐어요"} in sell["subs"]
     assert rebuy["hl"] == "쉬지도 않고 바로 다시 샀어요" and rebuy["face"] == "focused"
     assert {"t": "팔면 곧바로 다시 사는 매크로예요"} in rebuy["subs"]
     assert state["fill_cursor"] == 13 and state["pos"]["qty"] == 226.11
 
 
+def test_a_breakeven_sell_is_not_called_a_win():
+    """10/20 업비트 KRW-GTC 마틴게일 — 가격 차이 +0.00%(0원) 매도를 '익절했어요! 웃어요'(초록)라고 말했다."""
+    gtc = dict(symbol="KRW-GTC", base="GTC", exchange="upbit", rule="H")
+    state = started_state()
+    _, state = ac.decide(state, facts(**gtc), fills=[fill(1, "BUY", 24.0, 425.0, NOW - 30 * MIN)], now_ms=NOW)
+    says, state = ac.decide(state, facts(**gtc), fills=[fill(2, "SELL", 24.0, 425.0, NOW - MIN, reason="익절")], now_ms=NOW)
+    sell = says[0]
+    # 같은 값에 팔면 사고판 수수료만큼 손해 — 웃지 않고 손해(빨강)로
+    assert sell["hl"] == "규칙대로 팔았어요" and sell["face"] == "focused" and sell["nums_tone"] == "down"
+    assert sell["nums"] == "-10원 · -0.10%"
+    assert {"t": "425원 체결 · 수수료 0.05% × 2 뺀 값"} in sell["subs"]
+    # 가격이 수수료만큼만 올라 남은 게 없으면 본전 — 차분한 얼굴 · 색 없음 · '+0원' 이 아니라 '0원'
+    _, state = ac.decide(state, facts(**gtc), fills=[fill(5, "BUY", 24.0, 425.0, NOW - 50_000)], now_ms=NOW)
+    says, state = ac.decide(state, facts(**gtc), fills=[fill(6, "SELL", 24.0, 425.43, NOW - 40_000, reason="익절")],
+                            now_ms=NOW)
+    even = says[0]
+    assert even["hl"] == "본전에 팔았어요" and even["face"] == "calm" and even["nums_tone"] == ""
+    assert even["nums"] == "0원 · 0.00%"
+    # 수수료를 넘는 이익은 그대로 익절
+    _, state = ac.decide(state, facts(**gtc), fills=[fill(3, "BUY", 24.0, 425.0, NOW - 30_000)], now_ms=NOW)
+    says, _ = ac.decide(state, facts(**gtc), fills=[fill(4, "SELL", 24.0, 430.0, NOW, reason="익절")], now_ms=NOW)
+    assert says[0]["hl"].startswith("익절") and says[0]["nums"] == "+110원 · +1.08%" and says[0]["nums_tone"] == "up"
+    # 가격은 조금 올랐어도 수수료를 빼면 손해면 웃지 않는다
+    assert ac.rounds_to_zero(0.4, "KRW-GTC") and not ac.rounds_to_zero(0.6, "KRW-GTC")
+    assert ac.rounds_to_zero(0.004, "BTCUSDT") and not ac.rounds_to_zero(0.01, "BTCUSDT")
+
+
 def test_stop_loss_sell_and_short_positions_and_reasons():
     state = started_state()
     _, state = ac.decide(state, facts(rule="F"), fills=[fill(1, "BUY", 1, 100.0, NOW - MIN, reason="RSI 30.1 ≤ 32 · 진입")], now_ms=NOW)
     says, state = ac.decide(state, facts(rule="F"), fills=[fill(2, "SELL", 1, 97.0, NOW, reason="손절")], now_ms=NOW)
-    assert says[0]["face"] == "calm" and says[0]["nums"] == "-3원 · -3.00%" and says[0]["nums_tone"] == "down"
+    assert says[0]["face"] == "calm" and says[0]["nums"] == "-3원 · -3.08%" and says[0]["nums_tone"] == "down"
     first, _ = ac.decide(started_state(), facts(rule="F"), fills=[fill(3, "BUY", 1, 100.0, NOW, reason="RSI 30.1 ≤ 32 · 진입")],
                          now_ms=NOW)
     assert {"t": "산 이유: RSI 30.1 ≤ 32"} in first[0]["subs"]
@@ -99,7 +127,7 @@ def test_stop_loss_sell_and_short_positions_and_reasons():
     opened, state = ac.decide(state, short, fills=[fill(4, "SELL", 2, 100.0, NOW - MIN, reason="데드크로스 · 진입")], now_ms=NOW)
     assert opened[0]["hl"] == "팔아서 들어갔어요!" and opened[0]["nums"] == "100.00 USDT · 2개 · 200.00 USDT"
     closed, _ = ac.decide(state, short, fills=[fill(5, "BUY", 2, 95.0, NOW, reason="골든크로스 · 청산")], now_ms=NOW)
-    assert closed[0]["nums"] == "+10.00 USDT · +5.00%" and {"t": "정리한 이유: 골든크로스"} in closed[0]["subs"]
+    assert closed[0]["nums"] == "+9.61 USDT · +4.80%" and {"t": "정리한 이유: 골든크로스"} in closed[0]["subs"]
 
 
 def test_loss_and_gain_bands_speak_once_per_band_and_rearm_for_a_new_position():
@@ -396,7 +424,7 @@ def test_closing_on_stop_and_the_end_comes_last_with_a_clean_note():
                                          note="청산 완료 후 종료 · 최소 주문 단위 미만 잔여 수량 9.72281100076e-09 KRW-ICNT"),
                             fills=final, now_ms=NOW + 10_000)
     assert [s["kind"] for s in says] == ["fill", "end"]
-    assert says[0]["hl"] == "종료하면서 정리했어요" and says[0]["nums"] == "-4,070원 · -8.57%"
+    assert says[0]["hl"] == "종료하면서 정리했어요" and says[0]["nums"] == "-4,106원 · -8.65%"
     assert says[1]["at_ms"] >= says[0]["at_ms"] and says[1]["subs"] == [{"t": "청산 완료 후 종료"}]
     assert says[1]["nums"] == "누적 실현 -2,283원"
 

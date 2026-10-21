@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import List, Optional
 
 from sqlmodel import select
 
@@ -127,3 +127,41 @@ def has_unapplied(db, session_id: int) -> bool:
     """아직 장부에 접지 않은 체결 행이 있는가."""
     return db.exec(select(RunnerFill.id).where(RunnerFill.session_id == session_id,
                                                RunnerFill.applied_ms == 0)).first() is not None
+
+
+FOLD_BATCH = 50  # 한 틱에 접는 체결 행 — 보통 한두 개다
+
+
+def unapplied_fills(db, session_id: int, limit: int = FOLD_BATCH) -> List[dict]:
+    """아직 장부에 접지 않은 체결 행(들어온 순서). 각 행에 그 명령의 주문 번호(ref)를 붙인다 — 로컬 체결은 빈 값."""
+    rows = list(db.exec(select(RunnerFill).where(RunnerFill.session_id == session_id, RunnerFill.applied_ms == 0)
+                        .order_by(RunnerFill.id.asc()).limit(limit)).all())
+    ids = {row.command_id for row in rows if row.command_id}
+    refs = dict(db.exec(select(RunnerCommand.id, RunnerCommand.order_ref).where(RunnerCommand.id.in_(ids))).all()) if ids else {}
+    return [{"id": row.id, "key": row.fill_key, "ref": refs.get(row.command_id, "") if row.command_id else "",
+             "command_id": row.command_id, "source": row.source, "side": row.side, "executed_qty": row.executed_qty,
+             "acquired_qty": row.acquired_qty, "price": row.price, "fee_quote": row.fee_quote,
+             "fee_known": row.fee_known, "reason": row.reason, "ts_ms": row.runner_ts_ms} for row in rows]
+
+
+TERMINAL = ("acked", "failed", "expired", "cancelled")
+
+
+def commands_for_refs(db, session_id: int, refs) -> List[RunnerCommand]:
+    """주문 번호로 명령 행을 찾는다(끝난 것 · 진행 중인 것 모두)."""
+    refs = [str(ref) for ref in refs if ref]
+    if not refs:
+        return []
+    return list(db.exec(select(RunnerCommand).where(RunnerCommand.session_id == session_id,
+                                                    RunnerCommand.order_ref.in_(refs))
+                        .order_by(RunnerCommand.seq.asc())).all())
+
+
+def mark_applied(db, ids, now_ms: int) -> None:
+    ids = [int(i) for i in ids]
+    if not ids:
+        return
+    for row in db.exec(select(RunnerFill).where(RunnerFill.id.in_(ids), RunnerFill.applied_ms == 0)).all():
+        row.applied_ms = int(now_ms)
+        db.add(row)
+

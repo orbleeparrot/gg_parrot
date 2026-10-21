@@ -77,7 +77,8 @@ def _now_ms() -> int:
 class _Live:
     """돌고 있는 세션 하나 — 드라이버·틱 태스크·마감봉 구독."""
 
-    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved", "exchange", "rolled_back")
+    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved", "exchange", "rolled_back",
+                 "unsaved_fold")
 
     def __init__(self, session_id: int, driver: StrategyDriver, exchange: str = "binance") -> None:
         self.session_id = session_id
@@ -95,6 +96,8 @@ class _Live:
         # 이 드라이버에 적용한 되돌리기: 명령 id → 그때 취소하기로 한 뒤 명령 id. heartbeat 의 저장이 실패해 실행기가
         # 같은 ack 를 다시 보내면 같은 결과를 다시 쓴다(드라이버는 이미 되돌렸으니 체결 수 검사로 거절하면 안 된다).
         self.rolled_back: Dict[int, List[int]] = {}
+        # 체결 기준 장부: 접었는데 저장하지 못한 결과(체결 행 id · 되돌림 표시할 명령 id · state_json · 이벤트) — 다음 틱에 먼저 다시 쓴다.
+        self.unsaved_fold: Optional[tuple] = None
 
 
 _drivers: Dict[int, _Live] = {}
@@ -274,6 +277,8 @@ async def _start_driver(session_id: int) -> bool:
     if state:
         driver.restore(state, leg_equity={}, total_equity=driver.initial)
         driver.trade_count = int(state.get("trade_count") or 0)
+    if driver.fill_ledger:
+        await _drop_unsent_orders(session_id, driver)
     # 그 봉 하나만 실시간 봉처럼 넘긴다 — 의도가 서면 첫 틱(≈ 다음 시가)에 체결된다. 더 오래 끊겼어도 묵은 봉의
     # 신호로 한꺼번에 사고팔지 않게 가장 최근 봉 하나만.
     for symbol, candle in replay.items():
@@ -399,7 +404,7 @@ def _note_loop_error(session_id: int) -> None:
 
 
 async def _tick_once(live: _Live) -> None:
-    """(저장 못 한 체결 먼저) → 시세 한 번 → 틱 → 체결이면 명령 기록 → 주기적 체크포인트.
+    """(저장 못 한 체결 먼저) → (체결 기준 장부면 체결 접기) → 시세 한 번 → 틱 → 체결이면 명령 기록 → 주기적 체크포인트.
 
     드라이버 상태(state_json)는 루프 스레드에서 스냅샷해 워커에 문자열로 넘긴다 — 마감봉 콜백이
     루프에서 sim 을 바꾸는 동안 워커가 state() 를 읽으면 반쪽 상태가 저장될 수 있다.
@@ -414,6 +419,11 @@ async def _tick_once(live: _Live) -> None:
                           live.session_id, len(live.unsaved))
             return
         live.last_checkpoint = time.monotonic()
+    if live.driver.fill_ledger:
+        try:
+            await _fold_once(live)
+        except Exception:
+            log.exception("runner engine: session %s fill fold failed — will retry next tick", live.session_id)
     try:
         price = await asyncio.to_thread(
             get_ticker_price_cached, live.driver.symbol, exchange=live.exchange)
@@ -443,6 +453,181 @@ async def _tick_once(live: _Live) -> None:
         except Exception:
             log.exception("runner engine: session %s checkpoint failed", live.session_id)
         live.last_checkpoint = time.monotonic()
+
+
+# --- 체결 기준 장부: 체결 기록표 → 장부 ------------------------------------------
+def _ledger_of(driver: StrategyDriver):
+    sim = driver.legs[0].sim
+    return getattr(sim, "inner", sim).ledger
+
+
+def _load_fold(session_id: int, open_refs: List[str], now_ms: int) -> Optional[dict]:
+    """(워커 스레드) 접을 것 — 안 접은 체결 행(들어온 순서) + 끝난 미결 주문. 세션이 끝났으면 None.
+
+    체결 행이 한 묶음(FOLD_BATCH)을 넘게 밀려 있으면 끝난 주문은 다음 틱에 — 주문의 체결이 장부에 다 들어간 뒤에 정리한다.
+    체결 없이 끝난 진입(실패 · 만료)에는 다시 사기 전 기다릴 시각을 붙인다(옛 되돌리기와 같은 대기 — 연속일수록 길게).
+    """
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.status != "running":
+            return None
+        fills = runner_fills.unapplied_fills(db, session_id)
+        resolutions: List[dict] = []
+        if len(fills) < runner_fills.FOLD_BATCH:
+            minutes = None
+            for cmd in runner_fills.commands_for_refs(db, session_id, open_refs):
+                if cmd.status not in runner_fills.TERMINAL:
+                    continue
+                hold = None
+                if cmd.action in ENTRY_SIDES and cmd.status in ("failed", "expired") and float(cmd.executed_qty or 0) <= 0:
+                    if minutes is None:
+                        minutes = _retry_minutes(db, row)
+                    hold = now_ms + minutes * 60_000
+                resolutions.append({"ref": cmd.order_ref, "status": cmd.status, "hold_until_ms": hold,
+                                    "command_id": cmd.id, "seq": cmd.seq, "action": cmd.action})
+        return {"fills": fills, "resolutions": resolutions, "user_id": row.user_id}
+
+
+def _persist_fold(session_id: int, fill_ids: List[int], rolled_ids: List[int], state_json: str, events: List[dict]) -> None:
+    """(워커 스레드) 접은 결과를 한 트랜잭션에 — 체결 행 '접음' 표시 · 체결 없이 끝난 진입의 되돌림 표시 · state_json · 이벤트."""
+    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None:
+            return
+        runner_fills.mark_applied(db, fill_ids, _now_ms())
+        for cid in rolled_ids:
+            cmd = db.get(RunnerCommand, cid)
+            if cmd is not None and cmd.session_id == session_id and cmd.rollback_state not in (ROLLED_BACK, ROLLED_BACK_ALSO):
+                cmd.rollback_state = ROLLED_BACK  # 연속으로 안 나간 진입 횟수를 센다(_retry_minutes)
+                db.add(cmd)
+        if row.status == "running":
+            row.state_json = state_json
+        db.add(row)
+        if events:
+            _append_events(db, row, events, component="engine")
+        db.commit()
+
+
+async def _fold_once(live: _Live) -> None:
+    """체결 기록표에서 안 접은 체결 · 끝난 주문을 읽어 장부에 접고 저장한다. 같은 체결 키는 장부가 한 번만 받는다."""
+    if live.unsaved_fold is not None:
+        await asyncio.to_thread(_persist_fold, live.session_id, *live.unsaved_fold)
+        live.unsaved_fold = None
+    ledger = _ledger_of(live.driver)
+    data = await asyncio.to_thread(_load_fold, live.session_id, list(ledger.orders), _now_ms())
+    if data is None:
+        live.stop_flag = True
+        return
+    if not data["fills"] and not data["resolutions"]:
+        return
+    result = live.driver.fold(fills=data["fills"], resolutions=data["resolutions"])
+    resolved = set(result["resolved"])
+    rolled = [r["command_id"] for r in data["resolutions"] if r["hold_until_ms"] and r["ref"] in resolved]
+    pending = ([f["id"] for f in data["fills"]], rolled, json.dumps(live.driver.state()),
+               _ledger_events(live, data, result))
+    try:
+        await asyncio.to_thread(_persist_fold, live.session_id, *pending)
+    except Exception:
+        live.unsaved_fold = pending  # 장부는 이미 접었다 — 저장만 다음 틱에 다시(키가 있어 두 번 접히지 않는다)
+        raise
+    live.last_checkpoint = time.monotonic()
+
+
+async def _drop_unsent_orders(session_id: int, driver: StrategyDriver) -> None:
+    """되살린 장부의 미결 주문 중 명령 행이 없는 것 — 신호를 명령으로 저장하기 전에 프로세스가 끝났다. 보낸 적이 없으니
+    체결도 없다 — 취소로 정리한다(남겨 두면 그 주문이 끝나기를 기다리며 판단이 영영 보류된다)."""
+    ledger = _ledger_of(driver)
+    refs = list(ledger.orders)
+    if not refs:
+        return
+
+    def known() -> set:
+        with get_session() as db:
+            return {c.order_ref for c in runner_fills.commands_for_refs(db, session_id, refs)}
+
+    missing = [ref for ref in refs if ref not in await asyncio.to_thread(known)]
+    if not missing:
+        return
+    driver.fold(resolutions=[{"ref": ref, "status": "cancelled"} for ref in missing])
+    events = [{"ts": _now_iso(), "kind": "warn", "severity": "WARN", "event_name": "engine.ledger_order_dropped",
+               "event_key": f"session:{session_id}:ledger:{ref}:dropped", "operation_id": f"session:{session_id}",
+               "details": {"order_ref": ref, "verification": "server_command_state"},
+               "message": "명령으로 저장되기 전에 서버가 다시 시작된 주문이라 보내지 않고 서버 장부에서 뺐어요."}
+              for ref in missing]
+    await asyncio.to_thread(_persist_fold, session_id, [], [], json.dumps(driver.state()), events)
+
+
+def _amount(value: float) -> str:
+    value = float(value or 0.0)
+    text = f"{value:,.2f}" if abs(value) >= 1 else f"{value:.8f}"
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _ledger_events(live: _Live, data: dict, result: dict) -> List[dict]:
+    """장부를 바꾼 일을 실행 기록에 한 줄씩. 같은 체결 · 같은 정리는 한 번만 남는다(event_key)."""
+    from .exchanges import quote_currency
+
+    quote = quote_currency(live.exchange)
+    sid = live.session_id
+    seqs = {r["ref"]: r for r in data["resolutions"]}
+    out = []
+
+    def add(key: str, kind: str, severity: str, name: str, message: str, details: dict) -> None:
+        out.append({"ts": _now_iso(), "kind": kind, "severity": severity, "event_name": name,
+                    "event_key": f"session:{sid}:ledger:{key}", "operation_id": f"session:{sid}",
+                    "details": {**details, "verification": "runner_reported_not_exchange_verified"}, "message": message})
+
+    for ev in result.get("events") or []:
+        kind = ev.get("kind")
+        ref = str(ev.get("ref") or "")
+        if kind == "entry_filled":
+            if ev.get("late"):
+                add(f"{ref}:late:{ev['qty']!r}", "warn", "WARN", "engine.ledger_late_fill",
+                    f"정리한 주문의 매수 체결이 늦게 왔어요 — 서버 장부에 넣었어요 · {_amount(ev['qty'])} @ {_amount(ev['price'])} {quote}",
+                    {"order_ref": ref, "qty": ev["qty"], "price": ev["price"]})
+            else:
+                add(f"{ref}:fill:{ev['qty']!r}", "info", "INFO", "engine.ledger_entry_filled",
+                    f"실제 체결로 서버 장부를 맞췄어요 · {_amount(ev['qty'])} @ {_amount(ev['price'])} {quote}"
+                    f" · 평단 {_amount(ev['avg_before'])} → {_amount(ev['avg_after'])} {quote}",
+                    {"order_ref": ref, "virtual_price": ev.get("virtual_price"), "price": ev["price"],
+                     "qty": ev["qty"], "fee": ev["fee"], "avg_before": ev["avg_before"], "avg_after": ev["avg_after"]})
+        elif kind == "entry_unfilled":
+            what = "첫 매수" if ev.get("order_kind") == "base" else f"물타기 {ev.get('tier')}차"
+            hold = (seqs.get(ref) or {}).get("hold_until_ms")
+            tail = f" · {_hold_phrase(hold, _now_ms(), '진입')}" if hold else ""
+            add(f"{ref}:unfilled", "warn", "WARN", "engine.ledger_entry_unfilled",
+                f"{what} 주문이 체결되지 않아 서버 장부에서 뺐어요{tail}",
+                {"order_ref": ref, "status": ev.get("status"), "tier": ev.get("tier")})
+        elif kind == "entry_partial":
+            add(f"{ref}:partial", "info", "INFO", "engine.ledger_entry_partial",
+                f"물타기 {ev.get('tier')}차가 일부만 체결됐어요 · 남은 예산 {_amount(ev['remaining'])} {quote}은"
+                f" {_amount(ev['line'])} {quote} 이하에서만 다시 사요",
+                {"order_ref": ref, "tier": ev.get("tier"), "line": ev.get("line"), "remaining": ev.get("remaining")})
+        elif kind == "exit_filled":
+            source = "실행기 로컬 정리" if ev.get("source") == "local" else "청산"
+            if ev.get("ended"):
+                dust = (f" · 팔 수 없는 잔량 {_amount(ev['dust_qty'])}개는 다음 매수 평단에 합쳐요"
+                        if ev.get("dust_qty") else "")
+                message = (f"{source} 체결로 포지션을 정리했어요 · {_amount(ev['qty'])} @ {_amount(ev['price'])} {quote}"
+                           f" · 실현손익 {'+' if ev['pnl'] > 0 else ''}{_amount(ev['pnl'])} {quote}{dust}")
+            else:
+                message = (f"{source}이 일부 체결됐어요 · {_amount(ev['qty'])} @ {_amount(ev['price'])} {quote}"
+                           f" · 남은 {_amount(ev['left'])}개")
+            add(f"exit:{ref}:{ev['qty']!r}:{ev['price']!r}", "info", "INFO", "engine.ledger_exit_filled", message,
+                {"order_ref": ref, "qty": ev["qty"], "price": ev["price"], "pnl": ev["pnl"], "ended": ev["ended"],
+                 "dust_qty": ev.get("dust_qty", 0.0)})
+        elif kind in ("exit_unfilled", "exit_partial"):
+            message = ("청산 주문이 체결되지 않아 보유를 그대로 둬요 · 다음 봉에서 다시 판단해요" if kind == "exit_unfilled"
+                       else f"청산 주문이 일부만 체결되고 끝났어요 · 남은 {_amount(ev['left'])}개는 다음 봉에서 다시 판단해요")
+            add(f"{ref}:{kind}", "warn", "WARN", f"engine.ledger_{kind}", message,
+                {"order_ref": ref, "status": ev.get("status"), "sold": ev.get("sold"), "left": ev.get("left")})
+        elif kind == "sell_without_position":
+            add(f"orphan-sell:{ref}:{ev['qty']!r}", "warn", "WARN", "engine.ledger_sell_without_position",
+                f"서버 장부에 보유가 없는데 매도 체결 보고가 왔어요 · {_amount(ev['qty'])} @ {_amount(ev['price'])} {quote}"
+                " — 거래소 보유를 확인해 주세요.", {"order_ref": ref, "qty": ev["qty"], "price": ev["price"]})
+    return out
 
 
 def _runner_is_stale(row: RunSession, now: datetime) -> bool:

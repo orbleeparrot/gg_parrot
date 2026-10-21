@@ -374,3 +374,110 @@ def test_runner_restart_starts_a_separate_ledger(flow):
     assert other.sim.lots == [] and other.sim.ledger.orders == {} and other.sim.ledger.keys == []
     with get_session() as db:
         assert db.get(RunSession, server.sid).state_json == before
+
+
+# --- 2단계: 지정가 IOC(설계 §6) ---------------------------------------------------------------
+def ioc(runner, cmd, qty=0.0, price=0.0, fee=0.0):
+    """실행기가 지정가 IOC 를 냈다 — qty 0 이면 지정가보다 유리한 상대가 없어 체결 없이 끝났다(정상 결과)."""
+    side = "sell" if cmd["action"] == "sell" else "buy"
+    orders = [runner._order(side, qty, price, fee)] if qty > 0 else []
+    outcome = "ioc_unfilled" if qty == 0 else "ioc_partial"
+    runner.acks.append({"command_id": cmd["id"], "ok": True, "executed_qty": qty, "fill_price": price if qty else 0.0,
+                        "error": "", "outcome": outcome, "orders": orders})
+
+
+def _events(sid, name):
+    from app.db import RunSessionEvent
+    with get_session() as db:
+        return [e for e in db.exec(select(RunSessionEvent).where(RunSessionEvent.session_id == sid)).all()
+                if e.event_name == name]
+
+
+def test_tail_touch_no_longer_sells_below_the_take_profit_line(flow):
+    """세션 321 재현: 봉 고가만 익절선을 넘고 종가는 아래 — 지정가 IOC 는 팔리지 않고 보유가 그대로다."""
+    server, runner = flow()
+    holding(server, runner)
+    server.bar(500, 511, 495, 498)  # 고가 511 ≥ 익절선 510, 종가 498
+    [tp] = runner.beat()
+    assert tp["order_type"] == "limit_ioc" and tp["limit_price"] == pytest.approx(510.0)
+    ioc(runner, tp)  # 지금 매수 호가 498 — 510 이상에 살 사람이 없다
+    assert runner.beat() == []
+    server.tick()
+    assert server.sim.total_qty() == pytest.approx(100.0) and server.sim.ledger.exit is None
+    assert runner.held == pytest.approx(100.0) and server.sim.closed_trades == []  # 손해 매도 없음
+    with get_session() as db:
+        assert db.get(RunnerCommand, tp["id"]).status == "acked"  # 실패 · 재시도가 아니다
+        row = db.get(RunSession, server.sid)
+        assert row.note == ""
+    [event] = _events(server.sid, "engine.ledger_exit_unfilled")
+    assert event.message.startswith("지정가 IOC — 510 KRW 이상에 팔 수 있는 상대가 없어 팔지 않았어요")
+    server.bar(498, 512, 497, 511)  # 다음 봉 — 다시 판단
+    [again] = runner.beat()
+    assert again["action"] == "sell" and again["order_type"] == "limit_ioc" and again["id"] != tp["id"]
+    ioc(runner, again, 100.0, 511.0, 25.55)  # 이번엔 지정가 이상에 다 팔렸다
+    runner.acks[-1]["outcome"] = "execution_reported"
+    runner.beat()
+    server.tick()
+    assert server.sim.closed_trades[-1] == pytest.approx(100 * (511.0 - 500.0) - 25.55)
+
+
+def test_ioc_partial_exit_leaves_the_rest_to_the_strategy(flow):
+    server, runner = flow()
+    holding(server, runner)
+    server.bar(500, 511, 499, 505)
+    [tp] = runner.beat()
+    ioc(runner, tp, 30.0, 510.0, 7.65)
+    runner.beat()
+    server.tick()
+    assert server.sim.total_qty() == pytest.approx(70.0) and server.sim.ledger.exit is None
+    [event] = _events(server.sid, "engine.ledger_exit_partial")
+    assert "남은 70개는 다음 봉에서 다시 판단해요" in event.message
+
+
+def test_ioc_safety_order_without_a_seller_reopens_its_line_without_a_hold(flow):
+    server, runner = flow()
+    holding(server, runner)
+    server.bar(500, 500, 494.0, 497)  # 저가만 1차선 495 아래 — 종가 497
+    [so] = runner.beat()
+    assert so["order_type"] == "limit_ioc" and so["limit_price"] == pytest.approx(495.0)
+    ioc(runner, so)
+    runner.beat()
+    server.tick()
+    assert server.sim._reopen[1]["remaining"] == pytest.approx(50000)
+    assert eng._drivers[server.sid].driver.entry_hold_until_ms is None  # 오류가 아니다 — 기다리지 않는다
+    [event] = _events(server.sid, "engine.ledger_entry_unfilled")
+    assert event.message.startswith("물타기 1차 — 495 KRW 이하에 살 수 있는 물량이 없어 사지 않았어요")
+
+
+def test_price_unit_error_is_still_an_error(flow):
+    server, runner = flow()
+    holding(server, runner)
+    server.bar(500, 511, 499, 505)
+    [tp] = runner.beat()
+    runner.execute(tp, 0.0, ok=False, error="주문 가격 단위가 맞지 않아요")
+    [again] = runner.beat()
+    assert again["id"] == tp["id"]  # 지금처럼 다시 보낸다(청산 실패 1/3)
+    with get_session() as db:
+        assert db.get(RunSession, server.sid).note == eng.EXIT_FAIL_NOTE
+
+
+def test_legacy_level_20_session_never_gets_limit_orders(monkeypatch):
+    key = client.get("/api/me/runner/key", headers=_auth(_signup())).json()["key"]
+    body = {"symbol": "KRW-GTC", "exchange": "upbit", "position_side": "long", "leverage": 1, "market": "spot",
+            "testnet": False, "mode": "live", "human_summary": "t", "macro": H_KRW, "runner_version": "20"}
+    sid = client.post("/api/runner/start", json=body, headers={"X-Runner-Key": key}).json()["session_id"]
+    eng._drivers.clear()
+    server = Server(monkeypatch, sid)
+    try:
+        server.bar(500, 501, 499, 500)
+        runner = Runner(key, sid)
+        [base] = runner.beat()
+        runner.execute(base, 100.0, 500.0, 25.0)
+        runner.beat()
+        server.bar(500, 511, 499, 505)
+        commands = runner.beat()
+        assert commands and all("order_type" not in c for c in commands)
+    finally:
+        server.close()
+        client.post("/api/runner/stopped", json={"session_id": sid, "status": "stopped"}, headers={"X-Runner-Key": key})
+        eng._drivers.clear()

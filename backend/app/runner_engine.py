@@ -597,9 +597,16 @@ def _ledger_events(live: _Live, data: dict, result: dict) -> List[dict]:
             what = "첫 매수" if ev.get("order_kind") == "base" else f"물타기 {ev.get('tier')}차"
             hold = (seqs.get(ref) or {}).get("hold_until_ms")
             tail = f" · {_hold_phrase(hold, _now_ms(), '진입')}" if hold else ""
-            add(f"{ref}:unfilled", "warn", "WARN", "engine.ledger_entry_unfilled",
-                f"{what} 주문이 체결되지 않아 서버 장부에서 뺐어요{tail}",
-                {"order_ref": ref, "status": ev.get("status"), "tier": ev.get("tier")})
+            if ev.get("order_type") == "limit_ioc" and ev.get("status") == "acked":
+                # 지정가 IOC 무체결은 정상 결과 — 그 가격선에 다시 열어 두고 기다리지 않는다(설계 §6).
+                add(f"{ref}:unfilled", "info", "INFO", "engine.ledger_entry_unfilled",
+                    f"{what} — {_amount(ev.get('line') or 0.0)} {quote} 이하에 살 수 있는 물량이 없어 사지 않았어요"
+                    " · 그 가격선에 다시 열어 둬요",
+                    {"order_ref": ref, "status": ev.get("status"), "tier": ev.get("tier"), "order_type": "limit_ioc"})
+            else:
+                add(f"{ref}:unfilled", "warn", "WARN", "engine.ledger_entry_unfilled",
+                    f"{what} 주문이 체결되지 않아 서버 장부에서 뺐어요{tail}",
+                    {"order_ref": ref, "status": ev.get("status"), "tier": ev.get("tier")})
         elif kind == "entry_partial":
             add(f"{ref}:partial", "info", "INFO", "engine.ledger_entry_partial",
                 f"물타기 {ev.get('tier')}차가 일부만 체결됐어요 · 남은 예산 {_amount(ev['remaining'])} {quote}은"
@@ -619,10 +626,20 @@ def _ledger_events(live: _Live, data: dict, result: dict) -> List[dict]:
                 {"order_ref": ref, "qty": ev["qty"], "price": ev["price"], "pnl": ev["pnl"], "ended": ev["ended"],
                  "dust_qty": ev.get("dust_qty", 0.0)})
         elif kind in ("exit_unfilled", "exit_partial"):
-            message = ("청산 주문이 체결되지 않아 보유를 그대로 둬요 · 다음 봉에서 다시 판단해요" if kind == "exit_unfilled"
-                       else f"청산 주문이 일부만 체결되고 끝났어요 · 남은 {_amount(ev['left'])}개는 다음 봉에서 다시 판단해요")
-            add(f"{ref}:{kind}", "warn", "WARN", f"engine.ledger_{kind}", message,
-                {"order_ref": ref, "status": ev.get("status"), "sold": ev.get("sold"), "left": ev.get("left")})
+            limit = ev.get("order_type") == "limit_ioc"
+            if limit and kind == "exit_unfilled":
+                # 지정가 IOC 무체결은 정상 결과 — 익절선보다 싸게 팔지 않았다(세션 321 의 꼬리 매도를 막는 자리).
+                message = (f"지정가 IOC — {_amount(ev.get('limit_price') or 0.0)} {quote} 이상에 팔 수 있는 상대가 없어"
+                           " 팔지 않았어요 · 보유 그대로 · 다음 봉에서 다시 판단해요")
+            elif limit:
+                message = (f"지정가 IOC 로 일부만 팔렸어요 · 남은 {_amount(ev['left'])}개는 다음 봉에서 다시 판단해요")
+            elif kind == "exit_unfilled":
+                message = "청산 주문이 체결되지 않아 보유를 그대로 둬요 · 다음 봉에서 다시 판단해요"
+            else:
+                message = f"청산 주문이 일부만 체결되고 끝났어요 · 남은 {_amount(ev['left'])}개는 다음 봉에서 다시 판단해요"
+            add(f"{ref}:{kind}", "info" if limit else "warn", "INFO" if limit else "WARN", f"engine.ledger_{kind}",
+                message, {"order_ref": ref, "status": ev.get("status"), "sold": ev.get("sold"), "left": ev.get("left"),
+                          "order_type": ev.get("order_type") or ""})
         elif kind == "sell_without_position":
             add(f"orphan-sell:{ref}:{ev['qty']!r}", "warn", "WARN", "engine.ledger_sell_without_position",
                 f"서버 장부에 보유가 없는데 매도 체결 보고가 왔어요 · {_amount(ev['qty'])} @ {_amount(ev['price'])} {quote}"
@@ -802,7 +819,7 @@ def _execution_report_event(row: RunSession, cmd: RunnerCommand, ack: dict) -> d
     Even positive facts remain runner reports, not independent exchange checks.
     """
     outcome = ack.get("outcome")
-    no_order = outcome in ("no_position_no_order", "duplicate_command_no_reexecution")
+    no_order = outcome in ("no_position_no_order", "duplicate_command_no_reexecution", "ioc_unfilled")
     reported_fill = not no_order and all(math.isfinite(value) and value > 0
                                          for value in (cmd.executed_qty, cmd.fill_price))
     mode = row.mode if row.mode in {"mock", "testnet", "live"} else ""
@@ -811,9 +828,15 @@ def _execution_report_event(row: RunSession, cmd: RunnerCommand, ack: dict) -> d
         summary = "명령 처리 확인 · 보유 없음, 주문 없음"
     elif outcome == "duplicate_command_no_reexecution":
         summary = "명령 처리 확인 · 이미 처리한 명령, 재실행 없음"
+    elif outcome == "ioc_unfilled":
+        # 지정가 IOC 가 그 가격보다 유리한 상대를 못 만나 체결 없이 끝났다 — 정상 결과(재시도 · 시장가 전환 없음).
+        summary = f"지정가 IOC {cmd.limit_price:g} · 조건에 맞는 상대가 없어 체결 없음"
     elif reported_fill:
-        outcome = "execution_reported"
         label = "체결 보고" if mode in {"mock", "testnet"} else "체결 수량·가격 보고"
+        if outcome == "ioc_partial":
+            label = f"지정가 IOC {cmd.limit_price:g} 일부 체결"
+        else:
+            outcome = "execution_reported"
         summary = f"{label} · {cmd.action.upper()} {cmd.executed_qty:g} @ {cmd.fill_price:g}"
     else:
         outcome = "acknowledged_execution_unknown"

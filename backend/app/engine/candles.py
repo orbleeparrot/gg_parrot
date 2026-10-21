@@ -337,7 +337,8 @@ class CandleSim:
             # 다 팔렸다면 그 체결이 이미 포지션을 끝내며 이 주문을 정리했다(여기 오지 않는다).
             ledger.close_order(ref)
             return {"kind": "exit_unfilled" if not order.get("sold") else "exit_partial", "ref": ref,
-                    "status": status, "sold": float(order.get("sold") or 0.0), "left": self.total_qty()}
+                    "status": status, "sold": float(order.get("sold") or 0.0), "left": self.total_qty(),
+                    "order_type": order.get("order_type") or "", "limit_price": float(order.get("limit_price") or 0.0)}
         event = None
         if not order.get("actual"):
             lot = next((lot for lot in self.lots if lot.ref == ref), None)
@@ -349,7 +350,8 @@ class CandleSim:
                 if order.get("kind") == "base":
                     self._reset_position_state()  # 사지 못한 첫 매수 — 포지션은 없었다
             event = {"kind": "entry_unfilled", "ref": ref, "status": status, "order_kind": order.get("kind"),
-                     "tier": order.get("tier"), "price": order.get("price")}
+                     "tier": order.get("tier"), "price": order.get("price"), "line": order.get("line"),
+                     "order_type": order.get("order_type") or ""}
         if int(order.get("epoch", ledger.epoch)) == ledger.epoch:
             remaining = float(order["margin"]) - float(order.get("spent") or 0.0)
             reopened = self._entry_left(order, remaining, status)
@@ -489,7 +491,7 @@ class CandleSim:
             # 설계 §4: 물타기는 그 가격선 이하에서만 산다(지정가 IOC). 호가 단위 내림은 실행기가 한다.
             fill.order_type, fill.limit_price = "limit_ioc", float(line)
         self.ledger.orders[ref] = {
-            "order_type": fill.order_type,
+            "order_type": fill.order_type, "limit_price": fill.limit_price,
             "side": "buy", "kind": kind, "tier": int(tier), "line": float(line), "epoch": self.ledger.epoch,
             "qty": float(lot.qty), "price": float(lot.fill), "margin": float(margin), "fee": float(fee),
             "signal_ms": int(ts.timestamp() * 1000), "actual": False, "filled_qty": 0.0, "spent": 0.0,
@@ -758,7 +760,8 @@ class CandleSim:
             fill.order_type, fill.limit_price = "limit_ioc", float(close)
         ledger.orders[ref] = {"side": "sell", "kind": "stop" if is_stop else "exit", "epoch": ledger.epoch,
                               "qty": float(qty), "price": float(f), "is_stop": bool(is_stop),
-                              "signal_ms": int(ts.timestamp() * 1000), "sold": 0.0, "order_type": fill.order_type}
+                              "signal_ms": int(ts.timestamp() * 1000), "sold": 0.0, "order_type": fill.order_type,
+                              "limit_price": fill.limit_price}
         ledger.exit = ref
         return fill
 

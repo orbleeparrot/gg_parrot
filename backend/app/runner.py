@@ -36,8 +36,8 @@ from sqlmodel import Session, select
 from . import macro_signing
 from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
-from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession,
-                 RunSessionEvent, User, UserMacro, get_session)
+from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerFill, RunnerKey, RunnerLaunchTicket,
+                 RunSession, RunSessionEvent, User, UserMacro, get_session)
 from .engine import Macro, RuleType
 from .exchanges import is_domestic, normalize_exchange, validate_symbol
 
@@ -1475,6 +1475,7 @@ def _delete_session_rows(db, session_ids: list[int]) -> None:
     from . import agent_commentary
     db.exec(sql_delete(RunSessionEvent).where(RunSessionEvent.session_id.in_(session_ids)))
     db.exec(sql_delete(RunnerCommand).where(RunnerCommand.session_id.in_(session_ids)))
+    db.exec(sql_delete(RunnerFill).where(RunnerFill.session_id.in_(session_ids)))
     agent_commentary.delete_for_sessions(db, session_ids)
     db.exec(sql_delete(RunSession).where(RunSession.id.in_(session_ids)))
 
@@ -1566,8 +1567,9 @@ def prune_ended_sessions_batch(db, *, now: Optional[datetime] = None, limit: int
 
     counts = {"deleted_events": 0, "deleted_commands": 0}
     # 껄무새 중계 말풍선도 실행 기록과 같은 세는 칸(deleted_events)에 더한다 — 정리 지표의 칸을 늘리지 않는다.
+    # 체결 기록(runnerfill)은 명령과 같은 칸(deleted_commands)에 더한다 — 같은 이유.
     for model, key in ((RunSessionEvent, "deleted_events"), (RunnerCommand, "deleted_commands"),
-                       (AgentUtterance, "deleted_events")):
+                       (RunnerFill, "deleted_commands"), (AgentUtterance, "deleted_events")):
         child_ids = list(db.exec(select(model.id).where(model.session_id.in_(targets))
                                  .order_by(model.id.asc()).limit(1000)).all())
         if child_ids:
@@ -1579,8 +1581,9 @@ def prune_ended_sessions_batch(db, *, now: Optional[datetime] = None, limit: int
     without_events = ~exists(select(RunSessionEvent.id).where(RunSessionEvent.session_id == RunSession.id))
     without_commands = ~exists(select(RunnerCommand.id).where(RunnerCommand.session_id == RunSession.id))
     without_utterances = ~exists(select(AgentUtterance.id).where(AgentUtterance.session_id == RunSession.id))
+    without_fills = ~exists(select(RunnerFill.id).where(RunnerFill.session_id == RunSession.id))
     removed = db.exec(sql_delete(RunSession).where(
-        RunSession.id.in_(targets), *eligible, without_events, without_commands, without_utterances,
+        RunSession.id.in_(targets), *eligible, without_events, without_commands, without_utterances, without_fills,
     ).returning(RunSession.id)).all()
     db.flush()
     return {"deleted_sessions": len(removed), **counts,

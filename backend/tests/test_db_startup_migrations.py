@@ -24,7 +24,7 @@ def test_supabase_migrations_have_unique_versions():
 
 @pytest.mark.parametrize("table", ["dailyquestclaim", "runsessionevent", "boardimage", "boardpostvote",
                                    "boardreport", "browsernewspagecache",
-                                   "domesticcommunityitem", "domesticcommunitystate"])
+                                   "domesticcommunityitem", "domesticcommunitystate", "runnerfill"])
 def test_new_private_member_tables_are_secured_on_app_boot(table):
     state = current_schema()
     state["tables"][table] = False
@@ -47,6 +47,26 @@ def test_existing_news_article_schema_adds_pending_column_before_index():
     assert column in statements
     assert index in statements
     assert statements.index(column) < statements.index(index)
+
+
+def test_existing_runner_tables_add_fill_ledger_columns():
+    """체결 기준 장부(2026-10-21): 옛 세션 · 명령 행은 빈 값으로 남아 지금 경로로 돈다."""
+    state = current_schema()
+    state["columns"].pop(("runsession", "exec_policy"))
+    state["columns"].pop(("runnercommand", "order_ref"))
+    assert db._pg_migration_statements(state) == [
+        "ALTER TABLE runsession ADD COLUMN IF NOT EXISTS exec_policy TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE runnercommand ADD COLUMN IF NOT EXISTS order_ref TEXT NOT NULL DEFAULT ''",
+    ]
+
+
+def test_existing_fill_journal_gets_its_lookup_indexes():
+    state = current_schema()
+    state["indexes"] -= {"ux_runnerfill_session_key", "ix_runnerfill_session_applied"}
+    assert db._pg_migration_statements(state) == [
+        "CREATE INDEX IF NOT EXISTS ix_runnerfill_session_applied ON runnerfill (session_id, applied_ms, id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_runnerfill_session_key ON runnerfill (session_id, fill_key)",
+    ]
 
 
 def test_existing_collector_history_adds_rollup_columns_before_unique_index():

@@ -101,7 +101,7 @@ env -u DATABASE_URL NEWS_IMAGES_DISABLED=1 /data/aires/playground/clcleh123/mini
 
 ## 과제 2 — 스키마: exec_policy · order_ref · runnerfill
 
-파일: `backend/app/db.py`, `supabase/migrations/20261021120000_fill_ledger_v1.sql`, `backend/tests/test_db_startup_migrations.py`(늘림), `backend/app/runner.py`(`_delete_session_rows`)
+파일: `backend/app/db.py`, `supabase/migrations/20261021120000_fill_ledger_v1.sql`, `backend/tests/test_fill_ledger_schema.py`(새), `backend/tests/test_db_startup_migrations.py`(늘림), `backend/app/runner.py`(`_delete_session_rows` · `prune_ended_sessions_batch`)
 
 1. 실패하는 시험: 새 sqlite DB 에 `runsession.exec_policy` · `runnercommand.order_ref` · `runnerfill` 이 있다 / 옛 스키마에 기동 보정이 두 칸을 더하고 표를 만든다 / `(session_id, fill_key)` 유일이라 같은 키 두 번째 넣기가 막힌다 / 세션 정리 뒤 그 세션의 runnerfill 행이 0개.
 2. 돌려 실패를 확인한다.

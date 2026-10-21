@@ -533,6 +533,10 @@ class RunSession(SQLModel, table=True):
     # 투입금(USDT) — 세션 중 실제로 들어간 최대 금액(수량×진입가의 최대값). '투입금 대비 총수익률'의 분모.
     # 매크로의 시작 자금은 실계좌에 들어간 돈이 아니라(주문 상한) 분모로 쓰면 오해를 낳는다(2026-09-22).
     invested_usdt: float = 0.0
+    # 실행 방식 — 세션을 만들 때 한 번 정하고 바꾸지 않는다. 재기동 · 재연결 복구는 이 값만 본다.
+    # "fill_ledger_v1": 서버 전략 장부를 실행기가 보고한 실제 체결로 확정한다(runnerfill · 2026-10-21 설계 §9 결정 4).
+    # 빈 값: 지금 방식(신호 순간 장부 확정 · 주문이 안 나간 진입만 되돌림). 기존 세션은 모두 빈 값이다.
+    exec_policy: str = ""
 
 
 class RunSessionEvent(SQLModel, table=True):
@@ -593,6 +597,39 @@ class RunnerCommand(SQLModel, table=True):
     # 진입 명령만: 이 신호 직전의 서버 전략 상태(JSON). 주문이 나가지 않으면(실패 · 만료) 이걸로 서버 전략을
     # '사기 전' 으로 되돌린다. 되돌린 뒤에는 ROLLED_BACK 표시로 바뀐다(연속 실패 횟수를 센다).
     rollback_state: str = ""
+    # 서버 전략이 이 주문에 매긴 번호("o17") — fill_ledger_v1 세션만. 체결 보고를 장부의 그 주문(가상 롯 · 차수)에 잇는다.
+    order_ref: str = ""
+
+
+class RunnerFill(SQLModel, table=True):
+    """실행기가 보고한 실제 체결 한 건 — fill_ledger_v1 세션 서버 전략 장부의 원장(2026-10-21).
+
+    ack 의 ``orders``(서버 명령으로 낸 주문)와 하트비트의 ``local_fills``(실행기가 혼자 낸 손절 · 안전 규칙 정리)가
+    한 번씩 들어온다. 키는 실행기가 주문마다 새로 만드는 client_order_id — 같은 보고가 두 번 와도(응답 유실 ·
+    재전송) 행은 하나다. 서버 전략 루프가 틱마다 applied_ms 가 0 인 행을 장부에 접고 그 시각을 적는다.
+    """
+
+    __table_args__ = (
+        Index("ux_runnerfill_session_key", "session_id", "fill_key", unique=True),
+        Index("ix_runnerfill_session_applied", "session_id", "applied_ms", "id"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int
+    command_id: Optional[int] = None  # 로컬 체결은 None
+    fill_key: str
+    exchange_order_id: str = ""
+    source: str = ""  # command | local
+    side: str = ""  # buy | sell
+    status: str = ""  # 거래소 주문의 끝 상태(FILLED · CANCELED …)
+    executed_qty: float = 0.0
+    acquired_qty: float = 0.0  # 매수로 실제 늘어난 보유 — 기초자산으로 낸 수수료를 뺀 값
+    price: float = 0.0  # 평균 체결가
+    fee_quote: float = 0.0  # 견적 통화로 옮긴 수수료 전부(기초자산 수수료 포함)
+    fee_known: bool = False
+    reason: str = ""  # 로컬 체결 이유(stop_loss · forced …)
+    runner_ts_ms: int = Field(default=0, sa_type=BigInteger)
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    applied_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 장부에 안 접음
 
 
 class AgentUtterance(SQLModel, table=True):
@@ -1408,8 +1445,10 @@ def _migrate() -> None:
     })
     added.setdefault("runnercommand", {}).update({
         "rollback_state": "ALTER TABLE runnercommand ADD COLUMN rollback_state TEXT NOT NULL DEFAULT ''",
+        "order_ref": "ALTER TABLE runnercommand ADD COLUMN order_ref TEXT NOT NULL DEFAULT ''",
     })
     added.setdefault("runsession", {}).update({
+        "exec_policy": "ALTER TABLE runsession ADD COLUMN exec_policy TEXT NOT NULL DEFAULT ''",
         "runner_version": "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''",
         # 옛 행은 빈 값으로 남는다 — 그 세션은 testnet 플래그로만 읽는다(모드를 아무도 보내지 않았다).
         "mode": "ALTER TABLE runsession ADD COLUMN mode TEXT DEFAULT ''",
@@ -1556,6 +1595,7 @@ _PG_ADDED_COLUMNS = {
         "state_json": "TEXT DEFAULT ''",
         "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "pinned": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "exec_policy": "TEXT NOT NULL DEFAULT ''",
     },
     "tickernewssnapshot": {
         "claim_token": "TEXT DEFAULT ''", "last_observed_at": "TEXT DEFAULT ''",
@@ -1567,7 +1607,7 @@ _PG_ADDED_COLUMNS = {
         "next_collection_ms": "BIGINT DEFAULT 0", "observation_seq": "BIGINT DEFAULT 0",
         "latest_observation_seq": "BIGINT DEFAULT 0", "latest_observed_ms": "BIGINT DEFAULT 0",
     },
-    "runnercommand": {"rollback_state": "TEXT NOT NULL DEFAULT ''"},
+    "runnercommand": {"rollback_state": "TEXT NOT NULL DEFAULT ''", "order_ref": "TEXT NOT NULL DEFAULT ''"},
     "runnerlaunchticket": {
         "rejected_at": "TEXT DEFAULT ''",
         "rejected_version": "TEXT DEFAULT ''",
@@ -1587,10 +1627,12 @@ _PG_INDEXES = {
     "ix_runsession_user_macro_id": ("runsession", "user_macro_id"),
     "ix_newstitletranslation_processing_status": ("newstitletranslation", "processing_status"),
     "ix_newstitletranslation_claimed_ms": ("newstitletranslation", "claimed_ms"),
+    "ix_runnerfill_session_applied": ("runnerfill", "session_id, applied_ms, id"),
 }
 _PG_UNIQUE_INDEXES = {
     "ux_runsessionevent_session_key": ("runsessionevent", "session_id, event_key"),
     "ux_collectorrun_empty_bucket": ("collectorrun", "engine, status, empty_bucket_ms"),
+    "ux_runnerfill_session_key": ("runnerfill", "session_id, fill_key"),
 }
 _PG_BIGINT_COLUMNS = {
     "onchainholderstate": ("last_success_ms", "last_attempt_ms", "next_collection_ms", "claimed_ms", "observation_seq"),
@@ -1621,6 +1663,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
     "devnote", "newsheadlinearchive", "clienterror",
     "agentutterance", "agentcommentarystate",
+    "runnerfill",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

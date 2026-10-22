@@ -169,29 +169,61 @@ export const PENDING_NOTE =
   "실제 가격선은 첫 봉이 마감된 뒤에 나와요. 그때까지는 추측해서 그리지 않아요 — " +
   "지금 가격 기준으로 그으면 선이 가격을 따라 내려와 곧 살 것처럼 보여요.";
 
-export function liveLevelsOverlay(levels) {
+/** 지금 가격에서 가까운 칸부터 `count` 개. 격자는 칸이 많아 전부 그리면 줄무늬가 된다. */
+function nearestLevels(values, price, count) {
+  return (Array.isArray(values) ? values : [])
+    .map(num)
+    .filter((v) => ok(v) && v > 0)
+    .sort((a, b) => Math.abs(a - price) - Math.abs(b - price))
+    .slice(0, count);
+}
+
+export function liveLevelsOverlay(levels, price = 0) {
   if (!levels) return null;
-  const entry = num(levels.entry_target);
-  const stop = num(levels.trail_stop);
-  const activation = num(levels.trail_activation);
   const legend = [];
   const priceLines = [];
   const notes = [];
-  if (ok(entry) && entry > 0) {
-    legend.push({ label: "진입 목표", color: UP, dash: "5 3" });
-    priceLines.push({ price: entry, color: UP, dash: "5 3", label: `진입 목표 ${fmtPrice(entry)}` });
-    notes.push("가격이 이 선까지 내려오면 사요. 이 선은 기준가에 묶여 있어 가격을 따라 내려오지 않아요.");
+  // 한 선 = 범례 한 줄 + 가격선 한 줄. 값이 없거나 0 이하면 아무것도 그리지 않는다 —
+  // "이 규칙엔 그 선이 없다" 와 "아직 모른다" 를 둘 다 빈칸으로 받는다.
+  const add = (value, color, label, dash, note) => {
+    const v = num(value);
+    if (!ok(v) || v <= 0) return false;
+    legend.push({ label, color, dash });
+    priceLines.push({ price: v, color, dash, label: `${label} ${fmtPrice(v)}` });
+    if (note) notes.push(note);
+    return true;
+  };
+
+  const entry = num(levels.entry_target);
+  if (add(entry, UP, "진입 목표", "5 3")) {
+    // 선이 **위**면 뚫고 올라올 때 사고(변동성 돌파 · 골든크로스), **아래**면 내려올 때
+    // 산다(눌림목 · 격자). 한 문장으로 쓰면 둘 중 하나는 거짓말이 된다 — 파일럿에서
+    // "사는 선이 현재가보다 높은데 왜 안 사요?" 라는 질문을 실제로 받았다.
+    notes.push(ok(price) && price > 0 && entry > price
+      ? "가격이 이 선을 넘어서면 사요. 이 선은 봉마다 다시 계산돼요."
+      : "가격이 이 선까지 내려오면 사요. 이 선은 기준가에 묶여 있어 가격을 따라 내려오지 않아요.");
   }
-  if (ok(stop) && stop > 0) {
-    legend.push({ label: "트레일링 스탑", color: DOWN, dash: "5 3" });
-    priceLines.push({ price: stop, color: DOWN, dash: "5 3", label: `트레일링 스탑 ${fmtPrice(stop)}` });
-    notes.push("이익을 지키는 선이에요. 고점이 올라가면 이 선도 따라 올라가요.");
-  }
-  if (ok(activation) && activation > 0) {
-    legend.push({ label: "트레일 발동", color: UP, dash: "2 3" });
-    priceLines.push({ price: activation, color: UP, dash: "2 3", label: `트레일 발동 ${fmtPrice(activation)}` });
-    notes.push("여기까지 오르면 트레일링 스탑이 켜져요. 그 전에는 켜지지 않아요.");
-  }
+  add(levels.exit_target, DOWN, "파는 선", "5 3", "여기까지 오르면 팔아요.");
+  add(levels.stop_loss, DOWN, "손절선", "5 3", "여기까지 밀리면 손절해요.");
+  add(levels.trail_stop, DOWN, "트레일링 스탑", "5 3",
+    "이익을 지키는 선이에요. 고점이 올라가면 이 선도 따라 올라가요.");
+  add(levels.trail_activation, UP, "트레일 발동", "2 3",
+    "여기까지 오르면 트레일링 스탑이 켜져요. 그 전에는 켜지지 않아요.");
+  add(levels.reference, MID, "기준선", "2 3", "이 선을 기준으로 사고팔 자리를 잡아요.");
+  add(levels.band_upper, BAND, "위 밴드", "2 3");
+  add(levels.band_lower, BAND, "아래 밴드", "2 3");
+
+  // 격자는 칸마다 선이지만 범례는 사고파는 쪽마다 한 줄이면 된다.
+  const grid = (values, color, label) => {
+    const picked = nearestLevels(values, price, 2);
+    if (picked.length === 0) return;
+    legend.push({ label, color, dash: "2 3" });
+    picked.forEach((v) =>
+      priceLines.push({ price: v, color, dash: "2 3", label: `${label} ${fmtPrice(v)}` }));
+  };
+  grid(levels.buy_levels, UP, "격자 매수");
+  grid(levels.sell_levels, DOWN, "격자 매도");
+
   if (priceLines.length === 0) {
     // 서버가 이 선을 **맡고 있는데** 아직 값이 없는 상태(첫 봉 마감 전, 또는 옛 체크포인트).
     // null 을 돌려주면 computeSessionOverlay 가 미리보기로 메우고, 그 미리보기는 '현재가 -3%'
@@ -243,7 +275,10 @@ export function computeSessionOverlay(macro, entryPrice, side, candles, levels =
   const form = flattenMacro(macro, side);
   const base = form ? computeStrategyOverlay(form, candles) : null;
   const entry = entryPriceOverlay(entryPrice, side || macro?.position_side);
-  const live = liveLevelsOverlay(levels);
+  // 격자처럼 선이 여럿인 규칙은 '지금 가격에서 가까운 칸' 을 골라야 한다. 마지막 종가를
+  // 그 기준으로 넘긴다 — 없으면 0 이고, 그때는 앞에서부터 고른다.
+  const last = candles?.length ? num(candles[candles.length - 1].c) : 0;
+  const live = liveLevelsOverlay(levels, ok(last) ? last : 0);
   if (!base && !entry && !live) return null;
   // 서버가 실제 선을 보내 줬으면 미리보기(가정)로 그린 선·띠는 버린다 — 둘을 같이 그리면
   // 같은 이름의 선이 두 개가 되고, 그중 하나는 거짓이다. 지표(series·rsi)는 그대로 둔다.

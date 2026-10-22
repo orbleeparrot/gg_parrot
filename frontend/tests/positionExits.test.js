@@ -80,7 +80,7 @@ test("평가손익 금액 · 부호 표기 · 실행 시간", () => {
 });
 
 // 투입금 대비 총수익률 (2026-09-22): 구동 중 큰 숫자는 서버 return_pct, 진입가 대비 %는 보조로.
-import { headlineReturn, positionPnl, realizedPnl } from "../src/lib/positionExits.js";
+import { headlineReturn, positionInvested, positionPnl, realizedPnl } from "../src/lib/positionExits.js";
 
 // 2026-10-18: KRW-SAND 실행기 '평가손익' +1.23% · 웹 +1.33% — 웹이 수수료 전(평단 대비 가격)을 같은 이름으로 보였다.
 const SAND = { symbol: "KRW-SAND", in_position: true, entry_price: 82.8, last_price: 83.9, position_qty: 1000, position_side: "long",
@@ -101,6 +101,18 @@ test("positionPnl uses the runner's fee-inclusive pnl and says so when it has to
   assert.deepEqual(realizedPnl({ realized_pnl: 1000 }), { money: 1000, feesIncluded: false });
 });
 
+// 2026-10-20: 마틴게일(나눠 사기)에서 웹 '투입금'이 세션 중 최대 금액(25,485)이라 실행기(약 10,199)와 크게 달랐다.
+test("투입금은 지금 포지션에 들어간 돈 — 세션 중 최대 금액(총수익률 분모)이 아니다", () => {
+  const gtc = { symbol: "KRW-GTC", in_position: true, position_qty: 21.99375785, entry_price: 463.495145631059,
+    unrealized_pct: 1.2, unrealized_net_pct: 1.1, invested_usdt: 25485, return_pct: 3.1, realized_net: 520, position_invested: 10199.1 };
+  assert.equal(positionInvested(gtc), 10199.1, "실행기가 보낸 값(수수료 포함)");
+  assert.match(headlineReturn(gtc).note, /투입 10,199 KRW$/);
+  assert.ok(Math.abs(positionInvested({ ...gtc, position_invested: null }) - 10194) < 1, "옛 실행기 — 수량×평단");
+  assert.equal(positionInvested({ ...gtc, in_position: false }), null);
+  const flat = headlineReturn({ ...gtc, in_position: false, position_invested: null });
+  assert.equal(flat.note, "실현 +520 KRW · 최대 투입 25,485 KRW");
+});
+
 test("headlineReturn shows the runner's pnl while holding and total return when flat", () => {
   assert.deepEqual(headlineReturn(SAND), {
     pct: 1.23, money: 1018.6, label: "평가손익", note: "평단 대비 +1.33% · 투입 82,800 KRW",
@@ -114,9 +126,9 @@ test("headlineReturn shows the runner's pnl while holding and total return when 
   assert.equal(old.pct, 1.33);
   assert.equal(old.label, "평가손익 · 수수료 전");
   const flat = headlineReturn({ in_position: false, unrealized_pct: 0, realized_pnl: 0.8, realized_net: 0.7, invested_usdt: 40, return_pct: 1.75, fees_included: true });
-  assert.deepEqual(flat, { pct: 1.75, money: null, label: "투입금 대비 총수익률", note: "실현 +0.70 USDT · 투입 40 USDT" });
+  assert.deepEqual(flat, { pct: 1.75, money: null, label: "최대 투입금 대비 총수익률", note: "실현 +0.70 USDT · 최대 투입 40 USDT" });
   const flatOld = headlineReturn({ in_position: false, unrealized_pct: 0, realized_pnl: 0.8, invested_usdt: 40, return_pct: 2.0, fees_included: false });
-  assert.deepEqual(flatOld, { pct: 2.0, money: null, label: "투입금 대비 총수익률 · 수수료 전", note: "실현 +0.80 USDT · 투입 40 USDT" });
+  assert.deepEqual(flatOld, { pct: 2.0, money: null, label: "최대 투입금 대비 총수익률 · 수수료 전", note: "실현 +0.80 USDT · 최대 투입 40 USDT" });
   const legacy = headlineReturn({ in_position: true, unrealized_pct: 1.2, realized_pnl: 0, invested_usdt: 0, return_pct: null });
   assert.equal(legacy.pct, 1.2);
   assert.equal(legacy.note, "평단 대비 +1.20%");

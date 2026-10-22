@@ -535,6 +535,10 @@ class RunSession(SQLModel, table=True):
     realized_net: Optional[float] = None
     final_unrealized_net: Optional[float] = None
     final_unrealized_net_pct: Optional[float] = None
+    # 지금 포지션에 들어간 돈(실행기 0.20.16+ 의 invested — 수량×평단 + 진입 수수료). 실행기 화면 '투입금'과 같은 값.
+    # 아래 invested_usdt 는 세션 중 최대 금액(총수익률의 분모)이라 마틴게일처럼 나눠 사면 크게 다르다(2026-10-20).
+    # 무포지션 · 옛 실행기는 None — 웹은 옛 실행기면 수량×평단으로 보인다.
+    position_invested: Optional[float] = None
     # 서버 신호(v8+) 세션의 드라이버 상태(JSON, paper.state_json 과 같은 형식). 체크포인트마다 갱신,
     # 재기동 복구에 쓴다. 구버전 실행기 세션은 빈 문자열.
     state_json: str = ""
@@ -1351,6 +1355,7 @@ def _migrate() -> None:
             "realized_net": "ALTER TABLE runsession ADD COLUMN realized_net REAL",
             "final_unrealized_net": "ALTER TABLE runsession ADD COLUMN final_unrealized_net REAL",
             "final_unrealized_net_pct": "ALTER TABLE runsession ADD COLUMN final_unrealized_net_pct REAL",
+            "position_invested": "ALTER TABLE runsession ADD COLUMN position_invested REAL",
             "state_json": "ALTER TABLE runsession ADD COLUMN state_json TEXT DEFAULT ''",
             "invested_usdt": "ALTER TABLE runsession ADD COLUMN invested_usdt REAL DEFAULT 0",
             "pinned": "ALTER TABLE runsession ADD COLUMN pinned BOOLEAN DEFAULT FALSE",
@@ -1565,6 +1570,7 @@ _PG_ADDED_COLUMNS = {
         "realized_net": "DOUBLE PRECISION",
         "final_unrealized_net": "DOUBLE PRECISION",
         "final_unrealized_net_pct": "DOUBLE PRECISION",
+        "position_invested": "DOUBLE PRECISION",
         "state_json": "TEXT DEFAULT ''",
         "invested_usdt": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "pinned": "BOOLEAN NOT NULL DEFAULT FALSE",

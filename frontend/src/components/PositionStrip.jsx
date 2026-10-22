@@ -9,7 +9,8 @@ import { useRunnerDownload } from "../lib/runnerDownload.js";
 import EntryWaitCard from "./EntryWaitCard.jsx";
 import { Icon } from "./icons.jsx";
 import {
-  GROSS_TAG, exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, realizedPnl, runningFor, toneOf,
+  GROSS_TAG, exitRules, fmtSignedMoney, fmtSignedPct, gaugeModel, headlineReturn, positionInvested, realizedPnl, runningFor,
+  toneOf,
 } from "../lib/positionExits.js";
 
 // 평단 · 수량 · 실행기 같은 세부 정보는 처음엔 접어 둔다 — 채팅(껄무새 중계)이 오른쪽 열을 넓게 쓰게.
@@ -86,6 +87,8 @@ export default function PositionStrip({ session, macro, waitModel = null, defaul
   const realized = realizedView.money;
   const realizedTag = !realizedView.feesIncluded && realized !== 0 ? ` · ${GROSS_TAG}` : "";
   const headline = headlineReturn(session);
+  // 투입금 — 지금 포지션에 들어간 돈(실행기 '투입금'과 같은 값). 세션 중 최대 금액(총수익률 분모)이 아님.
+  const invested = inPosition ? positionInvested(session) : null;
   const money = inPosition ? headline.money : null;
   const state = positionState(session);
   const elapsed = runningFor(session.started_at, now);
@@ -145,7 +148,7 @@ export default function PositionStrip({ session, macro, waitModel = null, defaul
         <div><dt>현재가</dt><dd className="num">{Number(session.last_price) > 0 ? fmtPrice(session.last_price) : "—"}</dd></div>
         <div><dt>{running ? "실행 시간" : "실행했던 시간"}</dt><dd className="num">{elapsed || "—"}</dd></div>
         <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}{realizedTag}</dd></div>
-        <div><dt>투입금</dt><dd className="num">{Number(session.invested_usdt) > 0 ? formatQuoteAmount(session.invested_usdt, session.symbol) : "—"}</dd></div>
+        <div><dt>투입금</dt><dd className="num">{invested !== null ? formatQuoteAmount(invested, session.symbol) : "—"}</dd></div>
         <div><dt>실행기</dt><dd className="num">{runner || "—"}</dd></div>
         {newer ? (
           <div className="is-wide"><dt>새 실행기</dt><dd>

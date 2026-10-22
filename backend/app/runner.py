@@ -891,6 +891,7 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
         row.unrealized_pct = float(snapshot.get("unrealized_pct", 0.0) or 0.0)
         for field in NET_PNL_FIELDS:
             setattr(row, field, _net_value(snapshot.get(field)))
+        row.position_invested = _net_value(snapshot.get("invested")) if row.in_position else None
         # 실행기는 매 heartbeat 에 note(기본 "") 를 보낸다 — 서버가 쓴 마커(청산 실패·루프 오류)는 덮어쓰지 않는다.
         # 마커는 runner_engine 이 청산 성공 ack 등에서 스스로 지운다.
         if "note" in snapshot and row.note not in _SERVER_NOTE_MARKERS:
@@ -1037,6 +1038,8 @@ def mark_stopped(
             for field in NET_PNL_FIELDS:
                 if field in snapshot:
                     setattr(row, field, _net_value(snapshot[field]))
+            if "invested" in snapshot or not row.in_position:
+                row.position_invested = _net_value(snapshot.get("invested")) if row.in_position else None
             _track_invested(row)  # 종료 직전 스냅샷의 포지션도 투입금에 반영
         elif status == "stopped" and note in {"청산 완료 후 종료", "포지션 없이 종료"}:
             # v5 explicitly reports these outcomes without a final snapshot.
@@ -1527,6 +1530,8 @@ def _session_view(row: RunSession) -> dict:
         "unrealized_net": getattr(row, "unrealized_net", None),
         "unrealized_net_pct": getattr(row, "unrealized_net_pct", None),
         "realized_net": getattr(row, "realized_net", None),
+        # 지금 포지션에 들어간 돈(실행기 '투입금'과 같은 값) — invested_usdt(세션 중 최대 금액 · 총수익률 분모)와 다르다.
+        "position_invested": getattr(row, "position_invested", None) if row.in_position else None,
         "final_unrealized_net": getattr(row, "final_unrealized_net", None),
         "final_unrealized_net_pct": getattr(row, "final_unrealized_net_pct", None),
         **session_returns(row),

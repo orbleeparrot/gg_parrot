@@ -9,11 +9,14 @@ from tests.test_runner_signals_api import A, _ticket
 
 client = TestClient(app)
 V19 = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v19/ggparrot-runner.exe"
+# '공개본이 아직 못 미치는 버전' 자리. 공개 실행기 레벨(OFFICIAL_APP_VERSION 의 가운데 숫자)보다
+# 늘 위여야 한다 — 실제 레벨을 적으면 다음 배포 때 이 시험이 뜻을 잃는다(0.21.0 에서 한 번 겪음).
+UNPUBLISHED = "99"
 
 
 def test_gate_is_off_until_the_published_runner_has_the_helper(monkeypatch):
     monkeypatch.setenv("RUNNER_DOWNLOAD_URL", V19)
-    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", "21")  # 공개본이 도우미 버전에 못 미친다
+    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", UNPUBLISHED)  # 공개본이 도우미 버전에 못 미친다
     assert runner_mod.binance_helper_active() is False
     _launch, ticket = _ticket(_signup(), A)
     r = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "18"})
@@ -40,7 +43,7 @@ def test_published_v19_requires_the_helper_for_binance_quick_run(monkeypatch):
 
 def test_download_info_announces_the_helper_only_when_published(monkeypatch):
     monkeypatch.setenv("RUNNER_DOWNLOAD_URL", V19)
-    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", "21")
+    monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", UNPUBLISHED)
     assert client.get("/api/runner/download/info").json()["binance_helper_min_runner_version"] == ""
     monkeypatch.setattr(runner_mod, "BINANCE_HELPER_MIN_VERSION", "19")
     assert client.get("/api/runner/download/info").json()["binance_helper_min_runner_version"] == "19"

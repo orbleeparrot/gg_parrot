@@ -7,6 +7,8 @@ import {
   describeStopConfirm,
   elapsedLabel,
   formatSignedMoney,
+  formatSignedPct,
+  toneOf,
 } from "../src/features/agents/runOutcome.js";
 
 const base = {
@@ -162,4 +164,16 @@ test("total return over invested capital leads the result when the server provid
   assert.equal(legacy.pnl.text, "+1.20 USDT");
   assert.equal(legacy.pnl.sub, "");
   assert.ok(outcome.rows.some((r) => r.label === "투입금" && r.value === "40 USDT"));
+});
+
+// 2026-10-21: 마틴게일이 수수료를 빼면 0원에 판 실행을 '+0' · 초록 · 환호하는 얼굴로 끝냈다.
+test("화면에 0 으로 보이는 손익은 부호 · 색 · 웃는 얼굴 없이", () => {
+  const even = describeRunOutcome({ ...base, symbol: "KRW-GTC", realized_pnl: 10.2, realized_net: 0.3, invested_usdt: 0, return_pct: null });
+  assert.equal(even.pnl.text, "0 KRW");
+  assert.equal(even.pnl.tone, "flat");
+  assert.equal(even.avatar, "calm", "0원에 끝난 실행은 환호하지 않는다");
+  assert.equal(formatSignedMoney(0.004, "BTCUSDT"), "0.00 USDT");
+  assert.equal(formatSignedPct(0.003), "0.00%");
+  assert.equal(toneOf(0.3, "KRW-GTC"), "flat");
+  assert.equal(toneOf(0.6, "KRW-GTC"), "up");
 });

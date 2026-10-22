@@ -15,13 +15,26 @@ export function fmtPct(n) {
   return String(Math.round(v * 100) / 100);
 }
 
-export function fmtSignedPct(pct) {
+// 화면 자릿수(원 · USDT 소수 둘째 · % 소수 둘째)로 0 이 되는 값은 0 — '+0원' · '+0.00%'처럼 이익인 척 부호와 초록이
+// 붙지 않게(2026-10-21: 마틴게일이 수수료 빼면 0원에 판 것을 초록으로 보였다).
+export function shownMoney(value, symbol) {
+  const v = Number(value) || 0;
+  const step = String(symbol || "").toUpperCase().startsWith("KRW-") ? 1 : 0.01;
+  return Math.abs(v) < step / 2 ? 0 : v;
+}
+
+export function shownPct(pct) {
   const v = Number(pct) || 0;
+  return Math.abs(v) < 0.005 ? 0 : v;
+}
+
+export function fmtSignedPct(pct) {
+  const v = shownPct(pct);
   return `${v > 0 ? "+" : v < 0 ? "-" : ""}${Math.abs(v).toFixed(2)}%`;
 }
 
 export function fmtSignedMoney(value, symbol) {
-  const v = Number(value) || 0;
+  const v = shownMoney(value, symbol);
   return `${v > 0 ? "+" : v < 0 ? "-" : ""}${formatQuoteAmount(Math.abs(v), symbol, { fixed: true })}`;
 }
 
@@ -148,8 +161,9 @@ export function runningFor(startedAt, now = Date.now()) {
   return mins > 0 ? `${mins}분` : "1분 미만";
 }
 
-export function toneOf(value) {
-  const v = Number(value) || 0;
+// 손익 색 — 금액이면 symbol 을 넘겨 그 통화의 자릿수로, 아니면 % 자릿수로 0 을 가른다.
+export function toneOf(value, symbol) {
+  const v = symbol === undefined ? shownPct(value) : shownMoney(value, symbol);
   return v > 0 ? "is-up" : v < 0 ? "is-down" : "";
 }
 

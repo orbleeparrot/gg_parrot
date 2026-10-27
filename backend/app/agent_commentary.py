@@ -112,7 +112,30 @@ def price_text(value: float, symbol: str) -> str:
     return f"{text}원" if quote_of(symbol) == "KRW" else f"{text} {quote_of(symbol)}"
 
 
+def rounds_to_zero(value: float, symbol: str) -> bool:
+    """화면 자릿수(원 · USDT 소수 둘째)로 0 이 되는 금액 — '+0원'처럼 이익인 척 보이지 않게."""
+    return abs(float(value)) < (0.5 if quote_of(symbol) == "KRW" else 0.005)
+
+
+# 이보다 작은 손익(%)은 '본전' — 사고판 수수료를 빼면 남은 게 거의 없다.
+BREAKEVEN_PCT = 0.05
+
+
+def commission_pct(facts: dict) -> float:
+    """매수 · 매도 한쪽 수수료(%) — 매크로 설정(fees.commission_pct), 없으면 거래소 현물 기본값."""
+    fees = (facts.get("macro") or {}).get("fees") or {}
+    try:
+        value = float(fees.get("commission_pct"))
+        if value >= 0:
+            return value
+    except (TypeError, ValueError):
+        pass
+    from .exchanges import spot_commission_pct
+    return spot_commission_pct(facts.get("exchange") or "binance")
+
+
 def money_text(value: float, symbol: str, *, signed: bool = False) -> str:
+    value = 0.0 if rounds_to_zero(value, symbol) else float(value)  # '+0원'처럼 이익인 척 보이지 않게
     sign = "+" if signed and value > 0 else "-" if value < 0 else ""
     amount = abs(float(value))
     if quote_of(symbol) == "KRW":
@@ -161,6 +184,8 @@ def clean_note(note: str) -> str:
 
 
 def pct_text(value: float, digits: int = 1) -> str:
+    if abs(value) < 0.5 * 10 ** -digits:
+        return f"{0:.{digits}f}%"  # '+0.00%'가 아니라 0.00%
     return f"{value:+.{digits}f}%"
 
 
@@ -400,10 +425,15 @@ def _say_fills(state: dict, facts: dict, fills) -> list[dict]:
                              chips=chips))
             continue
         direction = 1 if side == "long" else -1
-        pnl = (price - held_avg) * closed * direction
-        pct = (price / held_avg - 1) * 100 * direction
+        # 사고판 수수료를 뺀 손익 — 2026-10-20 마틴게일 GTC 에서 가격 차이 +0.00%(0원) 매도를 '익절했어요! 웃어요'(초록)라고
+        # 말했다. 체결 기록엔 수수료 금액이 없어 매크로 수수료율로 매수 · 매도 양쪽을 뺀다.
+        comm = commission_pct(facts)
+        cost = held_avg * closed
+        pnl = (price - held_avg) * closed * direction - (held_avg + price) * closed * comm / 100
+        pct = pnl / cost * 100 if cost > 0 else 0.0
+        even = rounds_to_zero(pnl, symbol) or abs(pct) < BREAKEVEN_PCT
         stop = "손절" in str(fill.get("reason") or "")
-        subs = [_sub(f"{price_text(price, symbol)} 체결 · 수수료 전")]
+        subs = [_sub(f"{price_text(price, symbol)} 체결 · 수수료 {comm:g}% × 2 뺀 값")]
         if facts["leverage"] > 1:
             subs.append(_sub(f"레버리지 {facts['leverage']}배라 원금 대비 {pct * facts['leverage']:+.1f}%"))
         if slip_sub:
@@ -415,12 +445,14 @@ def _say_fills(state: dict, facts: dict, fills) -> list[dict]:
             face, hl = "calm", pick(("아프지만 규칙대로 잘랐어요", "손절선에서 규칙대로 멈췄어요"), key)
         elif closing_run:
             face, hl = "calm", "종료하면서 정리했어요"
-        elif pnl >= 0:
+        elif even:
+            face, hl = "calm", f"본전에 {exit_word}"
+        elif pnl > 0:
             face, hl = "signal", pick(("익절 성공! 규칙대로 챙겼어요", "익절했어요! 이번 판은 껄무새가 웃어요"), key)
         else:
             face, hl = "focused", f"규칙대로 {exit_word}"
         says.append(_say(key, "fill", at, face, hl, nums=f"{money_text(pnl, symbol, signed=True)} · {pct_text(pct, 2)}",
-                         nums_tone="up" if pnl > 0 else "down" if pnl < 0 else "", subs=subs, chips=chips))
+                         nums_tone="" if even else "up" if pnl > 0 else "down", subs=subs, chips=chips))
     return says
 
 
@@ -911,7 +943,7 @@ def _say_end(facts: dict, now_ms: int) -> dict:
     return _say("end", "end", facts.get("stopped_ms") or now_ms, "critical" if error else "calm",
                 "실행이 오류로 끝났어요" if error else "실행이 끝났어요", tone="risk" if error else "",
                 nums=f"누적 실현 {money_text(realized, symbol, signed=True)}",
-                nums_tone="up" if realized > 0 else "down" if realized < 0 else "", subs=subs,
+                nums_tone="" if rounds_to_zero(realized, symbol) else "up" if realized > 0 else "down", subs=subs,
                 chips=[_chip("macro", "내 매크로")])
 
 

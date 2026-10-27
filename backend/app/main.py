@@ -433,6 +433,8 @@ class RunnerHeartbeatRequest(BaseModel):
     unrealized_net: Optional[float] = None
     unrealized_net_pct: Optional[float] = None
     realized_net: Optional[float] = None
+    # 0.20.16+: 지금 포지션에 들어간 돈(수량×평단 + 진입 수수료, 실행기 화면 '투입금'과 같은 값).
+    invested: Optional[float] = None
     note: str = ""
     # 실행기 창 로그를 서버에 쌓는다(v7+). [{ts, kind, message}] — 한 번에 100개까지.
     events: list[dict] = []

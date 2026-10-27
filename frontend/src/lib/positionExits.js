@@ -153,29 +153,42 @@ export function toneOf(value) {
   return v > 0 ? "is-up" : v < 0 ? "is-down" : "";
 }
 
+// 투입금 — 지금 포지션에 들어간 돈. 실행기(0.20.16+)가 보낸 값(수량×평단 + 진입 수수료, 실행기 '투입금'과 같음),
+// 옛 실행기면 수량×평단. 무포지션이면 null.
+// invested_usdt(세션 중 최대 금액 · 총수익률의 분모)와 다르다 — 2026-10-20 까지 웹은 그 값을 '투입금'이라 보여
+// 마틴게일처럼 나눠 사는 매크로에서 실행기와 크게 달랐다(GTC 실행기 약 10,199 · 웹 25,485).
+export function positionInvested(session) {
+  if (!session?.in_position) return null;
+  const sent = finiteOrNull(session.position_invested);
+  if (sent !== null && sent > 0) return sent;
+  const qty = Number(session.position_qty);
+  const entry = Number(session.entry_price);
+  return qty > 0 && entry > 0 ? qty * entry : null;
+}
+
 // 포지션 블록의 큰 숫자.
 // - 보유 중: 실행기 화면과 같은 '평가손익'(수수료 반영, positionPnl). 평단 대비 가격 · 총수익률(앞서 실현한 손익이 있을 때) ·
-//   투입금은 보조 문구로 — 2026-10-18 까지는 보유 중에도 총수익률(수수료 전)을 앞세워 실행기와 숫자가 달랐다.
-// - 무포지션: 서버가 투입금(invested_usdt)과 총수익률(return_pct)을 주면 그걸 앞세운다. 투입금이 없는 옛 세션은 note 없이.
+//   투입금(지금 포지션에 들어간 돈)은 보조 문구로.
+// - 무포지션: 서버가 최대 투입금(invested_usdt)과 총수익률(return_pct)을 주면 그걸 앞세운다. 없는 옛 세션은 note 없이.
 export function headlineReturn(session) {
   const invested = Number(session?.invested_usdt) || 0;
   const total = finiteOrNull(session?.return_pct);
-  const investedText = invested > 0 ? `투입 ${formatQuoteAmount(invested, session?.symbol)}` : "";
   // 서버가 수수료 반영 여부를 알려 주는데(fees_included) 아니라고 하면 총수익률도 수수료 전이다.
   const totalTag = session?.fees_included === false ? ` · ${GROSS_TAG}` : "";
   const realized = realizedPnl(session);
   if (session?.in_position) {
     const pnl = positionPnl(session);
+    const now = positionInvested(session);
     const note = [
       `평단 대비 ${fmtSignedPct(session.unrealized_pct)}`,
       invested > 0 && total !== null && realized.money !== 0 ? `총수익률 ${fmtSignedPct(total)}${totalTag}` : "",
-      investedText,
+      now !== null ? `투입 ${formatQuoteAmount(now, session?.symbol)}` : "",
     ].filter(Boolean).join(" · ");
     return { pct: pnl.pct, money: pnl.money, label: pnl.feesIncluded ? "평가손익" : `평가손익 · ${GROSS_TAG}`, note };
   }
   if (invested > 0 && total !== null) {
-    const note = `실현 ${fmtSignedMoney(realized.money, session?.symbol)} · ${investedText}`;
-    return { pct: total, money: null, label: `투입금 대비 총수익률${totalTag}`, note };
+    const note = `실현 ${fmtSignedMoney(realized.money, session?.symbol)} · 최대 투입 ${formatQuoteAmount(invested, session?.symbol)}`;
+    return { pct: total, money: null, label: `최대 투입금 대비 총수익률${totalTag}`, note };
   }
   return { pct: Number(session?.unrealized_pct) || 0, money: null, label: "평가손익", note: "" };
 }

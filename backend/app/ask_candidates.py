@@ -139,10 +139,23 @@ def liquid_symbols(tickers: list[dict], *, exchange: str = "binance") -> list[st
 # 간다: 후보가 ``MIN_PICKS`` 도 안 남는 것보다 고점 종목을 보여주는 쪽이 낫다.
 RANGE_POS_STEPS = (85.0, 92.0, 100.0)
 
+# 줄 세우는 자. **측정으로 정했다**(scripts/ask_walkforward.py, 8주 · 다음구간=호흡기간).
+# 같은 상한 · 같은 창 · 같은 후보 세계에서 정렬만 바꿔 재면 이렇게 갈린다:
+#
+#   정렬 headroom(24시간) → 다음 구간 중앙값 **+8.45%p**, 카드 420장
+#   정렬 chop(30일)       → 다음 구간 중앙값 **-0.10%p**, 카드 297장
+#
+# 30일 오르내림이 큰 종목은 "꾸준히 출렁인다" 보다 "제멋대로 튄다" 쪽에 가까웠다.
+# 사용자 불만("이미 고점에 올라간 코인")을 고치는 것은 **상한**(range_pos)이고 정렬이
+# 아니다. 상한만 켜도 한 달 범위 85 초과가 240개 중 0개이고, 카드는 오히려 390 → 420
+# 으로 늘고 상위 세 거래 몫은 76% → 61% 로 내려갔다. 그래서 상한은 두고 정렬은 되돌린다.
+ORDER_DEFAULT = "headroom"
+
 
 def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE,
                exchange: str = "binance",
-               daily: Optional[dict[str, list[float]]] = None) -> list[dict]:
+               daily: Optional[dict[str, list[float]]] = None,
+               order: str = ORDER_DEFAULT) -> list[dict]:
     """후보 풀. AI 는 이 목록 밖으로 나갈 수 없다.
 
     ``daily`` 는 심볼 → 최근 30개 일별 종가(호출자가 받아서 넣는다 — 이 함수는 순수
@@ -152,6 +165,10 @@ def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE,
     안 주거나 그 종목 일봉이 없으면 기존 ``headroom_pct`` 순서를 쓴다. 캐시가 비어
     있는 첫 요청이 6초를 기다리지 않게 하는 길이다 — 일봉이 쌓이기 전 몇 번은 예전과
     같은 목록이 나온다(의도된 동작).
+
+    ``order`` 는 줄 세우는 자다. 기본은 ``"headroom"``(24시간) — **측정으로 정했다**,
+    아래 ORDER_DEFAULT 주석 참고. ``"chop"`` 은 30일 오르내린 정도로 세운다. 어느 쪽이든
+    고점 상한은 그대로 적용한다.
 
     ``profile`` 은 정렬에 쓰지 않는다(2026-10-12) — 문구(fallback_reason·build_prompt)에만
     쓴다. 성향은 '어떤 종목' 이 아니라 '얼마나 흔들려도 되는가' 로 갈린다(ask.mdd_cap·score).
@@ -183,7 +200,10 @@ def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE,
         kept = [coin for coin in measured if coin["range_pos_30d"] <= cap]
         if len(kept) >= want:
             break
-    kept.sort(key=lambda coin: coin["chop_30d"], reverse=True)
+    if order == "headroom":
+        kept.sort(key=headroom_pct, reverse=True)
+    else:
+        kept.sort(key=lambda coin: coin["chop_30d"], reverse=True)
     unmeasured.sort(key=headroom_pct, reverse=True)
     return (kept + unmeasured)[: max(1, size)]
 

@@ -150,7 +150,9 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
             f"번 돈의 {float(r.top_trade_share_pct):.0f}% 가 상위 세 번의 매매에서 나왔어 — "
             f"그 세 번이 안 나오면 결과가 많이 달라져."
         )
-    month = concentrated_month_share(r.equity_curve)
+    # 부분 결과(model_construct)에는 equity_curve 가 아예 없을 수 있다 — 묶음 요약
+    # 시험이 그렇게 만든다. 이 함수의 다른 줄들처럼 없으면 조용히 건너뛴다.
+    month = concentrated_month_share(getattr(r, "equity_curve", None) or [])
     if month is not None and month >= TOP_MONTH_SHARE_LIMIT:
         pts.append(
             f"번 돈의 {month:.0f}% 가 한 구간에 몰렸어 — 나머지 기간에는 거의 제자리였다는 뜻이야."

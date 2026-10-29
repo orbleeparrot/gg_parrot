@@ -370,12 +370,16 @@ def test_pool_drops_a_coin_sitting_at_the_top_of_its_month():
     assert "PEAKUSDT" not in [c["symbol"] for c in pool]
 
 
-def test_pool_orders_by_the_30d_chop_not_the_24h_headroom():
-    # WILD 는 하루 변동폭이 가장 커서 headroom 으로는 앞에 오지만, 30일로 보면
-    # 한 방향으로만 간 종목이다.
+def test_pool_can_order_by_the_30d_chop_when_asked():
+    # chop 정렬은 손잡이로만 남는다 — 기본값은 headroom 이다(ORDER_DEFAULT 주석의 측정).
     daily = {"CALMUSDT": _zigzag(), "MIDUSDT": _climb(step=1.0), "WILDUSDT": _climb()}
-    pool = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily)
+    pool = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily, order="chop")
     assert pool[0]["symbol"] == "CALMUSDT"
+
+
+def test_the_default_order_is_the_one_the_measurement_chose():
+    # 기본값이 조용히 바뀌면 측정으로 고른 설정이 사라진다.
+    assert ac.ORDER_DEFAULT == "headroom"
 
 
 def test_pool_keeps_a_coin_whose_daily_candles_are_missing_but_puts_it_after():
@@ -440,3 +444,23 @@ def test_card_carries_the_30d_numbers_for_the_screen():
     pool = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily)
     picks = ac.validate_picks([], pool, "balanced")
     assert all(isinstance(p["chop_30d"], float) for p in picks)
+
+
+def _rise_then_dip():
+    """꾸준히 오르다 끝에서 조금 밀린 일봉 — chop 은 낮고 위치는 상한 아래."""
+    out = [100.0 + 5.0 * i for i in range(25)]
+    out.append(190.0)
+    return out
+
+
+def test_pool_can_keep_the_old_order_while_still_dropping_peaks():
+    # 상한(고점 제외)과 정렬(chop) 중 **어느 쪽이** 성적을 움직였는지 측정으로 가르려면
+    # 둘을 따로 켤 수 있어야 한다. 상한은 그대로 두고 정렬만 예전 것으로.
+    daily = {"CALMUSDT": _zigzag(), "MIDUSDT": _zigzag(), "WILDUSDT": _rise_then_dip()}
+    by_chop = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily, order="chop")
+    by_headroom = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily)
+    # 하루 변동폭이 가장 큰 WILD 가 headroom 으로는 1등, 30일 chop 으로는 아니다.
+    assert by_headroom[0]["symbol"] == "WILDUSDT"
+    assert by_chop[0]["symbol"] != "WILDUSDT"
+    # 어느 정렬이든 상한은 그대로 듣는다.
+    assert all(c["range_pos_30d"] <= ac.RANGE_POS_STEPS[0] for c in by_headroom)

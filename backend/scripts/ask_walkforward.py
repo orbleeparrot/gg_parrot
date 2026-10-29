@@ -147,7 +147,7 @@ def _daily_at(history: dict[str, list[tuple[int, float]]], at_ms: int) -> dict[s
     return cut
 
 
-def _symbols_at(tickers: list[dict], history: dict, at_ms: int) -> list[str]:
+def _symbols_at(tickers: list[dict], history: dict, at_ms: int, order: str = "chop") -> list[str]:
     """그 창에서 물어볼까가 골랐을 종목들.
 
     한계로 남는 것: 유동성 순위(거래대금 상위 40)는 여전히 **지금** 티커에서 온다 —
@@ -155,7 +155,7 @@ def _symbols_at(tickers: list[dict], history: dict, at_ms: int) -> list[str]:
     **30일 창 재정렬**이다. 그게 이번에 바꾼 부분이고, 측정하려는 것도 그것이다.
     """
     pool = ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
-                                     daily=_daily_at(history, at_ms))
+                                     daily=_daily_at(history, at_ms), order=order)
     return [c["symbol"] for c in pool[:SYMBOLS_PER_WINDOW]]
 
 
@@ -247,6 +247,10 @@ def main() -> int:
     # 길이지만 창을 그만큼 더 뒤로 밀어야 해서 최근 장을 덜 본다.
     parser.add_argument("--forward", default="week", choices=("week", "period"),
                         help="다음 구간 길이: week(1주 고정) 또는 period(호흡의 기간만큼)")
+    # 고점 상한과 정렬을 따로 재는 축. 사용자 불만을 고친 것은 상한이므로 그건 켜 두고
+    # 정렬만 예전 것으로 돌려 보면, 성적을 움직인 것이 어느 쪽인지 갈린다.
+    parser.add_argument("--order", default="chop", choices=("chop", "headroom"),
+                        help="고점 상한은 켜 둔 채 정렬만 고른다: chop(30일) 또는 headroom(24시간)")
     args = parser.parse_args()
     watch = args.watch
 
@@ -261,7 +265,8 @@ def main() -> int:
         history = _daily_history(universe, now_ms, args.weeks * 7 + ask_daily.DAYS + 5
                                  + (max(PERIOD_PRESET_DAYS[ask.to_period(h)] for h in HORIZONS)
                                     if args.forward == "period" else 7))
-        print(f"  일봉 확보 {len(history)}/{len(universe)}종목 · 확인 빈도: {watch}")
+        print(f"  일봉 확보 {len(history)}/{len(universe)}종목 · 확인 빈도: {watch} "
+              f"· 정렬: {args.order} · 다음구간: {args.forward}")
 
     cache: dict[tuple[int, str, str], list[ask.Evaluated]] = {}
     ahead: dict[tuple[int, str, str], dict[str, float]] = {}
@@ -276,10 +281,10 @@ def main() -> int:
             # **창을 다음 구간 길이만큼 뒤로 민다.** 예전에는 가장 최근 창이 오늘로
             # 끝나 채점할 다음 구간이 아예 없었다. 이제 모든 창 뒤에 그만큼이 남는다.
             end_ms = now_ms - (week - 1) * WEEK_MS - forward_ms
-            symbols = _symbols_at(tickers, history, end_ms)
+            symbols = _symbols_at(tickers, history, end_ms, args.order)
             window_symbols[(week, horizon)] = symbols
             for coin in ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
-                                                  daily=_daily_at(history, end_ms)):
+                                                  daily=_daily_at(history, end_ms), order=args.order):
                 if coin.get("range_pos_30d") is not None:
                     positions.append(float(coin["range_pos_30d"]))
             print(f"    {horizon} 종목: {symbols}")

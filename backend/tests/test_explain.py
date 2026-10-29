@@ -135,3 +135,15 @@ def test_a_short_window_is_not_accused_of_packing():
              EquityPoint(t="2026-01-03T12:00:00", equity=200.0)]
     exp = explain_result(_macro(), _result(equity_curve=short))
     assert not any("한 구간" in p or "몰렸" in p for p in exp.points)
+
+
+def test_the_fluke_lines_reach_the_card_not_just_the_studio():
+    # 물어볼까 카드는 앞 세 줄만 쓴다(frontend/src/lib/askView.js whyPoints: slice(0, 3)).
+    # 휴대폰에서는 거기서 홀딩 대비 · 최대 낙폭 · 승률을 또 걸러낸다. 요행 경고가 뒤쪽에
+    # 있으면 **카드에는 영원히 안 뜬다** — 목표 3("왜 이 카드인지 화면에서 읽을 수 있다")이
+    # 서버에서만 끝난다.
+    exp = explain_result(_macro(), _result(top_trade_share_pct=87.0,
+                                           equity_curve=_months([200.0, 200.0, 200.0, 200.0])))
+    head = exp.points[:3]
+    assert any("상위" in p and "매매" in p for p in head), "요행 줄이 앞 세 줄 안에 있어야 한다"
+    assert any("한 구간" in p for p in head), "쏠림 줄이 앞 세 줄 안에 있어야 한다"

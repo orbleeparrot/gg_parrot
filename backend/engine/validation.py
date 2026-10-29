@@ -52,7 +52,16 @@ def concentration(curve) -> dict:
     달들의 증가분 합으로 나눈다. 달별 수익률(%)끼리 나누면 자산이 커진 뒤의 달이
     작게 잡혀 몫이 왜곡되므로 퍼센트가 아니라 금액으로 센다.
     """
-    points = _points(curve)
+    return _concentration_from(_points(curve))
+
+
+def _concentration_from(points) -> dict:
+    """``concentration`` 의 속살 — 이미 파싱한 점 위에서 돈다.
+
+    쪼갠 이유: ``concentrated_month_share`` 가 몫과 기간을 둘 다 봐야 하는데, 각각
+    ``_points`` 를 돌리면 곡선을 두 번 판다. 그 함수는 물어볼까 정렬 키에서 후보마다
+    불린다(최대 90개 × 긴 창이면 수천 점) — 두 배가 그대로 사용자 대기 시간이 된다.
+    """
     if len(points) < 2:
         return {"top_month_share_pct": None, "months": 0}
     last_of_month: dict[str, float] = {}
@@ -196,7 +205,12 @@ def _span_days(curve) -> float:
 
     시각 표기가 섞여(Z 있음 · 없음) 비교할 수 없으면 못 잰 것으로 보고 0 을 낸다.
     """
-    stamps = [stamp for stamp, _ in _points(curve)]
+    return _span_from(_points(curve))
+
+
+def _span_from(points) -> float:
+    """``_span_days`` 의 속살 — 이미 파싱한 점 위에서 돈다."""
+    stamps = [stamp for stamp, _ in points]
     if len(stamps) < 2:
         return 0.0
     try:
@@ -221,11 +235,12 @@ def concentrated_month_share(curve) -> float | None:
     이상, 구간 ``MIN_SPAN_DAYS_FOR_CONCENTRATION`` 일 이상. 이유는 위 주석에 있다 —
     구간이 짧으면 몫이 달 수에 따라 거의 정해져 신호에 정보가 없다.
     """
-    spread = concentration(curve)
+    points = _points(curve)          # 한 번만 판다 — 아래 둘이 같은 점을 쓴다.
+    spread = _concentration_from(points)
     share = spread["top_month_share_pct"]
     if share is None or spread["months"] < MIN_MONTHS_FOR_CONCENTRATION:
         return None
-    if _span_days(curve) < MIN_SPAN_DAYS_FOR_CONCENTRATION:
+    if _span_from(points) < MIN_SPAN_DAYS_FOR_CONCENTRATION:
         return None
     return share
 

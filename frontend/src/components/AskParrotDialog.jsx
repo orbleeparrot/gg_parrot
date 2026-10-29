@@ -218,13 +218,16 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
   );
 }
 
-// 종목 후보 — 한 줄 카드: 로고 · 티커 · 이유 + 한 달 위치 · 거래대금 순위 · 한 달 오르내림.
+// 종목 후보 — 한 줄 카드: 로고 · 티커 · 이유 + 한 달 위치 · 거래대금 순위 · 하루 변동.
 //
-// 2026-10-29: 숫자 칸을 '하루 변동' 에서 '한 달 오르내림'(chop_30d)으로 바꿨다. 후보를
-// 30일 창으로 줄 세우는데 화면에는 하루치만 보이면 사용자가 보는 숫자가 순서와 아무
-// 관계가 없다. 일봉이 없을 때(캐시가 빈 첫 요청 — ask_daily 머리글)만 예전 숫자로
-// 돌아간다. 한 달 범위에서 어디쯤인지는 서버가 만든 문장(range_note)으로만 말한다 —
-// 위치 퍼센트는 설명이 필요한 값이다.
+// 2026-10-29: 30일 창은 **고점 종목을 빼는 데만** 쓴다. 줄 세우는 자는 여전히 24시간
+// headroom 이다(ask_candidates.ORDER_DEFAULT — 측정으로 정했다: 30일 오르내림으로
+// 세우면 다음 구간 성적이 +9.22%p → -0.00%p, 카드가 467 → 297장). 그래서 숫자 칸도
+// 순서를 정하는 쪽인 '하루 변동' 그대로다.
+//
+// 한 달 범위에서 어디쯤인지는 서버가 만든 문장(range_note)으로만 말한다. 사용자가
+// 아쉬워한 "이미 고점에 올라간 코인" 에 답하는 줄이고, 위치 퍼센트는 그 자체로는
+// 설명이 필요한 값이라 숫자로 띄우지 않는다.
 function CandidateRow({ c, marketText, onPick, disabled, i }) {
   const kr = coinName(c.symbol);
   return (
@@ -239,9 +242,7 @@ function CandidateRow({ c, marketText, onPick, disabled, i }) {
         {c.range_note ? <small className="ask-cand-where">{c.range_note}</small> : null}
       </span>
       <span className="ask-stat is-rank"><span className="ask-lbl">거래대금</span><span className="ask-stat-v"><b className="num">{c.volume_rank}</b>위</span></span>
-      {c.chop_30d == null
-        ? <span className="ask-stat is-range"><span className="ask-lbl">하루 변동</span><span className="ask-stat-v"><b className="num">{c.range_pct}</b>%</span></span>
-        : <span className="ask-stat is-range"><span className="ask-lbl">한 달 오르내림</span><span className="ask-stat-v"><b className="num">{Math.round(c.chop_30d)}</b>%</span></span>}
+      <span className="ask-stat is-range"><span className="ask-lbl">하루 변동</span><span className="ask-stat-v"><b className="num">{c.range_pct}</b>%</span></span>
       <span className="ask-chev" aria-hidden="true" />
     </button>
   );

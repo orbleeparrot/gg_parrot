@@ -464,3 +464,13 @@ def test_pool_can_keep_the_old_order_while_still_dropping_peaks():
     assert by_chop[0]["symbol"] != "WILDUSDT"
     # 어느 정렬이든 상한은 그대로 듣는다.
     assert all(c["range_pos_30d"] <= ac.RANGE_POS_STEPS[0] for c in by_headroom)
+
+
+def test_the_cap_does_not_relax_when_other_coins_can_fill_the_pool():
+    # 상한 완화는 **후보가 모자랄 때** 쓰는 비상구다. 일봉 없는 종목이 자리를 채울 수
+    # 있으면 풀 이유가 없는데, 모자람을 '일봉 있는 종목' 안에서만 세면 고점 하나를
+    # 지키려고 상한을 100까지 열어 버린다.
+    tickers = _tickers() + [_t("PEAKUSDT", 600_000_000, 120, 100)]
+    pool = ac.build_pool(tickers, profile="balanced", size=10, daily={"PEAKUSDT": _climb()})
+    assert "PEAKUSDT" not in [c["symbol"] for c in pool]
+    assert len(pool) >= ac.MIN_PICKS, "나머지 종목이 자리를 채운다"

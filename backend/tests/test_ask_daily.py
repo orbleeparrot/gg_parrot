@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import time
+
 from app import ask_daily
 
 
@@ -97,3 +99,38 @@ def test_background_warming_starts_once_when_switched_on(monkeypatch):
     ask_daily.daily_closes(_tickers(), exchange="binance")
     ask_daily.daily_closes(_tickers(), exchange="binance")
     assert len(_Spy.started) == 1
+
+
+def test_binance_candles_are_never_synthetic(monkeypatch):
+    # binance.get_klines 는 allow_synthetic 기본값이 True 다 — 봉이 없으면 **지어낸다**.
+    # 갓 상장해 30일치가 없는 코인은 거래대금 상위 40에 충분히 들어온다. 합성 봉이
+    # 들어오면 존재하지 않는 가격으로 종목을 고르고, 카드가 그 가격을 두고 "한 달
+    # 범위의 아래쪽" 이라고 말한다. 사실로 답하려고 만든 기능이 허구로 답하게 된다.
+    from app.data import binance
+    seen = {}
+
+    def fake(symbol, start_ms, end_ms, interval="1d", **kw):
+        seen.update(kw)
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(binance, "get_klines", fake)
+    try:
+        ask_daily._fetch_closes("AAAUSDT", "binance")
+    except RuntimeError:
+        pass
+    assert seen.get("allow_synthetic") is False
+
+
+def test_a_stale_cache_is_refreshed_in_the_background(monkeypatch):
+    # peek 은 만료된 값에도 "stale" 을 주고 I/O 를 시작하지 않는다. 그때 갱신을 안 띄우면
+    # TTL 과 stale 한도 사이에서는 영원히 안 받고, 한도가 지나면 빈 칸이 되어 예전
+    # 24시간 목록으로 돌아간다 — 고친 불만이 하루에 한 번씩 되살아난다.
+    _Spy.started = []
+    monkeypatch.setenv("ASK_DAILY_WARM", "true")
+    monkeypatch.setattr(ask_daily, "CACHE_SECONDS", 0.02)
+    ask_daily.warm(_tickers(), exchange="binance", fetch=lambda s, e: [100.0, 110.0])
+    time.sleep(0.08)                      # TTL 은 지나고 stale 한도 안에 있는 상태
+    monkeypatch.setattr(ask_daily.threading, "Thread", _Spy)
+    got = ask_daily.daily_closes(_tickers(), exchange="binance")
+    assert got, "갱신하는 동안에도 옛 값은 그대로 준다"
+    assert len(_Spy.started) == 1, "뒤에서 갱신을 띄워야 한다"

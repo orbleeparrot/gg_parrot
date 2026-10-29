@@ -111,40 +111,16 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
     else:
         pts.append(f"이 기간 최종 수익률은 {_signed(r.final_return_pct)}야.")
 
-    # 2) MDD — how deep did it dig before ending here.
-    if r.total_trades > 0:
-        depth = "꽤 깊은 낙폭이야" if r.mdd_pct >= 30 else "감당할 만한 수준"
-        pts.append(f"가는 길에 최대 -{r.mdd_pct:.1f}%까지 빠졌어 (MDD) — {depth}.")
-
-    # 3) win rate over N trades.
-    if r.total_trades > 0:
-        pts.append(f"총 {r.total_trades}번 매매해서 승률 {r.win_rate_pct:.0f}%.")
-
-    # 4) streak risk.
-    if (r.max_consecutive_losses or 0) >= 5:
-        pts.append(
-            f"최대 {r.max_consecutive_losses}번 연속으로 손절났어 — 실제였다면 "
-            f"심리적으로 버티기 힘든 구간이야."
-        )
-
-    # 5) liquidation damage.
-    if r.liquidation_count and r.liquidation_count > 0:
-        pts.append(
-            f"레버리지 {macro.leverage}배 때문에 기간 중 {r.liquidation_count}번 청산돼 "
-            f"증거금을 통째로 날렸어."
-        )
-
-    # 6) sharpe read-out (only when meaningful).
-    if r.sharpe is not None:
-        if r.sharpe >= 1:
-            pts.append(f"샤프지수 {r.sharpe:.2f} — 변동성 대비 수익이 준수했어.")
-        elif r.sharpe < 0:
-            pts.append(f"샤프지수 {r.sharpe:.2f} — 위험을 감안하면 손해 보는 장사였어.")
-
-    # 7) 요행인지 꾸준한지 — 물어볼까가 "이미 고점에 올라간 코인" 을 보여준다는 피드백의
+    # 2) 요행인지 꾸준한지 — 물어볼까가 "이미 고점에 올라간 코인" 을 보여준다는 피드백의
     # 답이다(2026-10-29). 고점 찍은 코인에서는 수익이 한 구간에 쏠리므로 이 줄이 "지나간
     # 상승에 맞춰진 설정" 이라고 스스로 말해 준다. 문턱과 가드는 validation.py 것을 쓴다 —
     # 검증 화면의 경고(거래_집중 · 한_구간_집중)와 같은 선에서 말해야 한다.
+    #
+    # **홀딩 대비 바로 다음 자리여야 한다.** 물어볼까 카드는 앞 세 줄만 쓰고
+    # (frontend/src/lib/askView.js whyPoints), 휴대폰에서는 거기서 홀딩 대비 · 최대 낙폭 ·
+    # 승률을 또 걸러낸다 — 그 셋은 카드에 숫자 칸으로 따로 있기 때문이다. 뒤로 밀면
+    # 카드에는 영원히 안 뜬다. 낙폭과 승률을 밀어내는 것이 맞다: 그 둘은 화면에 이미
+    # 있고, 이 줄은 다른 어디에도 없다.
     if r.top_trade_share_pct is not None and float(r.top_trade_share_pct) >= TOP_TRADE_SHARE_LIMIT:
         pts.append(
             f"번 돈의 {float(r.top_trade_share_pct):.0f}% 가 상위 세 번의 매매에서 나왔어 — "
@@ -157,6 +133,36 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
         pts.append(
             f"번 돈의 {month:.0f}% 가 한 구간에 몰렸어 — 나머지 기간에는 거의 제자리였다는 뜻이야."
         )
+
+    # 3) MDD — how deep did it dig before ending here.
+    if r.total_trades > 0:
+        depth = "꽤 깊은 낙폭이야" if r.mdd_pct >= 30 else "감당할 만한 수준"
+        pts.append(f"가는 길에 최대 -{r.mdd_pct:.1f}%까지 빠졌어 (MDD) — {depth}.")
+
+    # 4) win rate over N trades.
+    if r.total_trades > 0:
+        pts.append(f"총 {r.total_trades}번 매매해서 승률 {r.win_rate_pct:.0f}%.")
+
+    # 5) streak risk.
+    if (r.max_consecutive_losses or 0) >= 5:
+        pts.append(
+            f"최대 {r.max_consecutive_losses}번 연속으로 손절났어 — 실제였다면 "
+            f"심리적으로 버티기 힘든 구간이야."
+        )
+
+    # 6) liquidation damage.
+    if r.liquidation_count and r.liquidation_count > 0:
+        pts.append(
+            f"레버리지 {macro.leverage}배 때문에 기간 중 {r.liquidation_count}번 청산돼 "
+            f"증거금을 통째로 날렸어."
+        )
+
+    # 7) sharpe read-out (only when meaningful).
+    if r.sharpe is not None:
+        if r.sharpe >= 1:
+            pts.append(f"샤프지수 {r.sharpe:.2f} — 변동성 대비 수익이 준수했어.")
+        elif r.sharpe < 0:
+            pts.append(f"샤프지수 {r.sharpe:.2f} — 위험을 감안하면 손해 보는 장사였어.")
 
     # 필터는 '왜 안 샀나' 의 근거다 — 수익률 이야기 뒤에 붙인다.
     if macro.entry_filter is not None:

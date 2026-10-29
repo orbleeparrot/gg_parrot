@@ -48,7 +48,12 @@ def _fetch_closes(symbol: str, exchange: str) -> list[float]:
     if is_domestic(exchange):
         frame, _source = krw.get_klines(symbol, start_ms, end_ms, "1d", exchange=exchange)
     else:
-        frame, _source = binance.get_klines(symbol, start_ms, end_ms, "1d")
+        # allow_synthetic=False 가 **반드시** 필요하다. 기본값이 True 라 봉이 없으면
+        # 지어낸 캔들을 돌려준다 — 갓 상장해 30일치가 없는 코인은 거래대금 상위 40에
+        # 충분히 들어온다. 사실로 답하려고 만든 기능이 허구로 답하게 된다.
+        # 다른 운영 호출부도 전부 False 를 넘긴다(marketdata.py · data/__init__.py).
+        frame, _source = binance.get_klines(symbol, start_ms, end_ms, "1d",
+                                            allow_synthetic=False)
     closes = [float(value) for value in frame["close"].tolist()]
     return closes[-DAYS:]
 
@@ -119,7 +124,13 @@ def _warm_later(tickers: list[dict], exchange: str) -> None:
             with _warming_lock:
                 _warming.discard(key)
 
-    threading.Thread(target=run, name="ask-daily-warm", daemon=True).start()
+    try:
+        threading.Thread(target=run, name="ask-daily-warm", daemon=True).start()
+    except Exception:
+        # 스레드를 못 띄웠는데 표시만 남으면 그 거래소는 프로세스가 사는 동안
+        # 다시는 적립되지 않는다.
+        with _warming_lock:
+            _warming.discard(key)
 
 
 def daily_closes(tickers: list[dict], *, exchange: str = "binance",
@@ -138,7 +149,13 @@ def daily_closes(tickers: list[dict], *, exchange: str = "binance",
         if warm_later:
             _warm_later(tickers, exchange)
         return {}
-    closes_by_symbol, _state = cached
+    closes_by_symbol, state = cached
+    # **만료됐으면 옛 값을 주면서 뒤에서 갱신한다.** peek 은 만료된 값에도 "stale" 을
+    # 주고 I/O 를 시작하지 않으므로, 여기서 안 띄우면 TTL 과 stale 한도 사이에서는
+    # 영원히 안 받는다. 한도가 지나면 빈 칸이 되어 예전 24시간 목록으로 돌아간다 —
+    # 고친 불만이 하루에 한 번씩 되살아난다.
+    if warm_later and state == "stale":
+        _warm_later(tickers, exchange)
     prices = _price_now(tickers)
     out: dict[str, list[float]] = {}
     for symbol, closes in (closes_by_symbol or {}).items():

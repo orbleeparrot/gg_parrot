@@ -15,20 +15,18 @@ test("카드가 지금 가격이 한 달 범위에서 어디쯤인지 말한다"
 });
 
 test("카드에 보이는 숫자가 순서를 정하는 자와 같다", () => {
+  // 줄 세우는 자는 24시간 headroom 이다(ask_candidates.ORDER_DEFAULT — 측정으로 정했다).
+  // 화면에 30일 숫자를 띄우면 사용자가 보는 숫자가 순서와 아무 관계가 없어진다.
   const text = dialog();
-  assert.match(text, /chop_30d/, "30일 창으로 줄 세웠으면 그 숫자를 보여줘야 한다");
-  assert.match(text, /한 달/, "어느 기간 이야기인지 라벨에 있어야 한다");
+  assert.match(text, /range_pct/, "순서를 정하는 24시간 쪽 숫자를 보여줘야 한다");
+  assert.doesNotMatch(text, /chop_30d/,
+    "30일 오르내림은 순서를 정하지 않으므로 카드에 띄우지 않는다");
 });
 
-test("일봉이 없을 때만 하루 변동으로 돌아간다", () => {
-  // 캐시가 비어 있는 첫 요청은 기존 24시간 경로를 탄다(ask_daily 머리글).
-  // 그때는 예전 숫자가 맞다.
-  assert.match(dialog(), /chop_30d\s*==\s*null[\s\S]{0,300}range_pct/,
-    "30일 숫자가 없을 때의 대체 경로가 있어야 한다");
-});
-
-test("위치 퍼센트를 날숫자로 띄우지 않는다", () => {
-  // 'range_pos_30d 85%' 는 설명이 필요한 값이다 — 문장이 그 뜻을 담는다.
-  assert.doesNotMatch(dialog(), /\{c\.range_pos_30d\}/,
+test("위치 퍼센트는 화면에 아예 쓰지 않는다", () => {
+  // 'range_pos_30d 85%' 는 설명이 필요한 값이다 — 문장(range_note)이 그 뜻을 담는다.
+  // 특정 표기를 금지하면 {Math.round(c.range_pos_30d)} 같은 변형이 그냥 빠져나간다.
+  // 이 칸을 화면에서 **아예 안 쓰는 것**이 지키려는 불변식이다.
+  assert.doesNotMatch(dialog(), /range_pos_30d/,
     "위치는 문장으로만 말한다(range_note)");
 });

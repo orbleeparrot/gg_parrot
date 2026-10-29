@@ -18,6 +18,8 @@ import math
 import statistics
 import sys
 import time
+
+import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -30,6 +32,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from app import ask, ask_candidates, ask_daily, steadiness  # noqa: E402
 from app.data import krw  # noqa: E402
+from app.data import binance as binance_mod  # noqa: E402
 from app.data.binance import PERIOD_PRESET_DAYS  # noqa: E402
 from engine.backtest import BacktestResult, run_backtest  # noqa: E402
 from app.marketdata import fetch_klines_for_macro  # noqa: E402
@@ -42,10 +45,14 @@ HORIZONS = ("days", "weeks", "months")
 PROFILES = ("stable", "balanced", "aggressive")
 SYMBOLS_PER_WINDOW = 3
 WEEK_MS = 7 * 86_400_000
+# 다음 구간 앞에 붙이는 준비 봉 수. 프리셋에서 가장 긴 되돌아보기(볼린저 · 이평선
+# 20~60봉)가 무장할 만큼은 되어야 한다.
+WARMUP_BARS = 120
+_INTERVAL_MS = binance_mod._INTERVAL_MS
 
 _BASE_CAPS = {profile: dict(table) for profile, table in ask.MDD_CAP_BY_PERIOD.items()}
 _BASE_SCORE = ask.score
-_BASE_STEADY = steadiness.TRADE_WEIGHT
+_BASE_STEADY = (steadiness.TRADE_WEIGHT, steadiness.MONTH_WEIGHT)
 
 
 def _score_with(kind: str):
@@ -87,9 +94,9 @@ class Config:
     steady_weight: float | None = None
 
     def apply(self) -> None:
-        weight = _BASE_STEADY if self.steady_weight is None else self.steady_weight
-        steadiness.TRADE_WEIGHT = weight
-        steadiness.MONTH_WEIGHT = weight
+        trade, month = (_BASE_STEADY if self.steady_weight is None
+                        else (self.steady_weight, self.steady_weight))
+        steadiness.TRADE_WEIGHT, steadiness.MONTH_WEIGHT = trade, month
         ask.MDD_CAP_BY_PERIOD = {
             profile: {period: value * self.cap_scale for period, value in table.items()}
             for profile, table in _BASE_CAPS.items()
@@ -210,17 +217,51 @@ def _forward(symbol: str, horizon: str, end_ms: int, candidates: list[ask.Evalua
         key = macro.candle_interval
         if key not in frames:
             try:
-                frames[key], _source = fetch_klines_for_macro(macro, end_ms, end_ms + forward_ms)
+                # **준비 봉을 앞에 붙인다.** 창 끝부터의 봉만 주면 되돌아볼 구간이 필요한
+                # 지표(이평선 · RSI · 볼린저)가 아예 무장하지 못한 채 채점된다. 1주 창에
+                # 1일봉이면 7개뿐이라 20일선은 영원히 안 선다 — 긴 호흡일수록 "우위 없음"
+                # 쪽으로 기운다. 앞에 WARMUP_BARS 개를 더 받고 채점은 창 끝 이후만 한다.
+                frames[key], _source = fetch_klines_for_macro(
+                    macro, end_ms - WARMUP_BARS * _INTERVAL_MS[key], end_ms + forward_ms)
             except Exception:
                 frames[key] = None
         df = frames[key]
         if df is None or len(df) < 5:
             continue
         try:
-            out[evaluated.candidate.label] = ask.excess_over_hold(run_backtest(macro, df))
+            scored = _excess_after(df, run_backtest(macro, df), end_ms)
         except Exception:
             continue
+        if scored is not None:
+            out[evaluated.candidate.label] = scored
     return out
+
+
+def _excess_after(df, result, end_ms: int) -> float | None:
+    """창 끝 **이후** 구간만의 홀딩 대비 초과 수익(%p). 못 재면 None.
+
+    준비 봉을 앞에 붙여 돌렸으므로 결과 전체(``excess_over_hold``)를 쓰면 **고른 구간이
+    성적에 섞인다** — 1주 창에 1일봉이면 준비 120봉이 채점 7봉을 완전히 덮어 버린다.
+    자본 곡선은 봉마다 한 점이므로(이 경로는 압축되지 않는다) 봉 번호로 잘라 쓴다.
+    길이가 어긋나면 자를 자리를 믿을 수 없으니 그 후보는 센 값에서 뺀다.
+    """
+    curve = list(result.equity_curve or ())
+    if len(curve) != len(df) or len(df) < 2:
+        return None
+    # tz 가 붙은 열에 astype("int64") 를 쓰면 **예외 없이 전부 0** 이 나온다 — 조용히
+    # 틀리는 쪽이라 비교로 자른다.
+    mask = (df["timestamp"] >= pd.Timestamp(end_ms, unit="ms", tz="UTC")).tolist()
+    if mask.count(True) < 2:
+        return None
+    first = mask.index(True)
+    start_equity, start_close = float(curve[first].equity), float(df["close"].iloc[first])
+    if start_equity <= 0 or start_close <= 0:
+        return None
+    macro_pct = (float(curve[-1].equity) / start_equity - 1.0) * 100.0
+    hold_pct = (float(df["close"].iloc[-1]) / start_close - 1.0) * 100.0
+    if not (math.isfinite(macro_pct) and math.isfinite(hold_pct)):
+        return None
+    return macro_pct - hold_pct
 
 
 def _top3_key(got: list) -> list[str]:
@@ -281,10 +322,11 @@ def main() -> int:
             # **창을 다음 구간 길이만큼 뒤로 민다.** 예전에는 가장 최근 창이 오늘로
             # 끝나 채점할 다음 구간이 아예 없었다. 이제 모든 창 뒤에 그만큼이 남는다.
             end_ms = now_ms - (week - 1) * WEEK_MS - forward_ms
-            symbols = _symbols_at(tickers, history, end_ms, args.order)
+            pool = ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
+                                             daily=_daily_at(history, end_ms), order=args.order)
+            symbols = [c["symbol"] for c in pool[:SYMBOLS_PER_WINDOW]]
             window_symbols[(week, horizon)] = symbols
-            for coin in ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
-                                                  daily=_daily_at(history, end_ms), order=args.order):
+            for coin in pool:
                 if coin.get("range_pos_30d") is not None:
                     positions.append(float(coin["range_pos_30d"]))
             print(f"    {horizon} 종목: {symbols}")
@@ -369,7 +411,7 @@ def main() -> int:
 
     ask.MDD_CAP_BY_PERIOD = {p: dict(t) for p, t in _BASE_CAPS.items()}
     ask.score = _BASE_SCORE
-    steadiness.TRADE_WEIGHT = steadiness.MONTH_WEIGHT = _BASE_STEADY
+    steadiness.TRADE_WEIGHT, steadiness.MONTH_WEIGHT = _BASE_STEADY
 
     if positions:
         print("")

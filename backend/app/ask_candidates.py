@@ -194,7 +194,9 @@ def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE,
         coin["chop_30d"], coin["range_pos_30d"] = chop, position
         measured.append(coin)
 
-    want = min(MIN_PICKS, len(measured))
+    # 상한 완화는 후보가 모자랄 때 쓰는 비상구다. 일봉 없는 종목도 풀을 채우므로
+    # 모자람은 **둘을 합쳐** 센다 — 안 그러면 고점 하나를 지키려고 상한이 100까지 열린다.
+    want = min(max(0, MIN_PICKS - len(unmeasured)), len(measured))
     kept = measured
     for cap in RANGE_POS_STEPS:
         kept = [coin for coin in measured if coin["range_pos_30d"] <= cap]

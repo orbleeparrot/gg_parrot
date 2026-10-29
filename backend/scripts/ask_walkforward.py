@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
 from app import ask, ask_candidates  # noqa: E402
 from app.data import krw  # noqa: E402
 from app.data.binance import PERIOD_PRESET_DAYS  # noqa: E402
-from app.engine.backtest import BacktestResult, run_backtest  # noqa: E402
+from engine.backtest import BacktestResult, run_backtest  # noqa: E402
 from app.marketdata import fetch_klines_for_macro  # noqa: E402
 
 EXCHANGE = "upbit"

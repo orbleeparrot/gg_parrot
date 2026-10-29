@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from app import ask, ask_candidates  # noqa: E402
+from app import ask, ask_candidates, ask_daily, steadiness  # noqa: E402
 from app.data import krw  # noqa: E402
 from app.data.binance import PERIOD_PRESET_DAYS  # noqa: E402
 from engine.backtest import BacktestResult, run_backtest  # noqa: E402
@@ -45,6 +45,7 @@ WEEK_MS = 7 * 86_400_000
 
 _BASE_CAPS = {profile: dict(table) for profile, table in ask.MDD_CAP_BY_PERIOD.items()}
 _BASE_SCORE = ask.score
+_BASE_STEADY = steadiness.TRADE_WEIGHT
 
 
 def _score_with(kind: str):
@@ -81,8 +82,14 @@ class Config:
     cap_scale: float
     balanced_score: str
     stable_types: tuple[str, ...] | None = None
+    # 꾸준함 보정의 세기(2026-10-29). 0 이면 끈 것 — 끈 것과 켠 것을 나란히 봐야
+    # 보정이 '다음 구간' 성적을 올리는지 말할 수 있다. None 이면 기본값 그대로.
+    steady_weight: float | None = None
 
     def apply(self) -> None:
+        weight = _BASE_STEADY if self.steady_weight is None else self.steady_weight
+        steadiness.TRADE_WEIGHT = weight
+        steadiness.MONTH_WEIGHT = weight
         ask.MDD_CAP_BY_PERIOD = {
             profile: {period: value * self.cap_scale for period, value in table.items()}
             for profile, table in _BASE_CAPS.items()
@@ -91,6 +98,11 @@ class Config:
 
 
 CONFIGS = [
+    # 2026-10-29 에 더한 축 — 꾸준함 보정이 '다음 구간' 성적을 올리는가.
+    # 이 셋만 서로 견주면 되고, 아래 옛 격자는 성향 설정을 보는 것이라 그대로 둔다.
+    Config("꾸준함 끔", 1.0, "over_sqrt", steady_weight=0.0),
+    Config("꾸준함 기본(0.3)", 1.0, "over_sqrt", steady_weight=0.3),
+    Config("꾸준함 강하게(0.45)", 1.0, "over_sqrt", steady_weight=0.45),
     Config("표 그대로 · 수익/√MDD", 1.0, "over_sqrt"),
     Config("표 그대로 · 수익-0.5×MDD", 1.0, "minus_half"),
     Config("표 그대로 · 수익-1.5×MDD", 1.0, "minus_one_half"),
@@ -105,14 +117,45 @@ CONFIGS = [
 ]
 
 
-def _symbols() -> list[str]:
-    """종목 풀 — 지금 티커로 만든다.
+def _daily_history(symbols: list[str], end_ms: int, days: int) -> dict[str, list[tuple[int, float]]]:
+    """심볼별 (봉 시각, 종가) 전체 이력. 종목당 **한 번만** 받고 창마다 잘라 쓴다.
 
-    한계: 거래소 티커는 과거 시점의 24시간 통계를 주지 않으므로 창마다 같은 종목을 본다.
-    창이 가르는 것은 **시세 구간**이고 종목 선택은 아니다. 노트에 이 한계를 적는다.
+    이게 2026-10-29 변경의 핵심이다. 그 전에는 종목 선정을 과거로 돌려 볼 수 없었다 —
+    거래소 티커는 과거 시점의 24시간 통계를 주지 않기 때문이다. 일봉은 과거를 주므로
+    ``chop_pct`` · ``range_position_pct`` 기반 선정은 창마다 재현할 수 있다.
     """
-    tickers = krw.get_all_tickers(EXCHANGE)
-    pool = ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE)
+    start_ms = end_ms - (days + 5) * 86_400_000
+    out: dict[str, list[tuple[int, float]]] = {}
+    for symbol in symbols:
+        try:
+            frame, _source = krw.get_klines(symbol, start_ms, end_ms, "1d", exchange=EXCHANGE)
+        except Exception as exc:
+            print(f"    일봉 실패 {symbol}: {type(exc).__name__}")
+            continue
+        stamps = [int(ts.timestamp() * 1000) for ts in frame["timestamp"]]
+        out[symbol] = list(zip(stamps, (float(v) for v in frame["close"])))
+    return out
+
+
+def _daily_at(history: dict[str, list[tuple[int, float]]], at_ms: int) -> dict[str, list[float]]:
+    """그 시점까지의 최근 ``ask_daily.DAYS`` 개 종가 — 앞을 보지 않게 자른다."""
+    cut: dict[str, list[float]] = {}
+    for symbol, rows in history.items():
+        closes = [close for stamp, close in rows if stamp <= at_ms][-ask_daily.DAYS:]
+        if len(closes) >= 2:
+            cut[symbol] = closes
+    return cut
+
+
+def _symbols_at(tickers: list[dict], history: dict, at_ms: int) -> list[str]:
+    """그 창에서 물어볼까가 골랐을 종목들.
+
+    한계로 남는 것: 유동성 순위(거래대금 상위 40)는 여전히 **지금** 티커에서 온다 —
+    거래소가 과거 24시간 통계를 주지 않는다. 창마다 갈리는 것은 그 40개 안에서의
+    **30일 창 재정렬**이다. 그게 이번에 바꾼 부분이고, 측정하려는 것도 그것이다.
+    """
+    pool = ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
+                                     daily=_daily_at(history, at_ms))
     return [c["symbol"] for c in pool[:SYMBOLS_PER_WINDOW]]
 
 
@@ -145,6 +188,41 @@ def _run_candidates(symbol: str, horizon: str, end_ms: int,
     return out
 
 
+def _forward(symbol: str, horizon: str, end_ms: int, candidates: list[ask.Evaluated],
+             watch: str = DEFAULT_WATCH) -> dict[str, float]:
+    """후보 레이블 → **다음 구간**(창 끝에서 1주) 홀딩 대비 초과 수익(%p).
+
+    왜 이게 있어야 하나: 기존 '품질' 열은 ``excess_over_hold`` 를 **고른 그 구간**에서
+    잰 값이다. 고를 때 쓴 숫자를 성적으로 다시 쓰는 셈이라, 후보 90개 중 그 구간에 가장
+    잘 맞은 것을 뽑는 구조에서는 항상 크게 나온다(실측: 1주 창 중앙값 +149%p 가 설정
+    8가지에서 전부 같았다). 사용자가 받는 것은 **앞으로** 쓸 설정이므로 앞을 봐야 한다.
+
+    왜 1주인가: 창을 주 단위로 굴리므로 모든 호흡에서 같은 길이의 다음 구간이 생기고
+    서로 견줄 수 있다. 3개월짜리를 1주로 재는 것은 분명 거칠지만, 고른 구간에서 다시
+    재는 것보다는 앞을 본다.
+    """
+    period = ask.to_period(horizon)
+    interval = ask.to_interval(watch, period)
+    out: dict[str, float] = {}
+    frames: dict[str, object] = {}
+    for evaluated in candidates:
+        macro = evaluated.candidate.macro
+        key = macro.candle_interval
+        if key not in frames:
+            try:
+                frames[key], _source = fetch_klines_for_macro(macro, end_ms, end_ms + WEEK_MS)
+            except Exception:
+                frames[key] = None
+        df = frames[key]
+        if df is None or len(df) < 5:
+            continue
+        try:
+            out[evaluated.candidate.label] = ask.excess_over_hold(run_backtest(macro, df))
+        except Exception:
+            continue
+    return out
+
+
 def _top3_key(got: list) -> list[str]:
     """이 성향이 **이 종목**에서 낸 상위 세 장의 신원.
 
@@ -160,21 +238,47 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--weeks", type=int, default=8)
     parser.add_argument("--watch", default=DEFAULT_WATCH, choices=sorted(ask._WATCH_INTERVAL))
+    # 종목 선정 축은 격자로 못 돌린다 — 어떤 종목을 백테스트했는지가 달라져 캐시가
+    # 통째로 바뀌기 때문이다. 끈 상태로 한 번, 켠 상태로 한 번 돌려 비교한다.
+    parser.add_argument("--no-daily", action="store_true",
+                        help="30일 창을 끄고 예전 24시간 지표로 종목을 고른다(전후 비교용)")
     args = parser.parse_args()
     watch = args.watch
 
-    symbols = _symbols()
-    print(f"종목: {symbols} · 확인 빈도: {watch}")
     now_ms = int(time.time() * 1000)
+    tickers = krw.get_all_tickers(EXCHANGE)
+    universe = ask_candidates.liquid_symbols(tickers, exchange=EXCHANGE)
+    if args.no_daily:
+        history = {}
+        print(f"30일 창 **끔** — 예전 24시간 지표로 종목을 고른다 · 확인 빈도: {watch}")
+    else:
+        print(f"유동성 상위 {len(universe)}종목의 일봉을 받는다 (종목당 한 번) …")
+        history = _daily_history(universe, now_ms, args.weeks * 7 + ask_daily.DAYS + 5)
+        print(f"  일봉 확보 {len(history)}/{len(universe)}종목 · 확인 빈도: {watch}")
+
     cache: dict[tuple[int, str, str], list[ask.Evaluated]] = {}
+    ahead: dict[tuple[int, str, str], dict[str, float]] = {}
+    per_week_symbols: dict[int, list[str]] = {}
+    positions: list[float] = []
     for week in range(args.weeks, 0, -1):
-        end_ms = now_ms - (week - 1) * WEEK_MS
+        # **창을 한 주 뒤로 민다**(예전에는 week-1 이라 가장 최근 창이 오늘로 끝났다).
+        # 그러면 어느 창에도 채점할 '다음 구간' 이 없다. 이제 모든 창 뒤에 1주가 남는다.
+        end_ms = now_ms - week * WEEK_MS
+        symbols = _symbols_at(tickers, history, end_ms)
+        per_week_symbols[week] = symbols
+        for coin in ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
+                                              daily=_daily_at(history, end_ms)):
+            if coin.get("range_pos_30d") is not None:
+                positions.append(float(coin["range_pos_30d"]))
+        print(f"  {args.weeks - week + 1}주째 종목: {symbols}")
         for horizon in HORIZONS:
             for symbol in symbols:
                 started = time.monotonic()
-                cache[(week, horizon, symbol)] = _run_candidates(symbol, horizon, end_ms, watch)
-                print(f"  {args.weeks - week + 1}주째 · {horizon} · {symbol} "
-                      f"→ 후보 {len(cache[(week, horizon, symbol)])}개 "
+                got = _run_candidates(symbol, horizon, end_ms, watch)
+                cache[(week, horizon, symbol)] = got
+                ahead[(week, horizon, symbol)] = _forward(symbol, horizon, end_ms, got, watch)
+                print(f"    {horizon} · {symbol} → 후보 {len(got)}개 "
+                      f"· 앞 구간 {len(ahead[(week, horizon, symbol)])}개 "
                       f"({time.monotonic() - started:.1f}초)")
 
     rows = []
@@ -189,7 +293,10 @@ def main() -> int:
         distinct = distinct_cells = 0
         mdd_ok = mdd_cells = mdd_worse = 0
         excesses: list[float] = []
+        forwards: list[float] = []
+        shares: list[float] = []
         for week in range(args.weeks, 0, -1):
+            symbols = per_week_symbols[week]
             for horizon in HORIZONS:
                 period = ask.to_period(horizon)
                 interval = ask.to_interval(watch, period)
@@ -207,8 +314,14 @@ def main() -> int:
                     empty_cells += 1
                     if not any(per_profile[profile].values()):
                         empty += 1
-                    for got in per_profile[profile].values():
+                    for symbol, got in per_profile[profile].items():
                         excesses.extend(ask.excess_over_hold(e.result) for e in got)
+                        # 앞 구간 — 사용자가 실제로 받는 쪽. 고른 구간 숫자와 따로 센다.
+                        next_window = ahead.get((week, horizon, symbol), {})
+                        forwards.extend(next_window[e.candidate.label] for e in got
+                                        if e.candidate.label in next_window)
+                        shares.extend(float(e.result.top_trade_share_pct) for e in got
+                                      if e.result.top_trade_share_pct is not None)
                 for symbol in symbols:
                     balanced, wild = per_profile["balanced"][symbol], per_profile["aggressive"][symbol]
                     if not balanced and not wild:
@@ -229,22 +342,38 @@ def main() -> int:
                             mdd_worse += 1
         rows.append((config.name, empty, empty_cells, distinct, distinct_cells,
                      mdd_ok, mdd_cells, mdd_worse,
-                     statistics.median(excesses) if excesses else 0.0, len(excesses)))
+                     statistics.median(excesses) if excesses else 0.0, len(excesses),
+                     statistics.median(forwards) if forwards else 0.0, len(forwards),
+                     statistics.median(shares) if shares else 0.0))
 
     ask.MDD_CAP_BY_PERIOD = {p: dict(t) for p, t in _BASE_CAPS.items()}
     ask.score = _BASE_SCORE
+    steadiness.TRADE_WEIGHT = steadiness.MONTH_WEIGHT = _BASE_STEADY
+
+    if positions:
+        print("")
+        print(f"후보 풀의 '한 달 범위 내 위치' 분포 — 중앙값 {statistics.median(positions):.1f} · "
+              f"85 초과 {sum(1 for p in positions if p > 85.0)}/{len(positions)}개. "
+              f"내려갈수록 '이미 고점에 올라간 코인' 이 빠졌다는 뜻이다.")
 
     print("")
-    print("| 설정 | 전무(성향칸) | 균형≠공격(종목칸) | 안정MDD<공격 | 안정형이 더 흔들림 | 품질(중앙값 %p) | 카드 |")
-    print("|---|---|---|---|---|---|---|")
-    for name, empty, ec, distinct, dc, mdd_ok, mc, mdd_worse, quality, cards in rows:
+    print("| 설정 | 전무(성향칸) | 균형≠공격(종목칸) | 안정MDD<공격 | 안정형이 더 흔들림 "
+          "| 고른구간(중앙값 %p) | **다음구간(중앙값 %p)** | 상위3거래몫(중앙값 %) | 카드 |")
+    print("|---|---|---|---|---|---|---|---|---|")
+    for (name, empty, ec, distinct, dc, mdd_ok, mc, mdd_worse,
+         quality, cards, forward, fcards, share) in rows:
         print(f"| {name} | {empty}/{ec} | {distinct}/{dc} | {mdd_ok}/{mc} | {mdd_worse}/{mc} "
-              f"| {quality:+.2f} | {cards} |")
+              f"| {quality:+.2f} | **{forward:+.2f}** ({fcards}장) | {share:.1f} | {cards} |")
+    print("")
+    print("'고른구간' 은 **고를 때 쓴 숫자를 성적으로 다시 쓴 것**이라 항상 크게 나온다 "
+          "— 후보 90개 중 그 구간에 가장 잘 맞은 것을 뽑기 때문이다. 판단은 '다음구간' 으로 한다.")
 
-    # 고르는 규칙 — 완료 기준 3(일곱/아홉 = 78% 이상)·4(항상)를 먼저 통과시키고 그중 품질이
-    # 가장 좋은 것. 통과한 게 없으면 그대로 말한다(값을 억지로 고르지 않는다).
+    # 고르는 규칙 — 완료 기준 3(일곱/아홉 = 78% 이상)·4(항상)를 먼저 통과시키고 그중
+    # **다음 구간** 성적이 가장 좋은 것. 2026-10-29 전에는 '고른 구간' 으로 골랐는데,
+    # 그건 고를 때 쓴 숫자라 설정을 바꿔도 거의 움직이지 않았다(실측: 8개 설정 전부
+    # 중앙값 +149.44%p 로 동일). 통과한 게 없으면 그대로 말한다.
     ok = [r for r in rows if r[4] and r[3] / r[4] >= 7 / 9 and r[6] and r[5] == r[6]]
-    pick = max(ok or rows, key=lambda r: (r[8], -r[1]))
+    pick = max(ok or rows, key=lambda r: (r[10], -r[1]))
     print("")
     print(f"고른 설정: {pick[0]}  (기준 3·4 통과: {'예' if ok else '아니오 — 전부 미달'})")
     return 0

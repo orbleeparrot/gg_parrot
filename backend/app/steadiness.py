@@ -9,99 +9,95 @@
 
 * **거르지 않는다.** 순위에만 쓴다 — 문턱으로 쓰면 카드가 0장이 되는 길이고, 그건
   사용자가 물리친 설계다. 순서만 바꾸므로 카드 수는 구조적으로 줄어들 수 없다.
-* **기존 필드만 쓴다.** ``BacktestResult`` 와 ``engine/`` 을 건드리지 않으므로 Python
-  엔진과 Rust 실행기의 정합성 계약(engine_golden.json · ENGINE_VERSION)을 열지 않는다.
-* **모른다고 벌주지 않는다.** 값을 못 구하면 깎지 않는다(1.0).
+* **문턱을 새로 만들지 않는다.** ``engine/validation.py`` 의 것을 그대로 쓴다. 거기
+  숫자는 측정으로 맞춰져 있고(그 파일 주석에 잰 값이 남아 있다) 검증 화면이 경고를
+  띄우는 선이다. 따로 두면 같은 매크로를 두고 카드는 "꾸준히 벌었어", 검증 화면은
+  "거래_집중" 이라고 말하는 상태가 된다. **깎기 시작하는 지점이 경고선과 같다.**
+* **기존 필드만 쓴다.** ``BacktestResult`` 와 엔진의 판단 경로를 건드리지 않으므로
+  Python 엔진과 Rust 실행기의 정합성 계약(engine_golden.json · ENGINE_VERSION)을 열지
+  않는다(``engine.validation`` 은 LIVE_PATH 밖이다).
+* **모른다고 벌주지 않는다.** 값을 못 구하면 그 항목은 깎지 않는다.
 """
 from __future__ import annotations
 
 import math
-from datetime import datetime
-from typing import Optional
 
 from engine.backtest import BacktestResult
+from engine.validation import (MIN_MONTHS_FOR_CONCENTRATION, MIN_SPAN_DAYS_FOR_CONCENTRATION,
+                               TOP_MONTH_SHARE_LIMIT, TOP_TRADE_SHARE_LIMIT, concentration,
+                               span_days)
+
+# validation.py 의 문턱을 **그대로** 가리킨다. 숫자를 베껴 쓰지 않는다 — 베끼면 한쪽만
+# 고쳐져 카드와 검증 화면이 어긋난다(시험이 `is` 로 이 동일성을 고정한다).
+TRADE_SHARE_LIMIT = TOP_TRADE_SHARE_LIMIT
+MONTH_SHARE_LIMIT = TOP_MONTH_SHARE_LIMIT
+MIN_SPAN_DAYS = MIN_SPAN_DAYS_FOR_CONCENTRATION
+MIN_MONTHS = MIN_MONTHS_FOR_CONCENTRATION
 
 # 배수의 바닥. 꾸준함이 순위를 **거르지는** 못하게 하는 장치다 — 아무리 요행이어도
-# 수익이 큰 쪽이 뒤집히지 않을 만큼만 깎는다.
+# 수익이 크게 앞선 쪽이 뒤집히지 않을 만큼만 깎는다.
 STEADY_FLOOR = 0.5
-# 상위 세 거래 몫: 이 아래면 안 깎고(OK), 이 위면 다 깎는다(BAD). 사이는 비례.
-CONCENTRATION_OK, CONCENTRATION_BAD, CONCENTRATION_WEIGHT = 50.0, 90.0, 0.3
-# 후반 몫: 이 위면 안 깎고, 0 이면 다 깎는다. 0 은 '앞에서 다 벌고 뒤는 제자리'.
-LATER_OK, LATER_BAD, LATER_WEIGHT = 40.0, 0.0, 0.3
+# 두 항목이 각각 최대 이만큼 깎는다. 둘이 겹치면 바닥에 닿는다.
+TRADE_WEIGHT = 0.3
+MONTH_WEIGHT = 0.3
 
 
-def _moment(stamp: object) -> Optional[datetime]:
-    try:
-        return datetime.fromisoformat(str(stamp))
-    except (TypeError, ValueError):
-        return None
+def _ramp(value: float, warn_at: float, worst: float) -> float:
+    """경고선(``warn_at``)에서 0, 최악(``worst``)에서 1 로 비례하는 깎음 비율.
 
-
-def later_share(result: BacktestResult) -> Optional[float]:
-    """구간 후반이 전체 수익에서 차지하는 몫(%). 앞에서 다 벌었으면 0 에 가깝다.
-
-    **시간으로 자른다.** 지금 이 경로가 받는 곡선은 봉마다 한 점인 원본이다
-    (``compact_backtest_result`` 는 응답을 만들 때만 쓴다 — main.py). 그래서 인덱스로
-    잘라도 같은 답이 나온다. 그래도 시간으로 자르는 이유는 봉이 비는 구간(체결 없는
-    봉은 거래소가 아예 빼고 준다)과, 나중에 누가 이 경로에 압축된 곡선을 흘려보낼
-    경우에 조용히 틀리지 않기 위해서다.
-
-    전체 수익이 0 이하면 '후반 몫' 이 뜻을 잃으므로 None 이다(``worth_the_macro`` 가 이미
-    떨어뜨리는 결과다). 시각을 못 읽어도 None 이다.
+    경고선 아래에서는 0 이다 — 검증 화면이 아무 말도 하지 않는 결과를 순위에서
+    몰래 깎지 않는다.
     """
-    curve = list(result.equity_curve or ())
-    if len(curve) < 3:
-        return None
-    total = float(curve[-1].equity) - float(curve[0].equity)
-    if total <= 0:
-        return None
-
-    started, ended = _moment(curve[0].t), _moment(curve[-1].t)
-    if started is None or ended is None:
-        return None
-    try:
-        middle = started + (ended - started) / 2
-    except TypeError:          # tz 가 섞인 곡선 — 자를 자리를 못 정한다.
-        return None
-
-    split = 1
-    for index in range(1, len(curve) - 1):
-        moment = _moment(curve[index].t)
-        if moment is None:
-            return None
-        if moment <= middle:
-            split = index
-    return round((float(curve[-1].equity) - float(curve[split].equity)) / total * 100, 2)
-
-
-def _ramp(value: float, ok: float, bad: float) -> float:
-    """``ok`` 에서 0, ``bad`` 에서 1 로 비례하는 깎음 비율. 두 방향 모두 쓴다."""
-    span = bad - ok
+    span = worst - warn_at
     if span == 0:
         return 0.0
-    return min(1.0, max(0.0, (value - ok) / span))
+    return min(1.0, max(0.0, (value - warn_at) / span))
+
+
+def _number(value: object) -> float:
+    try:
+        number = float(value)        # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return math.nan
+    return number
+
+
+def month_share(result: BacktestResult) -> float | None:
+    """가장 많이 번 달이 전체 '번 돈' 에서 차지하는 몫(%). 판정할 수 없으면 None.
+
+    ``validation.concentration`` 을 그대로 쓰고, **켜는 조건도 그대로 따른다**(달 수
+    3 이상 · 구간 85일 이상). 그 하한이 있는 이유는 그 파일에 적혀 있다 — 구간이 짧으면
+    몫이 달 수에 따라 거의 정해져 신호에 정보가 없다. 물어볼까의 기간에는 1주와 1달이
+    있어서, 끄지 않으면 카드 상당수를 잡음으로 재정렬한다.
+    """
+    curve = result.equity_curve or []
+    spread = concentration(curve)
+    share = spread.get("top_month_share_pct")
+    if share is None:
+        return None
+    if int(spread.get("months") or 0) < MIN_MONTHS:
+        return None
+    if span_days(curve) < MIN_SPAN_DAYS:
+        return None
+    number = _number(share)
+    return number if math.isfinite(number) else None
 
 
 def steadiness(result: BacktestResult) -> float:
     """정렬 키에 곱할 꾸준함 배수. 범위는 [STEADY_FLOOR, 1.0].
 
-    두 가지를 깎는다. 둘 다 **이미 계산돼 있으면서 아무도 안 쓰던** 값이다.
+    두 가지를 깎는다. 둘 다 **이미 계산돼 있으면서 순위에는 안 쓰이던** 값이다.
 
-    * ``top_trade_share_pct`` 가 높다 = 상위 세 거래가 수익의 대부분이다(요행).
-    * ``later_share`` 가 낮다 = 구간 앞쪽에서 다 벌었다(지나간 상승에 맞춰졌다).
-
-    값을 못 구하면 그 항목은 깎지 않는다 — 모른다고 벌주지 않는다.
+    * ``top_trade_share_pct`` 가 높다 = 상위 몇 거래가 수익의 대부분이다(운에 가깝다).
+    * 한 달 몫이 높다 = 번 돈이 한 구간에 몰렸다(지나간 상승에 맞춰졌다).
     """
     penalty = 0.0
     share = result.top_trade_share_pct
     if share is not None:
-        try:
-            number = float(share)
-        except (TypeError, ValueError):
-            number = math.nan
+        number = _number(share)
         if math.isfinite(number):
-            penalty += CONCENTRATION_WEIGHT * _ramp(number, CONCENTRATION_OK, CONCENTRATION_BAD)
-    later = later_share(result)
-    if later is not None:
-        penalty += LATER_WEIGHT * _ramp(later, LATER_OK, LATER_BAD)
+            penalty += TRADE_WEIGHT * _ramp(number, TRADE_SHARE_LIMIT, 100.0)
+    month = month_share(result)
+    if month is not None:
+        penalty += MONTH_WEIGHT * _ramp(month, MONTH_SHARE_LIMIT, 100.0)
     return round(max(STEADY_FLOOR, 1.0 - penalty), 4)

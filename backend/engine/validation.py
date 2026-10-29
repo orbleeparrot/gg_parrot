@@ -205,6 +205,15 @@ def _span_days(curve) -> float:
         return 0.0
 
 
+def span_days(curve) -> float:
+    """``_span_days`` 를 바깥에 내준다 — 기간 가드를 두 번 구현하지 않기 위해서다.
+
+    물어볼까의 순위 보정(app/steadiness.py)이 집중 판정과 **같은 기간 하한**을 써야 한다.
+    하한을 따로 재면 한쪽만 고쳐져 카드와 검증 화면이 어긋난다.
+    """
+    return _span_days(curve)
+
+
 def _last_window(window_returns) -> float | None:
     """마지막 구간 수익(%). 구간이 둘 미만이거나 값이 숫자가 아니면 None(못 잼)."""
     if not window_returns or len(window_returns) < 2:

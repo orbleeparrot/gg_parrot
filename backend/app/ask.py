@@ -29,7 +29,7 @@ from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client
 from .data import NoSpotDataError
 from .data import symbols as symbols_mod
 from .data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS
-from . import ask_candidates, hotcoins
+from . import ask_candidates, ask_daily, hotcoins
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
 from .db import AskExtraCredit, AskMacroSession, User
@@ -1340,7 +1340,11 @@ def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
             tickers = hotcoins.get_cached_tickers()
         if not tickers:
             raise AskError(503, "지금 시세 목록을 불러오지 못했어요. 잠시 뒤 다시 물어봐 주세요.")
-        pool = ask_candidates.build_pool(tickers, profile=req.risk_profile, exchange=req.exchange)
+        # 30일 창으로 고른다 — 캐시에 일봉이 없으면 빈 칸이 오고 build_pool 이 기존
+        # 24시간 경로를 탄다(사용자를 6초 기다리게 하지 않는다. ask_daily 머리글 참고).
+        pool = ask_candidates.build_pool(
+            tickers, profile=req.risk_profile, exchange=req.exchange,
+            daily=ask_daily.daily_closes(tickers, exchange=req.exchange))
         if is_domestic(req.exchange):
             actual = _tradable_symbols(req.market, req.exchange)
             pool = [coin for coin in pool if coin["symbol"] in actual]

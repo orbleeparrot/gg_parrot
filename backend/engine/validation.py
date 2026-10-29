@@ -206,12 +206,28 @@ def _span_days(curve) -> float:
 
 
 def span_days(curve) -> float:
-    """``_span_days`` 를 바깥에 내준다 — 기간 가드를 두 번 구현하지 않기 위해서다.
-
-    물어볼까의 순위 보정(app/steadiness.py)이 집중 판정과 **같은 기간 하한**을 써야 한다.
-    하한을 따로 재면 한쪽만 고쳐져 카드와 검증 화면이 어긋난다.
-    """
+    """``_span_days`` 를 바깥에 내준다. 기간 가드를 두 번 구현하지 않기 위해서다."""
     return _span_days(curve)
+
+
+def concentrated_month_share(curve) -> float | None:
+    """판정을 켤 수 있는 구간에서의 '가장 많이 번 달' 몫(%). 못 켜면 None.
+
+    **가드를 한 벌로 둔다.** 이 값을 세 곳이 쓴다 — 검증 화면의 경고(`한_구간_집중`),
+    물어볼까의 순위 보정(app/steadiness.py), 물어볼까 카드 해설(engine/explain.py).
+    가드를 각자 구현하면 한쪽만 고쳐져 세 화면이 서로 다른 말을 한다.
+
+    켜는 조건은 ``warnings`` 가 쓰던 것과 같다: 달 수 ``MIN_MONTHS_FOR_CONCENTRATION``
+    이상, 구간 ``MIN_SPAN_DAYS_FOR_CONCENTRATION`` 일 이상. 이유는 위 주석에 있다 —
+    구간이 짧으면 몫이 달 수에 따라 거의 정해져 신호에 정보가 없다.
+    """
+    spread = concentration(curve)
+    share = spread["top_month_share_pct"]
+    if share is None or spread["months"] < MIN_MONTHS_FOR_CONCENTRATION:
+        return None
+    if _span_days(curve) < MIN_SPAN_DAYS_FOR_CONCENTRATION:
+        return None
+    return share
 
 
 def _last_window(window_returns) -> float | None:
@@ -234,11 +250,8 @@ def warnings(*, curve, total_trades: int, window_returns: list[float],
     그런 구간은 거래 수로 따로 켜지는 표본 부족이 맡는다.
     """
     found = []
-    spread = concentration(curve)
-    share = spread["top_month_share_pct"]
-    if (share is not None and spread["months"] >= MIN_MONTHS_FOR_CONCENTRATION
-            and _span_days(curve) >= MIN_SPAN_DAYS_FOR_CONCENTRATION
-            and share >= TOP_MONTH_SHARE_LIMIT):
+    share = concentrated_month_share(curve)
+    if share is not None and share >= TOP_MONTH_SHARE_LIMIT:
         found.append("한_구간_집중")
     if int(total_trades or 0) < MIN_TRADES:
         found.append("표본_부족")

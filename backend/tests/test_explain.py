@@ -97,3 +97,41 @@ def test_deterministic_over_real_backtest():
     assert a.model_dump() == b.model_dump()
     assert isinstance(a, Explanation)
     assert len(a.points) >= 1
+
+
+# --- 요행인지 꾸준한지를 해설이 말한다 (2026-10-29) -----------------------------
+# 물어볼까가 "이미 고점에 올라간 코인" 을 보여준다는 피드백의 답이다. 고점 찍은
+# 코인에서는 수익이 한 구간에 쏠리므로, 이 줄이 "지나간 상승에 맞춰진 설정" 이라고
+# 스스로 말해 준다. 변명이 아니라 사용자가 판단할 근거고, 지금 화면에는 이 정보가 없다.
+
+
+def _months(month_ends: list[float]):
+    from engine.backtest import EquityPoint
+    out = [EquityPoint(t="2026-01-01T12:00:00", equity=100.0)]
+    for index, day in enumerate(["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"]):
+        out.append(EquityPoint(t=f"{day}T12:00:00", equity=month_ends[index]))
+    return out
+
+
+def test_a_few_trades_carrying_the_profit_is_said_out_loud():
+    exp = explain_result(_macro(), _result(top_trade_share_pct=87.0))
+    assert any("상위" in p and "매매" in p for p in exp.points)
+
+
+def test_a_spread_out_profit_is_not_nagged_about():
+    exp = explain_result(_macro(), _result(top_trade_share_pct=20.0))
+    assert not any("상위" in p and "매매" in p for p in exp.points)
+
+
+def test_profit_packed_into_one_stretch_is_said_out_loud():
+    exp = explain_result(_macro(), _result(equity_curve=_months([200.0, 200.0, 200.0, 200.0])))
+    assert any("한 구간" in p or "몰렸" in p for p in exp.points)
+
+
+def test_a_short_window_is_not_accused_of_packing():
+    # validation.py 의 기간 하한을 따른다 — 짧은 구간은 몫에 정보가 없다.
+    from engine.backtest import EquityPoint
+    short = [EquityPoint(t="2026-01-01T12:00:00", equity=100.0),
+             EquityPoint(t="2026-01-03T12:00:00", equity=200.0)]
+    exp = explain_result(_macro(), _result(equity_curve=short))
+    assert not any("한 구간" in p or "몰렸" in p for p in exp.points)

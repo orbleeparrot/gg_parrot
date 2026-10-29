@@ -404,3 +404,39 @@ def test_liquid_symbols_names_everything_the_caller_must_fetch():
     # 상위 10개만 주입하면, 폐기하려는 24시간 지표가 이미 고른 목록을 재배열만 한다.
     names = ac.liquid_symbols(_tickers())
     assert set(names) == {"CALMUSDT", "MIDUSDT", "WILDUSDT"}
+
+
+# --- 종목 카드가 30일 창을 말한다 (2026-10-29) ---------------------------------
+# 순서를 30일 기준으로 바꿔 놓고 화면에는 '하루 변동' 만 보이면, 사용자가 보는 숫자가
+# 순서와 아무 관계가 없어진다("왜 이 종목인지 보이게 한다" 와 어긋난다).
+# 문장은 **서버가** 만든다 — AI 가 쓴 퍼센트는 _FAKE_STAT 이 어차피 떨어뜨리고,
+# 숫자는 서버가 붙인다는 원칙(설계 2장)도 그대로다.
+
+
+def test_card_says_where_in_the_month_the_price_sits():
+    daily = {f"W{i}USDT": _zigzag() for i in range(5)}
+    daily["PEAKUSDT"] = _climb()
+    pool = ac.build_pool(_wide_tickers(), profile="balanced", size=10, daily=daily)
+    picks = ac.validate_picks([], pool, "balanced")
+    assert all("한 달" in p["range_note"] for p in picks)
+
+
+def test_card_tells_the_middle_of_the_month_from_the_top():
+    middle = ac.range_note_for(45.0)
+    top = ac.range_note_for(95.0)
+    assert middle != top
+    assert "가운데" in middle
+
+
+def test_card_leaves_the_note_empty_without_daily_candles():
+    # 일봉이 없으면 아무 말도 하지 않는다 — 화면은 그 줄을 렌더하지 않는다.
+    pool = ac.build_pool(_tickers(), profile="balanced", size=10)
+    picks = ac.validate_picks([], pool, "balanced")
+    assert all(p["range_note"] == "" for p in picks)
+
+
+def test_card_carries_the_30d_numbers_for_the_screen():
+    daily = {"CALMUSDT": _zigzag(), "MIDUSDT": _zigzag(), "WILDUSDT": _zigzag()}
+    pool = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily)
+    picks = ac.validate_picks([], pool, "balanced")
+    assert all(isinstance(p["chop_30d"], float) for p in picks)

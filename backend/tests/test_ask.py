@@ -1227,3 +1227,24 @@ def test_select_top_prefers_the_steadier_of_two_equal_cards():
     fluke = ask.Evaluated(_cand("J"), _result(20.0, 5.0, bh=0.0).model_copy(update=_FLUKE))
     picked = ask.select_top([fluke, steady], "aggressive", n=2, period="3m")
     assert [e.candidate.macro.rule_type.value for e in picked] == ["C", "J"]
+
+
+def test_candidates_feed_the_30d_window_into_the_pool(monkeypatch):
+    # 일봉 공급을 풀 선정에 꽂아 두지 않으면 30일 창은 주입구만 있고 꺼진 상태로 남는다.
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    monkeypatch.setattr(ask.ask_daily, "daily_closes",
+                        lambda tickers, **kw: {"BTCUSDT": [100.0, 110.0, 105.0]})
+    seen: dict = {}
+    real = ask.ask_candidates.build_pool
+
+    def spy(tickers, **kw):
+        seen.update(kw)
+        return real(tickers, **kw)
+
+    monkeypatch.setattr(ask.ask_candidates, "build_pool", spy)
+    token, _user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    res = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token))
+    assert res.status_code == 200, res.text
+    assert seen.get("daily") == {"BTCUSDT": [100.0, 110.0, 105.0]}

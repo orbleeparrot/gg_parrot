@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from .backtest import BacktestResult
 from .schema import Macro, PositionSide, RuleType
+from .validation import TOP_MONTH_SHARE_LIMIT, TOP_TRADE_SHARE_LIMIT, concentrated_month_share
 
 # Mascot moods the frontend maps to a 껄무새 face + accent color. Kept as a small
 # closed set so the UI never sees an unknown mood.
@@ -139,6 +140,21 @@ def _points(macro: Macro, r: BacktestResult) -> List[str]:
             pts.append(f"샤프지수 {r.sharpe:.2f} — 변동성 대비 수익이 준수했어.")
         elif r.sharpe < 0:
             pts.append(f"샤프지수 {r.sharpe:.2f} — 위험을 감안하면 손해 보는 장사였어.")
+
+    # 7) 요행인지 꾸준한지 — 물어볼까가 "이미 고점에 올라간 코인" 을 보여준다는 피드백의
+    # 답이다(2026-10-29). 고점 찍은 코인에서는 수익이 한 구간에 쏠리므로 이 줄이 "지나간
+    # 상승에 맞춰진 설정" 이라고 스스로 말해 준다. 문턱과 가드는 validation.py 것을 쓴다 —
+    # 검증 화면의 경고(거래_집중 · 한_구간_집중)와 같은 선에서 말해야 한다.
+    if r.top_trade_share_pct is not None and float(r.top_trade_share_pct) >= TOP_TRADE_SHARE_LIMIT:
+        pts.append(
+            f"번 돈의 {float(r.top_trade_share_pct):.0f}% 가 상위 세 번의 매매에서 나왔어 — "
+            f"그 세 번이 안 나오면 결과가 많이 달라져."
+        )
+    month = concentrated_month_share(r.equity_curve)
+    if month is not None and month >= TOP_MONTH_SHARE_LIMIT:
+        pts.append(
+            f"번 돈의 {month:.0f}% 가 한 구간에 몰렸어 — 나머지 기간에는 거의 제자리였다는 뜻이야."
+        )
 
     # 필터는 '왜 안 샀나' 의 근거다 — 수익률 이야기 뒤에 붙인다.
     if macro.entry_filter is not None:

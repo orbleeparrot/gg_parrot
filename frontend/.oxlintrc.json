@@ -283,6 +283,7 @@
           "ask-body",
           "ask-cand",
           "ask-cand-name",
+          "ask-cand-where",
           "ask-cand-why",
           "ask-cands",
           "ask-caption",

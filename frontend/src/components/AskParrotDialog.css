@@ -125,6 +125,8 @@ body:has(.ask-scrim) .site-header { z-index: calc(var(--z-sheet) + 1); }
 .ask-cand-name .ask-lbl { overflow: hidden; text-overflow: ellipsis; }
 .ask-cand-why { grid-area: why; min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.5; color: rgb(var(--c-slate-700)); }
 .ask-cand-why b { font-weight: 700; color: rgb(var(--c-slate-900)); }
+/* 지금 가격이 최근 한 달 범위에서 어디쯤인지 — 이유 아래 한 줄(2026-10-29). */
+.ask-cand-where { display: block; margin-top: 2px; font-size: 12px; font-weight: 500; line-height: 1.45; color: rgb(var(--c-slate-500)); }
 .ask-stat { display: grid; gap: 4px; justify-items: end; text-align: right; }
 .ask-stat.is-rank { grid-area: rank; } .ask-stat.is-range { grid-area: range; }
 .ask-stat-v { font-size: 14px; font-weight: 700; color: rgb(var(--c-slate-900)); white-space: nowrap; }

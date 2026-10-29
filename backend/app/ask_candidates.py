@@ -243,11 +243,34 @@ def _clean_reason(text: object, profile: str, coin: dict) -> str:
     return reason[:REASON_MAX]
 
 
+def range_note_for(position: Optional[float]) -> str:
+    """지금 가격이 최근 한 달 범위에서 어디쯤인지 한 줄. 모르면 빈 문자열.
+
+    **예측이 아니라 과거 사실이다.** "오를 것 같다" 를 말하지 않는 설계(BANNED_WORDS ·
+    _PROFIT_PROMISE)를 그대로 지킨다. 사용자가 아쉬워한 "이미 고점에 올라간 코인" 이라는
+    의심에 정면으로 답하는 줄이고, 숫자는 넣지 않는다 — 위치 퍼센트는 설명이 필요한
+    값이고 문장이 이미 그 뜻을 담는다.
+
+    위쪽 문구가 필요한 이유: 상승장에서 상한이 풀리면(RANGE_POS_STEPS) 고점 종목도
+    후보에 오른다. 그때 민망해서 입을 닫는 게 아니라 그대로 말한다.
+    """
+    if position is None:
+        return ""
+    if position < 35.0:
+        return "최근 한 달 오르내린 폭의 아래쪽에 있어요"
+    if position < 70.0:
+        return "최근 한 달 오르내린 폭의 가운데쯤이라 어느 쪽으로든 여지가 있어요"
+    return "최근 한 달 오르내린 폭의 위쪽이에요"
+
+
 def _view(coin: dict, reason: str) -> dict:
     return {"symbol": coin["symbol"], "base": coin["base"], "reason": reason,
             "exchange": coin.get("exchange", "binance"), "quote_currency": coin.get("quote_currency", "USDT"),
             "volume_rank": coin["volume_rank"], "range_pct": coin["range_pct"],
-            "change_pct": coin["change_pct"]}
+            "change_pct": coin["change_pct"],
+            # 30일 창 — 일봉이 없으면 None(화면은 그 줄을 렌더하지 않는다).
+            "chop_30d": coin.get("chop_30d"), "range_pos_30d": coin.get("range_pos_30d"),
+            "range_note": range_note_for(coin.get("range_pos_30d"))}
 
 
 def validate_picks(raw: object, pool: list[dict], profile: str) -> list[dict]:

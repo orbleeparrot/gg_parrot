@@ -24,8 +24,8 @@ import math
 
 from engine.backtest import BacktestResult
 from engine.validation import (MIN_MONTHS_FOR_CONCENTRATION, MIN_SPAN_DAYS_FOR_CONCENTRATION,
-                               TOP_MONTH_SHARE_LIMIT, TOP_TRADE_SHARE_LIMIT, concentration,
-                               span_days)
+                               TOP_MONTH_SHARE_LIMIT, TOP_TRADE_SHARE_LIMIT,
+                               concentrated_month_share)
 
 # validation.py 의 문턱을 **그대로** 가리킨다. 숫자를 베껴 쓰지 않는다 — 베끼면 한쪽만
 # 고쳐져 카드와 검증 화면이 어긋난다(시험이 `is` 로 이 동일성을 고정한다).
@@ -65,19 +65,13 @@ def _number(value: object) -> float:
 def month_share(result: BacktestResult) -> float | None:
     """가장 많이 번 달이 전체 '번 돈' 에서 차지하는 몫(%). 판정할 수 없으면 None.
 
-    ``validation.concentration`` 을 그대로 쓰고, **켜는 조건도 그대로 따른다**(달 수
-    3 이상 · 구간 85일 이상). 그 하한이 있는 이유는 그 파일에 적혀 있다 — 구간이 짧으면
-    몫이 달 수에 따라 거의 정해져 신호에 정보가 없다. 물어볼까의 기간에는 1주와 1달이
-    있어서, 끄지 않으면 카드 상당수를 잡음으로 재정렬한다.
+    가드까지 ``validation.concentrated_month_share`` 한 벌에 맡긴다 — 검증 화면의 경고와
+    카드 해설이 같은 자를 쓴다. 짧은 구간에서 None 이 오는 이유는 그 파일에 적혀 있다:
+    구간이 짧으면 몫이 달 수에 따라 거의 정해져 신호에 정보가 없다. 물어볼까의 기간에는
+    1주와 1달이 있어서, 끄지 않으면 카드 상당수를 잡음으로 재정렬한다.
     """
-    curve = result.equity_curve or []
-    spread = concentration(curve)
-    share = spread.get("top_month_share_pct")
+    share = concentrated_month_share(result.equity_curve or [])
     if share is None:
-        return None
-    if int(spread.get("months") or 0) < MIN_MONTHS:
-        return None
-    if span_days(curve) < MIN_SPAN_DAYS:
         return None
     number = _number(share)
     return number if math.isfinite(number) else None

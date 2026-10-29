@@ -264,3 +264,39 @@ def test_an_unmeasured_last_window_is_not_a_warning_and_not_a_crash():
     # 마지막이 아닌 자리의 None 은 영향이 없다 — 판정은 마지막 구간만 본다.
     assert validation.warnings(window_returns=[None, -3.0], **kwargs) == ["후반부_음수"]
     assert validation.warnings(window_returns=[None, 3.0], **kwargs) == []
+
+
+# --- 집중 판정 가드를 한 벌로 (2026-10-29) --------------------------------------
+# 같은 가드를 app/steadiness.py 와 engine/explain.py 가 각각 구현하면 한쪽만
+# 고쳐져 순위 · 카드 해설 · 검증 화면이 서로 어긋난다.
+
+
+def _month_curve(month_ends: list[float]):
+    from engine.backtest import EquityPoint
+    out = [EquityPoint(t="2026-01-01T12:00:00", equity=100.0)]
+    for index, day in enumerate(["2026-01-31", "2026-02-28", "2026-03-31", "2026-04-30"]):
+        out.append(EquityPoint(t=f"{day}T12:00:00", equity=month_ends[index]))
+    return out
+
+
+def test_concentrated_month_share_reports_the_share_when_the_guard_is_open():
+    curve = _month_curve([200.0, 200.0, 200.0, 200.0])
+    assert validation.concentrated_month_share(curve) == 100.0
+
+
+def test_concentrated_month_share_is_none_when_the_window_is_too_short():
+    from engine.backtest import EquityPoint
+    short = [EquityPoint(t="2026-01-01T12:00:00", equity=100.0),
+             EquityPoint(t="2026-01-03T12:00:00", equity=200.0)]
+    assert validation.concentrated_month_share(short) is None
+
+
+def test_the_concentration_warning_uses_that_same_helper(monkeypatch):
+    # 경고와 해설 · 순위가 같은 자를 쓰는지 고정한다.
+    calls = []
+    real = validation.concentrated_month_share
+    monkeypatch.setattr(validation, "concentrated_month_share",
+                        lambda curve: calls.append(1) or real(curve))
+    validation.warnings(curve=_month_curve([200.0, 200.0, 200.0, 200.0]), total_trades=20,
+                        window_returns=[1.0, 2.0], top_trade_share_pct=10.0)
+    assert calls

@@ -74,6 +74,9 @@ def isolate_runtime_caches(tmp_path, monkeypatch):
     from app import cache_runtime
     monkeypatch.setattr(binance, "_CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(binance, "_DB_PATH", str(tmp_path / "market.db"))
+    # 물어볼까 후보 단계는 캐시가 비면 일봉을 받는 백그라운드 스레드를 띄운다. 시험이
+    # 거래소에 실제로 요청하지 않도록 끈다(그 스레드를 직접 보는 시험은 켜고 쓴다).
+    monkeypatch.setenv("ASK_DAILY_WARM", "false")
     cache_runtime.clear_all_caches()
     yield
     cache_runtime.close_cache_runtime()

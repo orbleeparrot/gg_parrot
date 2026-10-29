@@ -60,6 +60,56 @@ def headroom_pct(coin: dict) -> float:
         return 0.0
 
 
+def _usable(closes: list[float]) -> list[float]:
+    """종가 목록에서 쓸 수 있는 숫자만 남긴다 — None · 문자 · NaN · 0 이하를 버린다.
+
+    거래소는 체결이 없는 구간의 봉을 아예 빼고 주고(krw.py 머리글), 그 자리를 채우다
+    None 이나 NaN 이 섞인다. 걸러내지 않으면 산술이 NaN 으로 번져 순위가 조용히 뒤집힌다.
+    """
+    out: list[float] = []
+    for value in closes or ():
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number) and number > 0:
+            out.append(number)
+    return out
+
+
+def chop_pct(closes: list[float]) -> Optional[float]:
+    """구간을 오르내리며 보낸 정도(0~100). 한 방향으로만 갔으면 0, 제자리로 돌아왔으면 100.
+
+    ``headroom_pct`` 가 하려던 일을 제대로 하는 자(尺)다. 24시간 창에서는 "며칠째 오르내리는
+    횡보" 와 "올라서 고점 찍고 막 되밀림" 이 똑같이 보인다(둘 다 변동폭 크고 순변화 0).
+    며칠을 보면 갈라진다 — 되밀린 종목은 구간 순변화가 크고, 횡보 종목은 0 에 가깝다.
+
+    움직임이 전혀 없으면(분모 0) None 이다. 0 점이 아니라 '모른다' — 호출자가 폴백한다.
+    """
+    closes = _usable(closes)
+    if len(closes) < 2:
+        return None
+    path = sum(abs(b - a) for a, b in zip(closes, closes[1:]))
+    if path <= 0:
+        return None
+    return round(max(0.0, 1.0 - abs(closes[-1] - closes[0]) / path) * 100, 2)
+
+
+def range_position_pct(closes: list[float]) -> Optional[float]:
+    """마지막 값이 구간 최저~최고 사이 어디쯤인가(0~100). 최고와 최저가 같으면 None.
+
+    사용자가 아쉬워한 '이미 고점에 올라간 코인' 을 직접 가리키는 숫자다. 예측이 아니라
+    과거 사실이므로 종목 카드 문구에도 쓸 수 있다.
+    """
+    closes = _usable(closes)
+    if len(closes) < 2:
+        return None
+    low, high = min(closes), max(closes)
+    if high <= low:
+        return None
+    return round((closes[-1] - low) / (high - low) * 100, 2)
+
+
 def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE, exchange: str = "binance") -> list[dict]:
     """거래가 활발하고 왕복 여지가 큰 순서의 후보 풀. AI 는 이 목록 밖으로 나갈 수 없다.
 

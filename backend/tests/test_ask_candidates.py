@@ -293,3 +293,47 @@ def test_pool_never_ranks_a_one_sided_pump_ahead_of_a_calm_coin():
     assert [c["symbol"] for c in pool][0] == "QUIETUSDT"
     ranked = {c["symbol"]: c["range_pct"] for c in pool}
     assert ranked["PUMPUSDT"] > ranked["QUIETUSDT"]
+
+
+# --- 30일 창 지표 (2026-10-29) -------------------------------------------------
+# 왜 24시간이 아니라 30일인가: 24시간 창에서는 "며칠째 오르내리는 횡보 종목" 과
+# "올라서 고점 찍고 막 되밀린 종목" 이 똑같이 보인다(둘 다 변동폭 크고 순변화 0).
+# 뒤쪽이 사용자가 아쉬워한 '이미 고점에 올라간 코인' 이다.
+
+
+def test_chop_is_zero_for_a_one_way_climb():
+    assert ac.chop_pct([100.0, 101.0, 102.0, 103.0]) == 0.0
+
+
+def test_chop_is_full_when_it_ends_where_it_started():
+    assert ac.chop_pct([100.0, 110.0, 100.0, 110.0, 100.0]) == 100.0
+
+
+def test_chop_is_unknown_without_movement():
+    # 움직임이 없으면 분모가 0 이다 — 0 점이 아니라 '모른다'.
+    assert ac.chop_pct([100.0, 100.0, 100.0]) is None
+
+
+def test_chop_is_unknown_with_too_few_closes():
+    assert ac.chop_pct([100.0]) is None
+
+
+def test_range_position_is_full_at_the_top():
+    assert ac.range_position_pct([100.0, 110.0, 120.0]) == 100.0
+
+
+def test_range_position_is_half_in_the_middle():
+    assert ac.range_position_pct([100.0, 120.0, 110.0]) == 50.0
+
+
+def test_range_position_is_unknown_when_flat():
+    assert ac.range_position_pct([100.0, 100.0]) is None
+
+
+def test_chop_ignores_broken_closes():
+    # 거래소 응답에는 빈 봉·None·NaN 이 섞인다. 조용히 순위를 망가뜨리지 않게 걸러낸다.
+    assert ac.chop_pct([100.0, float("nan"), 110.0, 100.0]) == 100.0
+
+
+def test_range_position_ignores_broken_closes():
+    assert ac.range_position_pct([100.0, None, 120.0, 110.0]) == 50.0

@@ -33,6 +33,7 @@ from . import ask_candidates, hotcoins
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
 from .db import AskExtraCredit, AskMacroSession, User
+from .steadiness import steadiness
 from engine.backtest import BacktestResult, _lttb_equity_points
 from engine.explain import explain_result
 from engine.schema import Macro
@@ -562,6 +563,21 @@ def score(profile: str, result: BacktestResult) -> float:
     return ret
 
 
+def ranking_key(profile: str, result: BacktestResult) -> float:
+    """정렬에 쓰는 점수 — 성향 점수에 꾸준함 배수를 곱한다(2026-10-29).
+
+    왜 ``score`` 를 직접 고치지 않나: 측정기(scripts/ask_walkforward.py)가 ``ask.score`` 를
+    바꿔 끼워 설정 격자를 돌린다. 보정을 그 안에 섞으면 격자가 보정까지 같이 흔들어
+    "점수 함수" 와 "꾸준함" 중 무엇이 효과를 냈는지 가릴 수 없게 된다.
+
+    **점수가 양수일 때만 곱한다.** 음수에 1 미만을 곱하면 점수가 **커져** 순위가 거꾸로
+    올라간다. 지금은 ``worth_the_macro`` 가 음수를 앞에서 걸러 주지만, 그 필터가 바뀌어도
+    여기서 뒤집히지 않도록 부호를 직접 본다.
+    """
+    base = score(profile, result)
+    return base * steadiness(result) if base > 0 else base
+
+
 def expected_bars(period: str, interval: str) -> int:
     """이 기간 × 봉에서 백테스트가 보게 될 봉 수(대략).
 
@@ -664,7 +680,7 @@ def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N,
         and _within_mdd_cap(profile, period, e.result)
         and worth_the_macro(e.result, period)
     ]
-    pool.sort(key=lambda e: (score(profile, e.result), e.result.total_trades), reverse=True)
+    pool.sort(key=lambda e: (ranking_key(profile, e.result), e.result.total_trades), reverse=True)
     picked: list[Evaluated] = []
     per_type: dict[str, int] = {}
     for e in pool:

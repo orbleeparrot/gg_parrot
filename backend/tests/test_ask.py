@@ -1198,3 +1198,32 @@ def test_a_stored_scalper_session_refunds_instead_of_crashing(monkeypatch):
         assert db.get(AskMacroSession, session_id).refunded is True, "횟수를 돌려줘야 한다"
     status = client.get("/api/ask/status", headers=_auth(token)).json()
     assert status["remaining_today"] == ask.daily_limit(), "안 쓴 것으로 세야 한다"
+
+
+# --- 꾸준함 보정 (2026-10-29) ---------------------------------------------------
+# 같은 과거 구간에서 고르고 채점하므로 그 구간에 우연히 맞은 설정이 1등이 된다.
+# 꾸준함은 **순위에만** 쓴다 — 거르지 않으므로 카드 수는 줄어들 수 없다.
+
+_FLUKE = {"top_trade_share_pct": 100.0}
+
+
+def test_ranking_key_pushes_a_fluke_below_a_steady_card_of_the_same_score():
+    steady = _result(20.0, 5.0, bh=0.0)
+    fluke = steady.model_copy(update=_FLUKE)
+    assert ask.score("aggressive", fluke) == ask.score("aggressive", steady)
+    assert ask.ranking_key("aggressive", fluke) < ask.ranking_key("aggressive", steady)
+
+
+def test_ranking_key_never_lifts_a_card_that_lost_to_holding():
+    # 음수 점수에 1 미만을 곱하면 점수가 **커져** 순위가 거꾸로 올라간다.
+    # 지금은 worth_the_macro 가 앞에서 걸러 주지만 그 필터에 의존하지 않는다.
+    losing = _result(5.0, 5.0, bh=30.0).model_copy(update=_FLUKE)
+    assert ask.score("aggressive", losing) < 0
+    assert ask.ranking_key("aggressive", losing) == ask.score("aggressive", losing)
+
+
+def test_select_top_prefers_the_steadier_of_two_equal_cards():
+    steady = ask.Evaluated(_cand("C"), _result(20.0, 5.0, bh=0.0))
+    fluke = ask.Evaluated(_cand("J"), _result(20.0, 5.0, bh=0.0).model_copy(update=_FLUKE))
+    picked = ask.select_top([fluke, steady], "aggressive", n=2, period="3m")
+    assert [e.candidate.macro.rule_type.value for e in picked] == ["C", "J"]

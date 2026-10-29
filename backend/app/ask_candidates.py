@@ -110,12 +110,8 @@ def range_position_pct(closes: list[float]) -> Optional[float]:
     return round((closes[-1] - low) / (high - low) * 100, 2)
 
 
-def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE, exchange: str = "binance") -> list[dict]:
-    """거래가 활발하고 왕복 여지가 큰 순서의 후보 풀. AI 는 이 목록 밖으로 나갈 수 없다.
-
-    ``profile`` 은 정렬에 쓰지 않는다(2026-10-12) — 문구(fallback_reason·build_prompt)에만
-    쓴다. 성향은 '어떤 종목' 이 아니라 '얼마나 흔들려도 되는가' 로 갈린다(ask.mdd_cap·score).
-    """
+def _liquid(tickers: list[dict], exchange: str) -> list[dict]:
+    """거래가 활발한 상위 ``LIQUID_TOP`` 개. 순위와 거래소 정보를 붙여 돌려준다."""
     exchange = normalize_exchange(exchange)
     coins = _krw_coins(tickers) if is_domestic(exchange) else select_hot_coins(
         tickers, limit=500, min_quote_volume=MIN_QUOTE_VOLUME, candidate_pool=500)
@@ -124,15 +120,72 @@ def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE, exch
         coin["volume_rank"] = rank
         coin["exchange"] = exchange
         coin["quote_currency"] = quote_currency(exchange)
+    return coins[:LIQUID_TOP]
 
-    pool = coins[:LIQUID_TOP]
+
+def liquid_symbols(tickers: list[dict], *, exchange: str = "binance") -> list[str]:
+    """일봉을 받아야 하는 종목들 — ``build_pool`` 이 30일 창으로 재정렬할 후보 전부.
+
+    왜 따로 내보내나: ``build_pool`` 은 안에서 상위 ``LIQUID_TOP`` 개를 만들고 ``size``
+    개만 돌려주므로, 호출자는 어느 종목에 일봉이 필요한지 알 방법이 없다. 돌려받은
+    ``size`` 개에만 일봉을 주입하면 **폐기하려는 24시간 지표가 이미 고른 목록을
+    재배열만 하게 된다** — 고치려는 원인이 그대로 남는다.
+    """
+    return [coin["symbol"] for coin in _liquid(tickers, exchange)]
+
+
+# 지금 가격이 30일 범위의 이 위쪽이면 후보에서 뺀다 — 사용자가 아쉬워한 '이미 고점에
+# 올라간 코인' 이다. 상승장에서는 상위 종목 전부가 여기 걸릴 수 있으므로 단계로 풀어
+# 간다: 후보가 ``MIN_PICKS`` 도 안 남는 것보다 고점 종목을 보여주는 쪽이 낫다.
+RANGE_POS_STEPS = (85.0, 92.0, 100.0)
+
+
+def build_pool(tickers: list[dict], *, profile: str, size: int = POOL_SIZE,
+               exchange: str = "binance",
+               daily: Optional[dict[str, list[float]]] = None) -> list[dict]:
+    """후보 풀. AI 는 이 목록 밖으로 나갈 수 없다.
+
+    ``daily`` 는 심볼 → 최근 30개 일별 종가(호출자가 받아서 넣는다 — 이 함수는 순수
+    함수로 남아야 측정기가 과거 구간을 재현할 수 있다). 주면 **30일 창**으로 고른다:
+    한 달 고점 근처를 빼고 오르내린 정도(``chop_pct``)로 줄 세운다.
+
+    안 주거나 그 종목 일봉이 없으면 기존 ``headroom_pct`` 순서를 쓴다. 캐시가 비어
+    있는 첫 요청이 6초를 기다리지 않게 하는 길이다 — 일봉이 쌓이기 전 몇 번은 예전과
+    같은 목록이 나온다(의도된 동작).
+
+    ``profile`` 은 정렬에 쓰지 않는다(2026-10-12) — 문구(fallback_reason·build_prompt)에만
+    쓴다. 성향은 '어떤 종목' 이 아니라 '얼마나 흔들려도 되는가' 로 갈린다(ask.mdd_cap·score).
+    """
+    pool = _liquid(tickers, exchange)
     if not pool:
         return []
 
     # 2026-10-12: 성향별 정렬을 없앴다. 세 성향이 같은 목록을 본다 — 저변동 대형주도
     # 급등주도 홀딩이 이기는 자산이라, 거기서 "홀딩을 넘어라" 를 요구하는 것은 모순이었다.
-    pool.sort(key=headroom_pct, reverse=True)
-    return pool[: max(1, size)]
+    if not daily:
+        pool.sort(key=headroom_pct, reverse=True)
+        return pool[: max(1, size)]
+
+    measured: list[dict] = []
+    unmeasured: list[dict] = []
+    for coin in pool:
+        closes = daily.get(coin["symbol"]) or []
+        chop, position = chop_pct(closes), range_position_pct(closes)
+        if chop is None or position is None:
+            unmeasured.append(coin)
+            continue
+        coin["chop_30d"], coin["range_pos_30d"] = chop, position
+        measured.append(coin)
+
+    want = min(MIN_PICKS, len(measured))
+    kept = measured
+    for cap in RANGE_POS_STEPS:
+        kept = [coin for coin in measured if coin["range_pos_30d"] <= cap]
+        if len(kept) >= want:
+            break
+    kept.sort(key=lambda coin: coin["chop_30d"], reverse=True)
+    unmeasured.sort(key=headroom_pct, reverse=True)
+    return (kept + unmeasured)[: max(1, size)]
 
 
 MIN_PICKS = 3

@@ -337,3 +337,70 @@ def test_chop_ignores_broken_closes():
 
 def test_range_position_ignores_broken_closes():
     assert ac.range_position_pct([100.0, None, 120.0, 110.0]) == 50.0
+
+
+# --- 30일 창을 풀 선정에 붙인다 (2026-10-29) -----------------------------------
+# 호출자가 일봉을 주입한다(build_pool 은 순수 함수로 남는다 — 측정기가 과거 구간을
+# 재현할 수 있어야 한다). 일봉이 없는 종목은 기존 headroom_pct 순서로 뒤에 붙는다.
+
+
+def _climb(start=100.0, step=5.0, count=30):
+    """한 방향으로만 오른 일봉 — chop 0, 지금 가격은 30일 최고점."""
+    return [start + step * i for i in range(count)]
+
+
+def _zigzag(low=100.0, high=110.0, count=30):
+    """오르내리기를 되풀이한 일봉 — chop 높고 지금 가격은 범위 가운데쯤."""
+    out = [low + (high - low) * (i % 2) for i in range(count - 1)]
+    out.append((low + high) / 2)
+    return out
+
+
+def _wide_tickers():
+    """고점 종목 하나를 빼도 MIN_PICKS 가 남는 세계. 실제로는 상위 40종목을 본다."""
+    return [_t(f"W{i}USDT", 900_000_000 - i, 105, 100) for i in range(5)] + [
+        _t("PEAKUSDT", 800_000_000, 120, 100)]
+
+
+def test_pool_drops_a_coin_sitting_at_the_top_of_its_month():
+    # 사용자 피드백의 핵심 — '이미 고점에 올라간 코인' 을 목록에서 뺀다.
+    daily = {f"W{i}USDT": _zigzag() for i in range(5)}
+    daily["PEAKUSDT"] = _climb()
+    pool = ac.build_pool(_wide_tickers(), profile="balanced", size=10, daily=daily)
+    assert "PEAKUSDT" not in [c["symbol"] for c in pool]
+
+
+def test_pool_orders_by_the_30d_chop_not_the_24h_headroom():
+    # WILD 는 하루 변동폭이 가장 커서 headroom 으로는 앞에 오지만, 30일로 보면
+    # 한 방향으로만 간 종목이다.
+    daily = {"CALMUSDT": _zigzag(), "MIDUSDT": _climb(step=1.0), "WILDUSDT": _climb()}
+    pool = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily)
+    assert pool[0]["symbol"] == "CALMUSDT"
+
+
+def test_pool_keeps_a_coin_whose_daily_candles_are_missing_but_puts_it_after():
+    daily = {"CALMUSDT": _zigzag()}
+    symbols = [c["symbol"] for c in ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily)]
+    assert symbols[0] == "CALMUSDT"
+    assert "MIDUSDT" in symbols and "WILDUSDT" in symbols
+
+
+def test_pool_relaxes_the_cap_rather_than_coming_back_empty():
+    # 상승장에서는 상위 종목 전부가 한 달 고점 근처일 수 있다. 503 을 내는 것보다
+    # 고점 종목을 보여주는 쪽이 낫다.
+    daily = {"CALMUSDT": _climb(), "MIDUSDT": _climb(), "WILDUSDT": _climb()}
+    pool = ac.build_pool(_tickers(), profile="balanced", size=10, daily=daily)
+    assert len(pool) >= ac.MIN_PICKS
+
+
+def test_pool_without_daily_candles_behaves_exactly_as_before():
+    # 캐시가 비어 있는 첫 요청은 기다리지 않는다 — 예전 경로를 그대로 탄다.
+    before = ac.build_pool(_tickers(), profile="balanced", size=10)
+    after = ac.build_pool(_tickers(), profile="balanced", size=10, daily=None)
+    assert [c["symbol"] for c in before] == [c["symbol"] for c in after]
+
+
+def test_liquid_symbols_names_everything_the_caller_must_fetch():
+    # 상위 10개만 주입하면, 폐기하려는 24시간 지표가 이미 고른 목록을 재배열만 한다.
+    names = ac.liquid_symbols(_tickers())
+    assert set(names) == {"CALMUSDT", "MIDUSDT", "WILDUSDT"}

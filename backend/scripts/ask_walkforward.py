@@ -189,7 +189,7 @@ def _run_candidates(symbol: str, horizon: str, end_ms: int,
 
 
 def _forward(symbol: str, horizon: str, end_ms: int, candidates: list[ask.Evaluated],
-             watch: str = DEFAULT_WATCH) -> dict[str, float]:
+             forward_ms: int, watch: str = DEFAULT_WATCH) -> dict[str, float]:
     """후보 레이블 → **다음 구간**(창 끝에서 1주) 홀딩 대비 초과 수익(%p).
 
     왜 이게 있어야 하나: 기존 '품질' 열은 ``excess_over_hold`` 를 **고른 그 구간**에서
@@ -210,7 +210,7 @@ def _forward(symbol: str, horizon: str, end_ms: int, candidates: list[ask.Evalua
         key = macro.candle_interval
         if key not in frames:
             try:
-                frames[key], _source = fetch_klines_for_macro(macro, end_ms, end_ms + WEEK_MS)
+                frames[key], _source = fetch_klines_for_macro(macro, end_ms, end_ms + forward_ms)
             except Exception:
                 frames[key] = None
         df = frames[key]
@@ -242,6 +242,11 @@ def main() -> int:
     # 통째로 바뀌기 때문이다. 끈 상태로 한 번, 켠 상태로 한 번 돌려 비교한다.
     parser.add_argument("--no-daily", action="store_true",
                         help="30일 창을 끄고 예전 24시간 지표로 종목을 고른다(전후 비교용)")
+    # 다음 구간을 얼마나 길게 볼지. week 는 모든 호흡에서 1주라 서로 견주기 쉽지만
+    # 3개월짜리 설정을 1주로 재는 셈이다. period 는 그 호흡의 기간만큼 본다 — 공정한
+    # 길이지만 창을 그만큼 더 뒤로 밀어야 해서 최근 장을 덜 본다.
+    parser.add_argument("--forward", default="week", choices=("week", "period"),
+                        help="다음 구간 길이: week(1주 고정) 또는 period(호흡의 기간만큼)")
     args = parser.parse_args()
     watch = args.watch
 
@@ -253,31 +258,38 @@ def main() -> int:
         print(f"30일 창 **끔** — 예전 24시간 지표로 종목을 고른다 · 확인 빈도: {watch}")
     else:
         print(f"유동성 상위 {len(universe)}종목의 일봉을 받는다 (종목당 한 번) …")
-        history = _daily_history(universe, now_ms, args.weeks * 7 + ask_daily.DAYS + 5)
+        history = _daily_history(universe, now_ms, args.weeks * 7 + ask_daily.DAYS + 5
+                                 + (max(PERIOD_PRESET_DAYS[ask.to_period(h)] for h in HORIZONS)
+                                    if args.forward == "period" else 7))
         print(f"  일봉 확보 {len(history)}/{len(universe)}종목 · 확인 빈도: {watch}")
 
     cache: dict[tuple[int, str, str], list[ask.Evaluated]] = {}
     ahead: dict[tuple[int, str, str], dict[str, float]] = {}
-    per_week_symbols: dict[int, list[str]] = {}
+    window_symbols: dict[tuple[int, str], list[str]] = {}
     positions: list[float] = []
     for week in range(args.weeks, 0, -1):
-        # **창을 한 주 뒤로 민다**(예전에는 week-1 이라 가장 최근 창이 오늘로 끝났다).
-        # 그러면 어느 창에도 채점할 '다음 구간' 이 없다. 이제 모든 창 뒤에 1주가 남는다.
-        end_ms = now_ms - week * WEEK_MS
-        symbols = _symbols_at(tickers, history, end_ms)
-        per_week_symbols[week] = symbols
-        for coin in ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
-                                              daily=_daily_at(history, end_ms)):
-            if coin.get("range_pos_30d") is not None:
-                positions.append(float(coin["range_pos_30d"]))
-        print(f"  {args.weeks - week + 1}주째 종목: {symbols}")
+        print(f"  {args.weeks - week + 1}주째")
         for horizon in HORIZONS:
+            period = ask.to_period(horizon)
+            forward_ms = (WEEK_MS if args.forward == "week"
+                          else PERIOD_PRESET_DAYS[period] * 86_400_000)
+            # **창을 다음 구간 길이만큼 뒤로 민다.** 예전에는 가장 최근 창이 오늘로
+            # 끝나 채점할 다음 구간이 아예 없었다. 이제 모든 창 뒤에 그만큼이 남는다.
+            end_ms = now_ms - (week - 1) * WEEK_MS - forward_ms
+            symbols = _symbols_at(tickers, history, end_ms)
+            window_symbols[(week, horizon)] = symbols
+            for coin in ask_candidates.build_pool(tickers, profile="balanced", exchange=EXCHANGE,
+                                                  daily=_daily_at(history, end_ms)):
+                if coin.get("range_pos_30d") is not None:
+                    positions.append(float(coin["range_pos_30d"]))
+            print(f"    {horizon} 종목: {symbols}")
             for symbol in symbols:
                 started = time.monotonic()
                 got = _run_candidates(symbol, horizon, end_ms, watch)
                 cache[(week, horizon, symbol)] = got
-                ahead[(week, horizon, symbol)] = _forward(symbol, horizon, end_ms, got, watch)
-                print(f"    {horizon} · {symbol} → 후보 {len(got)}개 "
+                ahead[(week, horizon, symbol)] = _forward(symbol, horizon, end_ms, got,
+                                                          forward_ms, watch)
+                print(f"      {symbol} → 후보 {len(got)}개 "
                       f"· 앞 구간 {len(ahead[(week, horizon, symbol)])}개 "
                       f"({time.monotonic() - started:.1f}초)")
 
@@ -295,9 +307,10 @@ def main() -> int:
         excesses: list[float] = []
         forwards: list[float] = []
         shares: list[float] = []
+        by_horizon: dict[str, list[float]] = {h: [] for h in HORIZONS}
         for week in range(args.weeks, 0, -1):
-            symbols = per_week_symbols[week]
             for horizon in HORIZONS:
+                symbols = window_symbols[(week, horizon)]
                 period = ask.to_period(horizon)
                 interval = ask.to_interval(watch, period)
                 per_profile: dict[str, dict[str, list]] = {}
@@ -318,8 +331,10 @@ def main() -> int:
                         excesses.extend(ask.excess_over_hold(e.result) for e in got)
                         # 앞 구간 — 사용자가 실제로 받는 쪽. 고른 구간 숫자와 따로 센다.
                         next_window = ahead.get((week, horizon, symbol), {})
-                        forwards.extend(next_window[e.candidate.label] for e in got
-                                        if e.candidate.label in next_window)
+                        hit = [next_window[e.candidate.label] for e in got
+                               if e.candidate.label in next_window]
+                        forwards.extend(hit)
+                        by_horizon[horizon].extend(hit)
                         shares.extend(float(e.result.top_trade_share_pct) for e in got
                                       if e.result.top_trade_share_pct is not None)
                 for symbol in symbols:
@@ -344,7 +359,8 @@ def main() -> int:
                      mdd_ok, mdd_cells, mdd_worse,
                      statistics.median(excesses) if excesses else 0.0, len(excesses),
                      statistics.median(forwards) if forwards else 0.0, len(forwards),
-                     statistics.median(shares) if shares else 0.0))
+                     statistics.median(shares) if shares else 0.0,
+                     {h: (statistics.median(v) if v else None, len(v)) for h, v in by_horizon.items()}))
 
     ask.MDD_CAP_BY_PERIOD = {p: dict(t) for p, t in _BASE_CAPS.items()}
     ask.score = _BASE_SCORE
@@ -361,12 +377,24 @@ def main() -> int:
           "| 고른구간(중앙값 %p) | **다음구간(중앙값 %p)** | 상위3거래몫(중앙값 %) | 카드 |")
     print("|---|---|---|---|---|---|---|---|---|")
     for (name, empty, ec, distinct, dc, mdd_ok, mc, mdd_worse,
-         quality, cards, forward, fcards, share) in rows:
+         quality, cards, forward, fcards, share, _by_h) in rows:
         print(f"| {name} | {empty}/{ec} | {distinct}/{dc} | {mdd_ok}/{mc} | {mdd_worse}/{mc} "
               f"| {quality:+.2f} | **{forward:+.2f}** ({fcards}장) | {share:.1f} | {cards} |")
     print("")
     print("'고른구간' 은 **고를 때 쓴 숫자를 성적으로 다시 쓴 것**이라 항상 크게 나온다 "
           "— 후보 90개 중 그 구간에 가장 잘 맞은 것을 뽑기 때문이다. 판단은 '다음구간' 으로 한다.")
+
+    # 호흡별로 나눠 본다 — 전체 중앙값 하나로는 어느 호흡이 끌어내렸는지 알 수 없고,
+    # 1주 호흡과 6개월 호흡은 애초에 같은 난이도가 아니다.
+    print("")
+    print("| 설정 | " + " | ".join(f"{h} 다음구간" for h in HORIZONS) + " |")
+    print("|---" * (len(HORIZONS) + 1) + "|")
+    for row in rows:
+        cells = []
+        for horizon in HORIZONS:
+            median, count = row[13][horizon]
+            cells.append("—" if median is None else f"{median:+.2f} ({count}장)")
+        print(f"| {row[0]} | " + " | ".join(cells) + " |")
 
     # 고르는 규칙 — 완료 기준 3(일곱/아홉 = 78% 이상)·4(항상)를 먼저 통과시키고 그중
     # **다음 구간** 성적이 가장 좋은 것. 2026-10-29 전에는 '고른 구간' 으로 골랐는데,

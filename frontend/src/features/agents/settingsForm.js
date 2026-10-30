@@ -22,19 +22,20 @@ export function fieldText(field) {
 }
 
 // 단위를 붙여 읽는 말로. 확인 창과 바뀐 내용 요약이 함께 쓴다.
+//
+// **단위 글자는 서버가 준다**(field.unit_text) — 돈은 거래소마다 KRW·USDT 로 갈리고,
+// 여기서 또 정하면 입력 칸 옆에 붙는 단위와 요약의 단위가 서로 달라진다.
 export function showValue(field, value) {
   if (value == null || value === "") return "없음";
   const n = typeof value === "number" ? value : parseNumber(value);
   if (n == null) return String(value);
-  switch (field?.unit) {
-    case "money": return n.toLocaleString();
-    case "pct": return `${n}%`;
-    case "ratio": return `${Math.round(n * 100)}%`;
-    case "hours": return `${n}시간`;
-    case "minutes": return `${n}분`;
-    case "days": return `${n}일`;
-    default: return String(n);
-  }
+  // 비율만 저장 모양(0~1)과 읽는 모양(%)이 다르다 — 그래서 단위 글자를 쓰지 않는다.
+  if (field?.unit === "ratio") return `${Math.round(n * 100)}%`;
+  const text = field?.unit === "money" ? n.toLocaleString() : String(n);
+  const unit = field?.unit_text || "";
+  if (!unit) return text;
+  // 통화 기호(USDT · KRW)만 띄어 쓴다 — 한국어 단위는 "12시간" 처럼 붙여 쓰는 말이다.
+  return /^[A-Za-z]+$/.test(unit) ? `${text} ${unit}` : `${text}${unit}`;
 }
 
 // 입력란의 글자 하나를 '보낼 값'으로. KEEP 이면 안 보낸다(= 그대로 둔다).
@@ -77,6 +78,16 @@ export function badFields(fields = [], edits = {}) {
 export function hasChanges(fields, edits) {
   const changes = buildChanges(fields, edits);
   return Object.values(changes).some((section) => Object.keys(section).length > 0);
+}
+
+// 바꾼 값이 **지금 들고 있는 포지션의 청산 조건**을 건드리는가.
+// 건드리지 않으면(금액 · 비율 · 재진입 대기) 적용 시점을 고르든 말든 결과가 같다 —
+// 화면이 그 사실을 말해 주려고 쓴다. 무엇이 어느 쪽인지는 서버가 정한다(field.affects).
+export function touchesPosition(fields = [], edits = {}) {
+  const changes = buildChanges(fields, edits);
+  return fields.some((field) => (
+    changes[field.section]?.[field.key] !== undefined && field.affects !== "next_entry"
+  ));
 }
 
 // 확인 창이 읽어 주는 한 줄 — "투자 금액 1,000,000 → 2,000,000 · 손절 3% → 없음".

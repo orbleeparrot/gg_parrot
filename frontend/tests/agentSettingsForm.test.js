@@ -7,16 +7,23 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   badFields, buildChanges, changeSummary, fieldText, hasChanges, parseNumber, showValue,
+  touchesPosition,
 } from "../src/features/agents/settingsForm.js";
 
+// 칸 모양은 서버(app/runner_settings.py form_view)가 내려 주는 그대로다 — unit_text 와
+// affects 도 서버가 정한다. 여기서 지어내면 화면과 서버가 두 벌이 된다.
 const money = { path: "params.initial_capital", section: "params", key: "initial_capital",
-                label: "투자 금액", value: 1000000, unit: "money", clearable: false };
+                label: "투자 금액", value: 1000000, unit: "money", unit_text: "USDT",
+                affects: "next_entry", clearable: false };
 const stop = { path: "risk.stop_loss_pct", section: "risk", key: "stop_loss_pct",
-               label: "손절", value: 3, unit: "pct", clearable: true };
+               label: "손절", value: 3, unit: "pct", unit_text: "%",
+               affects: "position", clearable: true };
 const ratio = { path: "risk.invest_ratio", section: "risk", key: "invest_ratio",
-                label: "투자 비율", value: 1, unit: "ratio", clearable: false };
+                label: "투자 비율", value: 1, unit: "ratio", unit_text: "",
+                affects: "next_entry", clearable: false };
 const period = { path: "params.rsi_period", section: "params", key: "rsi_period",
-                 label: "RSI 기간", value: 14, unit: "", clearable: false };
+                 label: "RSI 기간", value: 14, unit: "", unit_text: "봉",
+                 affects: "position", clearable: false };
 const FIELDS = [money, stop, ratio, period];
 
 test("parseNumber: takes what people actually type", () => {
@@ -83,20 +90,55 @@ test("fieldText: money reads with separators, an empty setting reads empty", () 
 });
 
 test("showValue: each unit reads the way people say it", () => {
-  assert.equal(showValue(money, 2000000), "2,000,000");
+  assert.equal(showValue(money, 2000000), "2,000,000 USDT");
   assert.equal(showValue(stop, 1.5), "1.5%");
-  assert.equal(showValue(ratio, 0.5), "50%");
+  assert.equal(showValue(ratio, 0.5), "50%", "비율만 저장 모양과 읽는 모양이 다르다");
   assert.equal(showValue(stop, null), "없음");
-  assert.equal(showValue({ unit: "hours" }, 12), "12시간");
+  assert.equal(showValue(period, 20), "20봉");
+  assert.equal(showValue({ unit: "hours", unit_text: "시간" }, 12), "12시간");
+});
+
+test("showValue: 단위 글자가 없으면 숫자만 — 없는 단위를 지어내지 않는다", () => {
+  const threshold = { unit: "", unit_text: "" };
+  assert.equal(showValue(threshold, 30), "30");
+});
+
+test("showValue: 돈은 거래소가 정한 통화로 읽는다", () => {
+  const won = { ...money, unit_text: "KRW" };
+  assert.equal(showValue(won, 60000), "60,000 KRW");
 });
 
 test("changeSummary: the confirm box reads both sides, in the field order", () => {
   const text = changeSummary(FIELDS, {
     "params.initial_capital": "2000000", "risk.stop_loss_pct": "",
   });
-  assert.equal(text, "투자 금액 1,000,000 → 2,000,000 · 손절 3% → 없음");
+  assert.equal(text, "투자 금액 1,000,000 USDT → 2,000,000 USDT · 손절 3% → 없음");
 });
 
 test("changeSummary: nothing changed reads empty", () => {
   assert.equal(changeSummary(FIELDS, { "params.rsi_period": "14" }), "");
+});
+
+
+// --- 바꾼 값이 지금 들고 있는 포지션을 건드리는가 ---------------------------
+
+test("touchesPosition: 손절을 바꾸면 들고 있는 포지션의 청산 조건이 바뀐다", () => {
+  assert.equal(touchesPosition(FIELDS, { "risk.stop_loss_pct": "2" }), true);
+});
+
+test("touchesPosition: 금액·비율만 바꾸면 지금 포지션과 상관없다", () => {
+  assert.equal(touchesPosition(FIELDS, { "params.initial_capital": "2000000" }), false);
+  assert.equal(touchesPosition(FIELDS, { "risk.invest_ratio": "0.5" }), false);
+});
+
+test("touchesPosition: 손 안 댄 칸은 세지 않는다 — 열어 두기만 해도 묻게 되면 안 된다", () => {
+  assert.equal(touchesPosition(FIELDS, {}), false);
+  assert.equal(touchesPosition(FIELDS, { "risk.stop_loss_pct": "3" }), false, "같은 값은 변경이 아니다");
+});
+
+test("touchesPosition: 둘을 같이 바꾸면 묻는다", () => {
+  assert.equal(
+    touchesPosition(FIELDS, { "params.initial_capital": "2000000", "params.rsi_period": "20" }),
+    true,
+  );
 });

@@ -161,13 +161,28 @@ def summary(before: Macro, after: Macro) -> str:
     기록 한 줄과 화면·알림이 같은 문장을 쓴다. 칸 이름을 그대로 보여 주지 않는다
     (``initial_capital`` 은 사용자의 말이 아니다).
     """
+    quote = str(getattr(after, "quote_currency", "") or "")
     parts: list[str] = []
     for path in changed_fields(before, after):
         section, key = path.split(".", 1)
         old = _section(before, section).get(key)
         new = _section(after, section).get(key)
-        parts.append(f"{_VALUE_LABELS.get(key, key)} {_show(old)} → {_show(new)}")
+        unit = _unit_text(key, _UNITS.get(key, ""), quote)
+        parts.append(f"{_VALUE_LABELS.get(key, key)} "
+                     f"{_with_unit(old, unit)} → {_with_unit(new, unit)}")
     return " · ".join(parts)
+
+
+def _with_unit(value: Any, unit: str) -> str:
+    """값에 단위를 붙인 글자. 끈 칸("없음")에는 붙이지 않는다 — "없음 %" 는 말이 안 된다.
+
+    통화 기호(USDT · KRW)만 띄어 쓴다. 한국어 단위는 붙여 쓰는 말이다 — "12 시간" 이
+    아니라 "12시간".
+    """
+    text = _show(value)
+    if not unit or value is None:
+        return text
+    return f"{text} {unit}" if unit.isascii() and unit.isalpha() else f"{text}{unit}"
 
 
 def editable_view(macro: Macro) -> dict:
@@ -184,7 +199,90 @@ _UNITS = {
     "take_profit": "pct", "price_deviation": "pct", "trail_percent": "pct",
     "activation_profit": "pct", "entry_dip": "pct", "long_take_profit_pct": "pct",
     "max_holding_hours": "hours", "cooldown_minutes": "minutes", "interval_days": "days",
+    "lower_price": "money", "upper_price": "money",
 }
+
+# 입력 칸 옆에 붙일 단위. 숫자만 있으면 "2" 가 2%인지 2시간인지 2봉인지 알 수 없다.
+#
+# 돈은 거래소가 정한다 — 업비트는 KRW, 바이낸스는 USDT. 매크로가 이미 들고 있는 값을
+# 그대로 쓴다(``quote_currency``). 화면이 거래소를 보고 짐작하면 두 벌이 되어 어긋난다.
+_UNIT_TEXT = {"pct": "%", "hours": "시간", "minutes": "분", "days": "일"}
+
+# 단위 칸에 안 걸리는 숫자들의 단위. 봉 수 · 횟수 · 배수는 돈도 퍼센트도 아니다.
+_UNIT_TEXT_BY_KEY = {
+    "rsi_period": "봉", "bb_period": "봉", "fast_period": "봉", "slow_period": "봉",
+    "squeeze_lookback": "봉", "ma_filter_period": "봉", "confirm_candles": "봉",
+    "grid_count": "칸", "max_safety_orders": "회", "session_start_hour": "시",
+    "bb_std": "배", "k": "배",
+    "safety_order_step_scale": "배", "safety_order_volume_scale": "배",
+}
+
+
+def _unit_text(key: str, unit: str, quote: str) -> str:
+    """이 칸의 단위 글자. 없으면 빈 글자 — RSI 문턱처럼 단위가 없는 값도 있다.
+
+    투자 비율은 일부러 비운다. 0~1 로 저장하므로 "1" 옆에 "%" 를 붙이면 1% 로 읽힌다 —
+    틀린 단위를 보여 주느니 설명 한 줄로 "1 = 전부" 라고 말하는 편이 낫다.
+    """
+    if unit == "money":
+        return quote or "USDT"
+    return _UNIT_TEXT.get(unit) or _UNIT_TEXT_BY_KEY.get(key, "")
+
+
+# 칸이 **무슨 일을 하는지** 한 줄. 화면이 칸 이름만 보여 주면 "투자 비율" 이 진입 때 쓰는
+# 값인지 들고 있는 것에도 걸리는 값인지 알 수 없다 — 그걸 모르고 바꾸는 게 제일 위험하다.
+_HELP = {
+    "initial_capital": "다음에 살 때 쓸 금액이에요. 지금 들고 있는 건 그대로예요.",
+    "invest_ratio": "한 번에 투자 금액의 얼마를 쓸지예요(1 = 전부). 다음에 살 때부터 적용돼요.",
+    "stop_loss_pct": "이만큼 손해 나면 팔아요.",
+    "take_profit_pct": "이만큼 이익 나면 팔아요.",
+    "take_profit": "이만큼 이익 나면 팔아요.",
+    "long_take_profit_pct": "롱 쪽이 이만큼 이익 나면 팔아요.",
+    "daily_max_loss_pct": "하루에 이만큼 잃으면 그날은 더 사지 않아요.",
+    "max_holding_hours": "이 시간이 넘으면 들고 있던 걸 정리해요.",
+    "cooldown_minutes": "판 뒤 이만큼은 다시 사지 않아요.",
+    "trail_percent": "고점에서 이만큼 내려오면 팔아요.",
+    "activation_profit": "이만큼 이익이 난 뒤부터 고점을 따라가요.",
+    "rsi_period": "RSI 를 몇 개 봉으로 계산할지예요.",
+    "entry_threshold": "RSI 가 이 값을 지나면 사요.",
+    "exit_threshold": "RSI 가 이 값을 지나면 팔아요.",
+    "fast_period": "짧은 쪽 이동평균의 봉 수예요.",
+    "slow_period": "긴 쪽 이동평균의 봉 수예요.",
+    "bb_period": "볼린저 밴드를 몇 개 봉으로 그릴지예요.",
+    "bb_std": "밴드를 얼마나 넓게 잡을지예요.",
+    "k": "전날 폭의 몇 배를 넘으면 살지예요.",
+    "interval_days": "며칠에 한 번 살지예요.",
+    "amount_per_buy": "한 번에 살 금액이에요.",
+    "base_order_size": "맨 처음 사는 금액이에요.",
+    "safety_order_size": "떨어졌을 때 더 사는 금액이에요.",
+    "max_safety_orders": "떨어졌을 때 몇 번까지 더 살지예요.",
+    "price_deviation": "이만큼 더 떨어질 때마다 더 사요.",
+    "entry_dip": "이만큼 떨어졌을 때 사요.",
+    "per_grid_invest": "칸 하나에 넣을 금액이에요.",
+    "confirm_candles": "신호가 이만큼 연달아 나와야 움직여요.",
+    "squeeze_lookback": "밴드가 좁은지 볼 때 몇 개 봉을 돌아볼지예요.",
+    "ma_filter_period": "이 이동평균 위에 있을 때만 사요. 비우면 안 봐요.",
+    "session_start_hour": "하루를 이 시각부터 세요.",
+    "lower_price": "격자의 맨 아래 가격이에요.",
+    "upper_price": "격자의 맨 위 가격이에요.",
+    "grid_count": "아래위 사이를 몇 칸으로 나눌지예요.",
+    "safety_order_step_scale": "추가 매수 간격을 회차마다 몇 배로 벌릴지예요.",
+    "safety_order_volume_scale": "추가 매수 금액을 회차마다 몇 배로 키울지예요.",
+    "drop_trigger_pct": "평단에서 이만큼 빠지면 방어에 들어가요.",
+    "partial_exit_pct": "방어에 들어갈 때 들고 있는 것의 얼마를 팔지예요.",
+    "short_take_profit_pct": "숏이 이만큼 이익 나면 덮어요.",
+    "short_stop_loss_pct": "숏이 이만큼 손해 나면 덮어요.",
+}
+
+# **지금 들고 있는 포지션과 상관없는 칸.** 여기 있는 것만 "다음에 살 때 쓰는 값" 이고,
+# 나머지는 전부 들고 있는 포지션의 청산에 걸릴 수 있다고 본다.
+#
+# 왜 반대로(청산 칸을 적는 식으로) 하지 않는가: 빠뜨렸을 때의 결과가 다르다. 청산 칸을
+# 하나 빠뜨리면 사용자가 **묻지도 않은 채** 들고 있는 포지션의 조건이 바뀌고, 그 자리에서
+# 팔릴 수도 있다. 진입 칸을 빠뜨리면 안 물어도 될 걸 한 번 더 묻는 것뿐이다.
+#
+# 추가 매수 계열(세이프티 주문 · DCA 주기)은 **들고 있는 동안 더 사므로** 여기 넣지 않는다.
+ENTRY_ONLY_KEYS = ("initial_capital", "invest_ratio", "cooldown_minutes")
 
 
 def _is_number(value: Any) -> bool:
@@ -204,6 +302,7 @@ def form_view(macro: Macro, local_decisions: bool = False) -> list[dict]:
     위험 설정은 값이 비어 있어도(손절 꺼 둠) 칸을 낸다 — 켜는 길이 있어야 한다.
     """
     out: list[dict] = []
+    quote = str(getattr(macro, "quote_currency", "") or "")
     for section in EDITABLE_SECTIONS:
         values = _section(macro, section)
         for key, value in values.items():
@@ -217,6 +316,13 @@ def form_view(macro: Macro, local_decisions: bool = False) -> list[dict]:
                 "path": f"{section}.{key}", "section": section, "key": key,
                 "label": _VALUE_LABELS.get(key, key), "value": value,
                 "unit": _UNITS.get(key, ""),
+                # 입력 칸 옆에 붙는 단위(%, USDT, KRW, 시간, 봉 …).
+                "unit_text": _unit_text(key, _UNITS.get(key, ""), quote),
+                # 이 칸이 무슨 일을 하는가 — 화면이 칸 밑에 한 줄로 보여 준다.
+                "help": _HELP.get(key, ""),
+                # "next_entry" 면 지금 들고 있는 포지션과 상관없다. 그 밖은 "position" —
+                # 바꾸면 들고 있는 포지션의 청산 조건이 바뀔 수 있어 적용 시점을 묻는다.
+                "affects": "next_entry" if key in ENTRY_ONLY_KEYS else "position",
                 # 끌 수 있는 칸인가 — 위험 설정만 비울 수 있다(손절 없음 등).
                 "clearable": section == "risk" and key != "invest_ratio",
             })

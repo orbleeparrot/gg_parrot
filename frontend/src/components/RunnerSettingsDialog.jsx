@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useModalLayer } from "../hooks/useModalLayer.js";
 import {
-  badFields, buildChanges, changeSummary, fieldText, hasChanges,
+  badFields, buildChanges, changeSummary, fieldText, hasChanges, touchesPosition,
 } from "../features/agents/settingsForm.js";
 
 // 구동 중 매크로의 금액·조건을 바꾸는 창 (2026-10-30).
@@ -12,6 +12,10 @@ import {
 //
 // 포지션을 들고 있으면 적용 시점을 묻는다. 바꾼 조건이 **지금 들고 있는 포지션의 청산
 // 조건까지** 바꾼다는 사실을 사용자가 모르고 누르면 안 된다.
+//
+// 칸마다 한 줄 설명을 붙이고, 고른 쪽이 지금 포지션에 무슨 일을 하는지도 적는다. 설명이
+// 없으면 "지금 적용" 을 고를 때 **팔고 다시 사는 건가** 하고 멈칫하게 된다 — 안 판다.
+// 들고 있는 수량과 평단은 그대로 두고 청산 조건만 갈아 끼운다.
 const APPLY_NOW = "immediate";
 const APPLY_LATER = "next_entry";
 
@@ -44,6 +48,8 @@ export default function RunnerSettingsDialog({ open, session, busy = false, erro
 
   const bad = badFields(fields, edits);
   const summary = changeSummary(fields, edits);
+  // 금액·비율만 바꿨으면 어느 쪽을 골라도 같다 — 묻기는 하되 같다는 사실을 말해 준다.
+  const hitsPosition = touchesPosition(fields, edits);
   const ready = hasChanges(fields, edits) && bad.length === 0;
 
   const submit = (event) => {
@@ -81,18 +87,30 @@ export default function RunnerSettingsDialog({ open, session, busy = false, erro
         <div className="runner-settings-fields">
           {fields.map((field, index) => (
             <label key={field.path} className="runner-settings-field">
-              <span className="runner-settings-label">{field.label}</span>
-              <input
-                ref={index === 0 ? firstRef : null}
-                type="text"
-                inputMode="decimal"
-                className="input"
-                value={edits[field.path] ?? fieldText(field)}
-                disabled={busy}
-                aria-invalid={bad.includes(field) || undefined}
-                placeholder={field.clearable ? "비우면 끔" : ""}
-                onChange={(event) => setEdits((prev) => ({ ...prev, [field.path]: event.target.value }))}
-              />
+              <span className="runner-settings-label">
+                {field.label}
+                {field.help ? <small className="runner-settings-help">{field.help}</small> : null}
+              </span>
+              {/* 단위를 칸 옆에 붙인다 — 숫자만 있으면 2 가 2%인지 2시간인지 2봉인지 모른다. */}
+              <span className="runner-settings-input">
+                <input
+                  ref={index === 0 ? firstRef : null}
+                  type="text"
+                  inputMode="decimal"
+                  className="input"
+                  value={edits[field.path] ?? fieldText(field)}
+                  disabled={busy}
+                  aria-invalid={bad.includes(field) || undefined}
+                  aria-describedby={field.unit_text ? `${titleId}-${field.path}` : undefined}
+                  placeholder={field.clearable ? "비우면 끔" : ""}
+                  onChange={(event) => setEdits((prev) => ({ ...prev, [field.path]: event.target.value }))}
+                />
+                {field.unit_text ? (
+                  <span className="runner-settings-unit" id={`${titleId}-${field.path}`}>
+                    {field.unit_text}
+                  </span>
+                ) : null}
+              </span>
             </label>
           ))}
         </div>
@@ -106,17 +124,31 @@ export default function RunnerSettingsDialog({ open, session, busy = false, erro
         {inPosition ? (
           <fieldset className="runner-settings-apply">
             <legend className="t-small text-slate-700">지금 포지션을 들고 있어요. 언제 적용할까요?</legend>
+            <p className="runner-settings-help">
+              어느 쪽을 골라도 지금 들고 있는 건 팔지 않아요. 수량과 평단은 그대로예요.
+              {hitsPosition ? "" : " 이번에 바꾼 값은 다음에 살 때 쓰는 것이라 두 쪽이 같아요."}
+            </p>
             <label>
               <input type="radio" name="apply_mode" value={APPLY_NOW} disabled={busy}
                      checked={applyMode === APPLY_NOW}
                      onChange={() => setApplyMode(APPLY_NOW)} />
-              지금 적용 — 들고 있는 포지션의 청산 조건도 바뀌어요
+              <span>
+                지금 적용: 들고 있는 포지션의 청산 조건도 바뀌어요
+                <small className="runner-settings-help">
+                  새 손절·익절이 지금 포지션에 바로 걸려요. 이미 그 선을 넘었으면 곧 정리될 수 있어요.
+                </small>
+              </span>
             </label>
             <label>
               <input type="radio" name="apply_mode" value={APPLY_LATER} disabled={busy}
                      checked={applyMode === APPLY_LATER}
                      onChange={() => setApplyMode(APPLY_LATER)} />
-              이 포지션 정리된 뒤부터
+              <span>
+                이 포지션 정리된 뒤부터: 지금 포지션은 살 때 조건 그대로 끝나요
+                <small className="runner-settings-help">
+                  새 설정은 예약해 두고, 지금 포지션이 정리되면 그때부터 써요.
+                </small>
+              </span>
             </label>
           </fieldset>
         ) : null}

@@ -28,7 +28,7 @@ def test_old_exe_url_left_on_render_is_upgraded_to_the_desktop_app(version):
     assert result["version"] == "22" and result["supports_launch"]
 
 
-@pytest.mark.parametrize("stale", ["0.19.6", "0.20.0", "0.20.1", "0.20.2", "0.20.3", "0.20.4", "0.20.5", "0.20.6", "0.20.7", "0.20.8", "0.20.9", "0.20.10", "0.20.11", "0.20.12", "0.20.13", "0.20.14", "0.20.15", "0.21.0", "0.21.1", "0.21.2", "0.21.3", "", "1.0", "v0.20.1", "0.20.x"])
+@pytest.mark.parametrize("stale", ["0.19.6", "0.20.0", "0.20.1", "0.20.2", "0.20.3", "0.20.4", "0.20.5", "0.20.6", "0.20.7", "0.20.8", "0.20.9", "0.20.10", "0.20.11", "0.20.12", "0.20.13", "0.20.14", "0.20.15", "0.21.0", "0.21.1", "0.21.2", "0.21.3", "0.22.0", "", "1.0", "v0.20.1", "0.20.x"])
 def test_stale_or_bad_app_version_cannot_downgrade(stale):
     assert resolve_runner_release({"RUNNER_APP_VERSION": stale})["app_version"] == OFFICIAL_APP_VERSION
 
@@ -36,8 +36,8 @@ def test_stale_or_bad_app_version_cannot_downgrade(stale):
 def test_newer_app_version_is_followed():
     # 공식 값(OFFICIAL_APP_VERSION)보다 **새로운** 값이어야 따라간다 — 옛 값은 아래
     # test_stale_or_bad_app_version_cannot_downgrade 가 막는다. 공식 버전을 올릴 때 이 값도 올린다.
-    result = resolve_runner_release({"RUNNER_APP_VERSION": "0.22.1", "RUNNER_MIN_VERSION": "8"})
-    assert result == {**desktop_assets("0.22.1"), "version": "22", "app_version": "0.22.1",
+    result = resolve_runner_release({"RUNNER_APP_VERSION": "0.22.2", "RUNNER_MIN_VERSION": "8"})
+    assert result == {**desktop_assets("0.22.2"), "version": "22", "app_version": "0.22.2",
                       "supports_launch": True, "min_runner_version": "8"}
 
 

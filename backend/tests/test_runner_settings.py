@@ -222,3 +222,106 @@ def test_the_form_only_offers_what_a_local_session_really_follows():
 def test_a_server_decided_session_is_unchanged():
     assert rs.apply_changes(_macro(), {"params": {"entry_threshold": 20}}).params["entry_threshold"] == 20
     assert "params.rsi_period" in {f["path"] for f in rs.form_view(_macro())}
+
+
+# --- 칸 설명 · 지금 포지션에 걸리는가 ----------------------------------------
+
+def _every_numeric_key() -> set[str]:
+    """엔진 스키마가 가진 모든 숫자 칸 — 방식이 하나 늘어도 이 시험이 따라간다."""
+    import inspect
+
+    from engine import schema as sc
+
+    keys: set[str] = set()
+    models = [obj for name, obj in vars(sc).items()
+              if name.startswith("Params") and inspect.isclass(obj)
+              and hasattr(obj, "model_fields")]
+    models.append(sc.Risk)
+    for model in models:
+        for key, field in model.model_fields.items():
+            text = str(field.annotation)
+            if ("int" in text or "float" in text) and "bool" not in text and "Literal" not in text:
+                keys.add(key)
+    return keys
+
+
+def test_every_offered_field_says_what_it_does():
+    """이름만 보여 주면 '투자 비율' 이 진입 값인지 청산 값인지 알 수 없다."""
+    missing = sorted(key for key in _every_numeric_key() if not rs._HELP.get(key))
+    assert not missing, f"설명 없는 칸: {missing}"
+
+
+def test_money_and_ratio_do_not_touch_the_held_position():
+    fields = {f["path"]: f for f in rs.form_view(_macro())}
+    assert fields["params.initial_capital"]["affects"] == "next_entry"
+    assert fields["risk.invest_ratio"]["affects"] == "next_entry"
+    assert fields["risk.cooldown_minutes"]["affects"] == "next_entry"
+
+
+def test_anything_that_could_close_the_position_asks_first():
+    """빠뜨리면 묻지도 않고 지금 포지션의 청산 조건이 바뀐다 — 모르는 칸은 'position' 이다."""
+    fields = {f["path"]: f for f in rs.form_view(_macro())}
+    for path in ("risk.stop_loss_pct", "risk.daily_max_loss_pct",
+                 "risk.max_holding_hours", "params.exit_threshold"):
+        assert fields[path]["affects"] == "position", path
+
+
+def test_an_unknown_field_defaults_to_asking():
+    """새 방식이 들어와도 기본값은 '묻는다' 여야 한다 — 안 물어서 팔리는 쪽이 더 나쁘다."""
+    macro = _macro(rule_type="G", params={"initial_capital": 1_000_000,
+                                          "bb_period": 20, "bb_std": 2.0})
+    fields = {f["path"]: f for f in rs.form_view(macro)}
+    assert fields["params.bb_period"]["affects"] == "position"
+
+
+def test_the_entry_only_list_stays_small_and_deliberate():
+    """여기 든 칸은 '안 묻는다' 는 뜻이다. 늘릴 때는 정말 청산과 무관한지 확인하고 늘린다."""
+    assert rs.ENTRY_ONLY_KEYS == ("initial_capital", "invest_ratio", "cooldown_minutes")
+
+
+# --- 단위 --------------------------------------------------------------------
+
+def test_money_reads_in_the_currency_the_exchange_uses():
+    """바이낸스는 USDT, 업비트는 KRW — 매크로가 든 값을 쓴다. 화면이 짐작하면 어긋난다."""
+    fields = {f["path"]: f for f in rs.form_view(_macro())}
+    assert fields["params.initial_capital"]["unit_text"] == "USDT"
+    won = _macro(exchange="upbit", symbol="KRW-BTC", market="spot", leverage=1)
+    fields = {f["path"]: f for f in rs.form_view(won)}
+    assert fields["params.initial_capital"]["unit_text"] == "KRW"
+
+
+def test_each_kind_of_number_carries_its_own_unit():
+    fields = {f["path"]: f for f in rs.form_view(_macro())}
+    assert fields["risk.stop_loss_pct"]["unit_text"] == "%"
+    assert fields["risk.max_holding_hours"]["unit_text"] == "시간"
+    assert fields["risk.cooldown_minutes"]["unit_text"] == "분"
+    assert fields["params.rsi_period"]["unit_text"] == "봉"
+
+
+def test_a_threshold_without_a_unit_shows_none():
+    """RSI 문턱은 단위가 없다 — 없는 단위를 지어내지 않는다."""
+    fields = {f["path"]: f for f in rs.form_view(_macro())}
+    assert fields["params.entry_threshold"]["unit_text"] == ""
+
+
+def test_invest_ratio_shows_no_unit_because_percent_would_be_a_lie():
+    """0~1 로 저장한다 — "1" 옆에 "%" 를 붙이면 1% 로 읽힌다. 설명이 대신 말한다."""
+    fields = {f["path"]: f for f in rs.form_view(_macro())}
+    assert fields["risk.invest_ratio"]["unit_text"] == ""
+    assert "1 = 전부" in fields["risk.invest_ratio"]["help"]
+
+
+def test_the_record_summary_carries_units_too():
+    """증빙은 "손절 3 → 2" 가 아니라 "손절 3% → 2%" 여야 읽힌다."""
+    before = _macro()
+    after = rs.apply_changes(before, {"risk": {"stop_loss_pct": 2.0},
+                                      "params": {"initial_capital": 2_000_000}})
+    text = rs.summary(before, after)
+    assert "2%" in text and "USDT" in text
+
+
+def test_a_setting_turned_off_reads_without_a_unit():
+    before = _macro()
+    after = rs.apply_changes(before, {"risk": {"stop_loss_pct": None}})
+    assert "없음" in rs.summary(before, after)
+    assert "없음%" not in rs.summary(before, after)

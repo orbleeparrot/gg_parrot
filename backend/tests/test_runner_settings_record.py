@@ -384,3 +384,52 @@ def test_the_runner_cannot_forge_the_source():
                 json={"changes": {"risk": {"stop_loss_pct": 1.0}}, "source": "web"},
                 headers={"X-Runner-Key": key})
     assert _rows(session_id)[-1].source == "runner"
+
+
+# --- 실행기가 직접 판단하는 세션 ---------------------------------------------
+
+def _start_local(token: str) -> tuple[int, str]:
+    """실행기가 '내가 판단하겠다' 고 말한 세션. 운영 기본값이 이쪽이다."""
+    key = client.get("/api/me/runner/key", headers=_auth(token)).json()["key"]
+    started = client.post("/api/runner/start", json={
+        "symbol": "BTCUSDT", "runner_version": NEW_RUNNER, "macro": _macro(), "decides": "local",
+    }, headers={"X-Runner-Key": key})
+    assert started.status_code == 200, started.text
+    session_id = started.json()["session_id"]
+    _CREATED.append(session_id)
+    return session_id, key
+
+
+def test_a_local_session_refuses_a_condition_change(monkeypatch):
+    monkeypatch.setattr(runner_mod, "LOCAL_DECISIONS_ENABLED", True)
+    token = _signup()
+    session_id, _key = _start_local(token)
+    assert _session(session_id).decides_locally is True
+
+    res = _change(token, session_id, {"params": {"entry_threshold": 20}})
+    assert res.status_code == 400
+    assert "실행기가 직접 판단" in res.json()["detail"]
+    assert _rows(session_id) == [], "못 바꾼 요청은 기록도 남기지 않는다"
+
+
+def test_a_local_session_still_changes_money_and_safety(monkeypatch):
+    monkeypatch.setattr(runner_mod, "LOCAL_DECISIONS_ENABLED", True)
+    token = _signup()
+    session_id, _key = _start_local(token)
+    res = _change(token, session_id, {"params": {"initial_capital": 2_000_000},
+                                      "risk": {"stop_loss_pct": 1.0}})
+    assert res.status_code == 200, res.text
+    assert _session(session_id).settings_changed_count == 1
+
+
+def test_a_local_sessions_form_hides_the_condition_fields(monkeypatch):
+    monkeypatch.setattr(runner_mod, "LOCAL_DECISIONS_ENABLED", True)
+    token = _signup()
+    session_id, _key = _start_local(token)
+    view = client.get("/api/me/runner/sessions", headers=_auth(token)).json()
+    settings = next(s for s in view["active"] if s["session_id"] == session_id)["settings"]
+    paths = {f["path"] for f in settings["fields"]}
+    assert "params.initial_capital" in paths and "risk.stop_loss_pct" in paths
+    assert "params.rsi_period" not in paths
+    assert settings["local_decisions"] is True
+    assert "직접 판단" in settings["note"], "왜 조건 칸이 없는지 화면이 말해야 한다"

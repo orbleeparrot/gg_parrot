@@ -21,6 +21,20 @@ from engine import Macro
 # 바꿀 수 있는 칸. 매크로의 다른 모든 칸은 '정체' 라 손대지 않는다.
 EDITABLE_SECTIONS = ("params", "risk")
 
+# 실행기가 **직접 판단하는** 세션(decides_locally)에서 바꿀 수 있는 ``params`` 칸.
+#
+# 운영은 ``RUNNER_LOCAL_DECISIONS=true`` 다(render.yaml). 그 세션에서는 진입·청산 판단을
+# 실행기의 엔진이 하고, 그 엔진은 **시작할 때 받은 매크로**로 세워진다. 서버의 macro_json
+# 을 바꾸고 서버 전략을 다시 세워도 실제 매매는 달라지지 않는다.
+#
+# 조건을 바꿔 주겠다고 해 놓고 아무 일도 하지 않는 것이 이 기능이 저지를 수 있는 가장
+# 나쁜 일이다. 그래서 **실행기가 정말 따라오는 것만** 바꾸게 한다 — 투자 금액과 안전망은
+# local 모드에서도 heartbeat 의 settings 로 받아 반영한다(runner-core/src/bot/settings.rs).
+LOCAL_EDITABLE_PARAMS = ("initial_capital",)
+LOCAL_ONLY_NOTE = (
+    "이 실행은 실행기가 직접 판단해요. 투자 금액과 위험 설정만 바꿀 수 있어요 — "
+    "매매 조건을 바꾸려면 종료하고 새로 시작해 주세요.")
+
 # 손댈 수 없는 칸을 왜 못 바꾸는지 — 사용자가 읽을 말. 이름을 그대로 보여 주면
 # "candle_interval 은 바꿀 수 없어요" 가 되어 무슨 말인지 모른다.
 _FIELD_LABELS = {
@@ -48,7 +62,7 @@ def _merge(base: dict, patch: dict) -> dict:
     return out
 
 
-def apply_changes(macro: Macro, changes: dict[str, Any]) -> Macro:
+def apply_changes(macro: Macro, changes: dict[str, Any], *, local_decisions: bool = False) -> Macro:
     """바뀐 칸만 덮어쓴 새 매크로. 손댈 수 없는 칸이 오거나 바뀐 게 없으면 거절한다.
 
     스키마가 한 번 더 본다 — 마틴게일 최악의 경우가 자금을 넘거나, 숏 A 의 손절을 끄는
@@ -68,6 +82,10 @@ def apply_changes(macro: Macro, changes: dict[str, Any]) -> Macro:
             continue
         if not isinstance(patch, dict):
             raise HTTPException(status_code=400, detail=f"{section} 은(는) 칸 이름과 값으로 보내 주세요.")
+        if local_decisions and section == "params":
+            blocked = [key for key in patch if key not in LOCAL_EDITABLE_PARAMS]
+            if blocked:
+                raise HTTPException(status_code=400, detail=LOCAL_ONLY_NOTE)
         body[section] = _merge(body.get(section) or {}, patch)
 
     try:
@@ -173,7 +191,7 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
-def form_view(macro: Macro) -> list[dict]:
+def form_view(macro: Macro, local_decisions: bool = False) -> list[dict]:
     """화면이 수정 칸을 그릴 재료 — **숫자로 고칠 수 있는 칸만**.
 
     왜 숫자만인가: 문자 칸(``ma_type`` SMA/EMA, ``strategy`` reversion/breakout)은 값이
@@ -191,6 +209,9 @@ def form_view(macro: Macro) -> list[dict]:
         for key, value in values.items():
             # params 는 들어 있는 숫자만. risk 는 꺼 둔 칸(None)도 낸다 — 켤 수 있어야 한다.
             if not _is_number(value) and not (section == "risk" and value is None):
+                continue
+            # 실행기가 직접 판단하면 조건 값은 실행기 엔진이 들고 있다 — 바꿔도 안 따라온다.
+            if local_decisions and section == "params" and key not in LOCAL_EDITABLE_PARAMS:
                 continue
             out.append({
                 "path": f"{section}.{key}", "section": section, "key": key,

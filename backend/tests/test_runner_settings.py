@@ -189,3 +189,36 @@ def test_every_form_field_is_actually_accepted_by_apply_changes():
             value = float(field["value"]) + 1
         after = rs.apply_changes(macro, {section: {key: value}})
         assert rs.changed_fields(macro, after) == [field["path"]]
+
+
+# --- 실행기가 직접 판단하는 세션 ---------------------------------------------
+#
+# 운영은 ``RUNNER_LOCAL_DECISIONS=true`` 다(render.yaml). 그 세션에서는 **진입·청산 판단을
+# 실행기의 엔진이** 하고, 그 엔진은 시작할 때 받은 매크로로 세워진다. 서버의 macro_json 을
+# 바꿔 봐야 실제 매매는 달라지지 않는다 — 조건을 바꿔 주겠다고 해 놓고 아무 일도 안 하는
+# 것이 이 기능이 저지를 수 있는 가장 나쁜 일이다. 그래서 **실행기가 정말 따라오는 것만**
+# 바꾸게 한다: 투자 금액과 안전망(실행기 local 모드도 이 둘은 heartbeat 로 받아 반영한다).
+
+def test_a_local_decision_session_cannot_change_the_conditions():
+    with pytest.raises(HTTPException) as err:
+        rs.apply_changes(_macro(), {"params": {"entry_threshold": 20}}, local_decisions=True)
+    assert err.value.status_code == 400
+    assert "실행기가 직접 판단" in err.value.detail
+
+
+def test_a_local_decision_session_can_still_change_money_and_safety():
+    after = rs.apply_changes(_macro(), {"params": {"initial_capital": 2_000_000},
+                                        "risk": {"stop_loss_pct": 1.5}}, local_decisions=True)
+    assert after.params["initial_capital"] == 2_000_000
+    assert after.risk.stop_loss_pct == 1.5
+
+
+def test_the_form_only_offers_what_a_local_session_really_follows():
+    paths = {f["path"] for f in rs.form_view(_macro(), local_decisions=True)}
+    assert "params.initial_capital" in paths and "risk.stop_loss_pct" in paths
+    assert "params.rsi_period" not in paths, "바꿀 수 없는 칸을 보여 주면 안 된다"
+
+
+def test_a_server_decided_session_is_unchanged():
+    assert rs.apply_changes(_macro(), {"params": {"entry_threshold": 20}}).params["entry_threshold"] == 20
+    assert "params.rsi_period" in {f["path"] for f in rs.form_view(_macro())}

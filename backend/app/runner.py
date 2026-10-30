@@ -1497,7 +1497,7 @@ def _settings_form(row: RunSession, stopping: bool) -> dict:
     칸이 생기고, 사용자는 그걸 고장으로 읽는다.
     """
     pending = bool(getattr(row, "pending_macro_json", ""))
-    out = {"editable": False, "reason": "", "fields": [],
+    out = {"editable": False, "reason": "", "note": "", "fields": [],
            "changed_count": int(getattr(row, "settings_changed_count", 0) or 0),
            "pending": pending}
     if row.status != "running":
@@ -1518,7 +1518,12 @@ def _settings_form(row: RunSession, stopping: bool) -> dict:
         out["reason"] = "이 실행의 매크로를 읽지 못했어요."
         return out
     out["editable"] = True
-    out["fields"] = runner_settings.form_view(macro)
+    # 실행기가 직접 판단하는 세션은 조건 값을 실행기 엔진이 들고 있다 — 화면에도 내지 않는다.
+    local = bool(row.decides_locally)
+    out["fields"] = runner_settings.form_view(macro, local_decisions=local)
+    out["local_decisions"] = local
+    if local:
+        out["note"] = runner_settings.LOCAL_ONLY_NOTE
     return out
 
 
@@ -1929,7 +1934,8 @@ def request_settings_change(user_id: int, session_id: int, changes: dict, *,
         except Exception:
             raise HTTPException(status_code=409, detail="이 실행의 매크로를 읽지 못했어요.")
 
-        after = runner_settings.apply_changes(before, changes)
+        after = runner_settings.apply_changes(
+            before, changes, local_decisions=bool(row.decides_locally))
         # 포지션이 없으면 예약할 이유가 없다 — 예약은 '들고 있는 포지션을 지키려고' 있다.
         mode = "immediate" if not row.in_position else apply_mode
         record = _change_row(row, before, after, source=source, apply_mode=mode)
@@ -2013,7 +2019,7 @@ def _settings_view(row: RunSession) -> Optional[dict]:
         "changed_count": int(row.settings_changed_count or 0),
         # 실행기 화면도 같은 칸을 그린다 — 목록을 실행기가 따로 들면 두 벌이 되어
         # 화면에는 보이는데 서버가 거절하는 칸이 생긴다.
-        "fields": runner_settings.form_view(macro),
+        "fields": runner_settings.form_view(macro, local_decisions=bool(row.decides_locally)),
         "initial_capital": float(macro.params.get("initial_capital") or 0.0),
         "invest_ratio": float(risk.invest_ratio),
         "stop_loss_pct": risk.stop_loss_pct,

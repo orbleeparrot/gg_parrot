@@ -70,6 +70,8 @@ export default function RunnerSettingsDialog({ open, session, busy = false, erro
         <p className="mt-3 t-small text-slate-700">
           {session.symbol} · 돌고 있는 그대로 금액과 조건만 바꿔요. 매매 방식·종목·방향은 바꿀 수 없어요.
         </p>
+        {/* 실행기가 직접 판단하는 세션은 조건 값을 실행기 엔진이 들고 있다 — 왜 칸이 적은지 말해 준다. */}
+        {settings.note ? <div className="alert alert-warn mt-4 t-small" role="note">{settings.note}</div> : null}
 
         <div className="runner-settings-fields">
           {fields.map((field, index) => (

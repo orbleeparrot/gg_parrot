@@ -10,32 +10,34 @@ LEGACY = "https://github.com/orbleeparrot/gg_parrot/releases/download/runner-v{0
 
 
 def test_default_is_the_published_desktop_app():
-    assert OFFICIAL_RUNNER_VERSION == "21"
+    assert OFFICIAL_RUNNER_VERSION == "22"
     assert resolve_runner_release({}) == {
         "url": OFFICIAL_RUNNER_URL, "filename": f"ggparrot-desktop_{OFFICIAL_APP_VERSION}_windows_x64-setup.exe",
         "mac_url": OFFICIAL_RUNNER_MAC_URL, "mac_filename": f"ggparrot-desktop_{OFFICIAL_APP_VERSION}_darwin_universal.dmg",
-        "version": "21", "app_version": OFFICIAL_APP_VERSION, "supports_launch": True, "min_runner_version": "6",
+        "version": "22", "app_version": OFFICIAL_APP_VERSION, "supports_launch": True, "min_runner_version": "6",
     }
     assert OFFICIAL_RUNNER_URL == ("https://github.com/orbleeparrot/ggparrot-desktop/releases/download/"
                                    f"v{OFFICIAL_APP_VERSION}/ggparrot-desktop_{OFFICIAL_APP_VERSION}_windows_x64-setup.exe")
 
 
-@pytest.mark.parametrize("version", [6, 19, 20, 21])
+@pytest.mark.parametrize("version", [6, 19, 20, 21, 22])
 def test_old_exe_url_left_on_render_is_upgraded_to_the_desktop_app(version):
     # render.yaml 에서 지운 키도 Render 에는 남는다 — 옛 exe 주소는 공식 데스크톱 앱으로 바꾼다.
     result = resolve_runner_release({"RUNNER_DOWNLOAD_URL": LEGACY.format(version), "RUNNER_EXE_VERSION": str(version)})
     assert result["url"] == OFFICIAL_RUNNER_URL and result["mac_url"] == OFFICIAL_RUNNER_MAC_URL
-    assert result["version"] == "21" and result["supports_launch"]
+    assert result["version"] == "22" and result["supports_launch"]
 
 
-@pytest.mark.parametrize("stale", ["0.19.6", "0.20.0", "0.20.1", "0.20.2", "0.20.3", "0.20.4", "0.20.5", "0.20.6", "0.20.7", "0.20.8", "0.20.9", "0.20.10", "0.20.11", "0.20.12", "0.20.13", "0.20.14", "0.20.15", "0.21.0", "0.21.1", "", "1.0", "v0.20.1", "0.20.x"])
+@pytest.mark.parametrize("stale", ["0.19.6", "0.20.0", "0.20.1", "0.20.2", "0.20.3", "0.20.4", "0.20.5", "0.20.6", "0.20.7", "0.20.8", "0.20.9", "0.20.10", "0.20.11", "0.20.12", "0.20.13", "0.20.14", "0.20.15", "0.21.0", "0.21.1", "0.21.2", "0.21.3", "", "1.0", "v0.20.1", "0.20.x"])
 def test_stale_or_bad_app_version_cannot_downgrade(stale):
     assert resolve_runner_release({"RUNNER_APP_VERSION": stale})["app_version"] == OFFICIAL_APP_VERSION
 
 
 def test_newer_app_version_is_followed():
-    result = resolve_runner_release({"RUNNER_APP_VERSION": "0.21.3", "RUNNER_MIN_VERSION": "8"})
-    assert result == {**desktop_assets("0.21.3"), "version": "21", "app_version": "0.21.3",
+    # 공식 값(OFFICIAL_APP_VERSION)보다 **새로운** 값이어야 따라간다 — 옛 값은 아래
+    # test_stale_or_bad_app_version_cannot_downgrade 가 막는다. 공식 버전을 올릴 때 이 값도 올린다.
+    result = resolve_runner_release({"RUNNER_APP_VERSION": "0.22.1", "RUNNER_MIN_VERSION": "8"})
+    assert result == {**desktop_assets("0.22.1"), "version": "22", "app_version": "0.22.1",
                       "supports_launch": True, "min_runner_version": "8"}
 
 

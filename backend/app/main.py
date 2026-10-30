@@ -479,6 +479,16 @@ class RunnerSettingsRequest(BaseModel):
     source: str = "web"
 
 
+class RunnerSelfSettingsRequest(RunnerSettingsRequest):
+    """실행기가 자기 세션의 설정을 바꿀 때 — 세션 번호를 **본문**에 담는다.
+
+    주소에 넣지 않는 이유: 주소는 중계 서버 · 접근 기록에 그대로 남는다. 같은 이유로
+    ``start`` · ``heartbeat`` · ``stopped`` 도 전부 본문에 담는다(코드 검사도 이것을 집었다).
+    """
+
+    session_id: int
+
+
 class RunnerLaunchTicketCreateRequest(BaseModel):
     user_macro_id: int
     testnet: Literal[True] = True
@@ -2631,9 +2641,9 @@ def runner_start(req: RunnerStartRequest, user: User = Depends(_runner_user)) ->
     return runner_mod.start_session(user, req.model_dump())
 
 
-@app.post("/api/runner/sessions/{session_id}/settings")
+@app.post("/api/runner/settings")
 def runner_self_change_settings(
-    session_id: int, req: RunnerSettingsRequest, user: User = Depends(_runner_user)
+    req: RunnerSelfSettingsRequest, user: User = Depends(_runner_user)
 ) -> dict:
     """실행기 화면에서 자기 세션의 설정을 바꾼다 — 회원 키로 인증한다.
 
@@ -2642,7 +2652,7 @@ def runner_self_change_settings(
     것이 이 설계의 요점이다. 출처는 요청이 뭐라 하든 "runner" 로 못 박는다.
     """
     return runner_mod.request_settings_change(
-        user.id, session_id, req.changes, source="runner", apply_mode=req.apply_mode)
+        user.id, req.session_id, req.changes, source="runner", apply_mode=req.apply_mode)
 
 
 @app.post("/api/runner/heartbeat")

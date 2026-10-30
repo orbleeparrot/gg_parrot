@@ -358,8 +358,9 @@ def test_the_runner_can_change_its_own_session_with_its_key():
     """실행기는 로그인 토큰이 없다 — 회원 키로 들어오되 하는 일은 웹과 같은 길이다."""
     token = _signup()
     session_id, key = _start(token)
-    res = client.post(f"/api/runner/sessions/{session_id}/settings",
-                      json={"changes": {"params": {"initial_capital": 2_000_000}}},
+    res = client.post("/api/runner/settings",
+                      json={"session_id": session_id,
+                            "changes": {"params": {"initial_capital": 2_000_000}}},
                       headers={"X-Runner-Key": key})
     assert res.status_code == 200, res.text
     row = _rows(session_id)[-1]
@@ -370,8 +371,8 @@ def test_the_runner_key_cannot_touch_another_members_session():
     owner, stranger = _signup(), _signup()
     session_id, _key = _start(owner)
     other_key = client.get("/api/me/runner/key", headers=_auth(stranger)).json()["key"]
-    res = client.post(f"/api/runner/sessions/{session_id}/settings",
-                      json={"changes": {"risk": {"stop_loss_pct": 1.0}}},
+    res = client.post("/api/runner/settings",
+                      json={"session_id": session_id, "changes": {"risk": {"stop_loss_pct": 1.0}}},
                       headers={"X-Runner-Key": other_key})
     assert res.status_code == 404
     assert _rows(session_id) == []
@@ -380,8 +381,9 @@ def test_the_runner_key_cannot_touch_another_members_session():
 def test_the_runner_cannot_forge_the_source():
     token = _signup()
     session_id, key = _start(token)
-    client.post(f"/api/runner/sessions/{session_id}/settings",
-                json={"changes": {"risk": {"stop_loss_pct": 1.0}}, "source": "web"},
+    client.post("/api/runner/settings",
+                json={"session_id": session_id, "changes": {"risk": {"stop_loss_pct": 1.0}},
+                      "source": "web"},
                 headers={"X-Runner-Key": key})
     assert _rows(session_id)[-1].source == "runner"
 

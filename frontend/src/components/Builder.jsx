@@ -9,6 +9,7 @@ import { useUsdKrw } from "../lib/usdkrw.js";
 import CoinIcon from "./CoinIcon.jsx";
 import "./Builder.css";
 import { useSymbolList } from "../hooks/useSymbolList.js";
+import { usePortfolioPresets } from "../hooks/usePortfolioPresets.js";
 import { useExchangeSwitch } from "../hooks/useExchangeSwitch.js";
 import { searchSymbols, resolveSymbol, marketTags } from "../lib/symbolSearch.js";
 import { Icon } from "./icons.jsx";
@@ -147,7 +148,7 @@ const inputCls = "field";
 // 상한은 macro.js 한 곳에서 온다 — 서버 engine/schema.py 와 맞춰 둔 값이다.
 // onWeights 를 주지 않으면 비중은 **읽기 전용 표시**(1/N · NN%)다 — 기본 빌더는 스펙대로 균등이고,
 // 비중 입력은 프로 빌더(variant="pro")에서만 켠다.
-function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchange = "binance", showLegRules = false, legRules = {}, onLegRule = () => {} }) {
+function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchange = "binance", market = "spot", showLegRules = false, legRules = {}, onLegRule = () => {} }) {
   const [draft, setDraft] = useState("");
   const [openRule, setOpenRule] = useState("");
   const [open, setOpen] = useState(false);
@@ -157,6 +158,8 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
   // 2026-10-08 사용자 결정). 대신 낡은 목록에서 검색 결과가 없으면 조용히 목록을 다시 받는다 — 안내의 '다시 확인'
   // 버튼이 하던 일이고, 없으면 막 상장된 종목을 찾을 길이 없다. 잘못된 종목은 고를 때 canChoose 가 막는다.
   const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
+  // 추천 묶음 — 없으면 줄을 안 그린다. 종목 검색은 이것과 상관없이 그대로 쓸 수 있어야 한다.
+  const presets = usePortfolioPresets(exchange, market);
   const rootRef = useRef(null);
   const blurTimer = useRef(null);
   const listId = useId().replace(/:/g, "");
@@ -201,6 +204,22 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
     if (canEditWeights && weightList.length) onWeights(weightsAfterAdd(symbols.map((_, i) => weightAt(i)).join(", ")));
     setDraft(""); setNote(""); setCursor(0);
   };
+  // 묶음 하나를 통째로 넣는다 — 고르고 있던 종목은 **지우고 바꾼다**. 섞어 담으면
+  // "시가총액 TOP10" 을 골랐는데 열한 종목이 되어 이름과 화면이 어긋난다.
+  const applyPreset = (preset) => {
+    const picked = (preset.legs || []).map((leg) => leg.symbol).filter((symbol) => canChoose(symbol));
+    if (picked.length !== (preset.legs || []).length) {
+      setNote("묶음에 든 종목 하나를 지금 고를 수 없어요. 잠시 뒤 다시 시도해 주세요.");
+      reload();
+      return;
+    }
+    onChange(picked.join(", "));
+    // 비중은 비워 둔다 — 추천 묶음은 균등이고, 빈 값이 곧 균등이다(weightAt 참고).
+    if (canEditWeights) onWeights("");
+    setDraft("");
+    setNote("");
+  };
+
   const commit = () => {
     if (!query) return;
     if (!items) { setNote(error ? "종목 목록을 못 불러왔어요. 다시 시도해 주세요." : "종목 목록을 불러오는 중이에요."); return; }
@@ -229,6 +248,27 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
 
   return (
     <div className="bd-symbols" ref={rootRef}>
+      {presets.length > 0 && (
+        <div className="bd-presets">
+          <span className="bd-presets-label">추천 묶음</span>
+          <div className="bd-presets-row">
+            {presets.map((preset) => (
+              <button
+                key={preset.key}
+                type="button"
+                className="bd-preset"
+                title={preset.lead}
+                /* 보이는 글자만으로는 이름이 안 읽힌다 — title 이 이름 자리를 가져간다. */
+                aria-label={`${preset.name} · ${preset.count}종목 · ${preset.lead}`}
+                onClick={() => applyPreset(preset)}
+              >
+                {preset.name}
+                <small>{preset.count}종목</small>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className={"bd-search" + (full ? " is-full" : "")}>
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" /></svg>
         <input
@@ -497,7 +537,7 @@ export default function Builder({ form, setForm, chartSlot = null, variant = "de
         // 비중을 **고치는** 것은 프로 판에서만 — onWeights 를 안 넘기면 SymbolPicker 가 읽기 전용으로 그린다.
         // weights 는 두 판에 다 넘긴다: 비중을 정한 매크로를 기본 빌더로 들고 왔을 때 70/30 을 1/N 으로
         // 적으면 거짓이 되므로, 고칠 수 없어도 사실은 보여 준다.
-        <SymbolPicker key={exchange} exchange={exchange} value={form.symbol} weights={form.leg_weights || ""}
+        <SymbolPicker key={exchange} exchange={exchange} market={form.market} value={form.symbol} weights={form.leg_weights || ""}
           {...(pro ? { onWeights: (value) => setForm((current) => ({ ...current, leg_weights: value })) } : {})}
           showLegRules={pro && !leg}
           legRules={form.leg_rules || {}}

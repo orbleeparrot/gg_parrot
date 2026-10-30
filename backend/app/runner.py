@@ -896,6 +896,13 @@ def start_session(user: User, payload: dict) -> dict:
             # 서버가 거절했는데 실행기가 혼자 판단하면 서버 명령과 겹쳐 두 번 산다.
             "decides": "local" if decides_locally else "server",
         }
+        if bundle_size:
+            # 실행기가 봇을 세울 매크로는 **이 레그**다. 실행기가 스스로 쪼개면 자금
+            # 반올림이 서버와 갈려 레그 금액의 합이 묶음 금액과 어긋난다 — 나누기는
+            # 한 곳(서버)에서만 한다.
+            result["leg_macro"] = json.loads(macro_json) if macro_json else None
+            result["bundle"] = {"key": bundle_key, "index": bundle_index, "size": bundle_size,
+                                "digest": bundle_digest}
     notify_sessions_changed(user.id)
     if signal_runner and not decides_locally:
         # v8+: 서버 측 전략 드라이버를 이벤트 루프에 올린다(웜업·구독·틱 루프는 runner_engine 이 맡는다).

@@ -168,3 +168,22 @@ def test_the_session_view_groups_legs_and_leaves_single_runs_alone():
     assert len(bundles) == 1 and bundles[0]["bundle"]["size"] == 2
     assert bundles[0]["bundle"]["key"] == "view"
     assert singles, "단일 종목 실행에는 묶음 칸이 없다"
+
+
+def test_the_start_reply_hands_the_runner_the_leg_to_run():
+    """실행기가 스스로 쪼개면 자금 반올림이 서버와 갈린다 — 레그는 서버가 준다."""
+    key = _key(_signup())
+    body = _start(key, BUNDLE, leg=1, bundle_key="b", symbol="ETHUSDT").json()
+    assert body["leg_macro"]["symbol"] == "ETHUSDT"
+    assert body["leg_macro"].get("symbols") is None
+    assert body["leg_macro"]["params"]["initial_capital"] == A["params"]["initial_capital"] / 2
+    assert body["bundle"] == {"key": "b", "index": 1, "size": 2,
+                              "digest": body["bundle"]["digest"]}
+    assert body["bundle"]["digest"] and body["bundle"]["digest"] != body["macro_digest"]
+
+
+def test_a_single_symbol_start_reply_is_byte_identical():
+    """옛 길에 글자 하나 더하지 않는다 — 실행기가 모르는 칸을 보고 다르게 굴면 안 된다."""
+    key = _key(_signup())
+    body = _start(key, A).json()
+    assert "leg_macro" not in body and "bundle" not in body

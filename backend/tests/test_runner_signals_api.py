@@ -26,6 +26,15 @@ SAR = {"symbol": "BTCUSDT", "rule_type": "K", "position_side": "long", "market":
        "risk": {"stop_loss_pct": 0}, "fees": {"commission_pct": 0, "slippage_pct": 0}}
 # 여러 종목 포트폴리오 — 실행기는 macro["symbol"] 하나만 읽으므로 어느 버전으로도 돌릴 수 없다.
 PORTFOLIO = {**A, "symbols": ["BTCUSDT", "ETHUSDT"]}
+# 묶음 한도가 걸린 묶음 — 레그를 갈라도 "지금 몇 종목 들고 있나" 를 물을 자리가 없다.
+# 한도는 E~K 규칙에만 쓸 수 있어서(engine/schema.py) A 가 아닌 E 로 만든다.
+CAPPED_PORTFOLIO = {"symbol": "BTCUSDT", "rule_type": "E", "position_side": "long",
+                    "market": "spot", "leverage": 1, "candle_interval": "1h",
+                    "period": {"preset": "3m"},
+                    "params": {"trail_percent": 2.0, "activation_profit": 3.0, "initial_capital": 1000},
+                    "risk": {"invest_ratio": 0.5, "stop_loss_pct": 2.0},
+                    "symbols": ["BTCUSDT", "ETHUSDT"],
+                    "bundle_risk": {"max_positions": 1}}
 
 
 def _key(token):
@@ -261,12 +270,23 @@ def test_portfolio_macro_is_rejected_for_every_runner_version(monkeypatch):
     assert _start(key, A, "10").status_code == 200  # 같은 규칙의 단일 종목은 그대로 시작된다
 
 
-def test_portfolio_macro_cannot_get_a_launch_ticket():
-    """발급 시점에 막는다 — 실행기는 청구 실패의 사유 문구를 버리므로, 여기서 막아야 사용자가 이유를 읽는다."""
+def test_a_bundle_with_a_limit_cannot_get_a_launch_ticket():
+    """발급 시점에 막는다 — 실행기는 청구 실패의 사유 문구를 버리므로, 여기서 막아야 사용자가 이유를 읽는다.
+
+    2026-10-30: 묶음 자체는 레그마다 세션 하나로 갈라 돌린다. 갈라도 셀 수 없는 것
+    (묶음 한도)만 남겨 막는다.
+    """
+    token = _signup()
+    saved = client.post("/api/me/macros", json={"macro": CAPPED_PORTFOLIO, "name": "t"}, headers=_auth(token)).json()["item"]
+    r = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True}, headers=_auth(token))
+    assert r.status_code == 422 and "묶음 한도" in r.json()["detail"]
+
+
+def test_an_ordinary_bundle_can_get_a_launch_ticket():
     token = _signup()
     saved = client.post("/api/me/macros", json={"macro": PORTFOLIO, "name": "t"}, headers=_auth(token)).json()["item"]
     r = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True}, headers=_auth(token))
-    assert r.status_code == 422 and r.json()["detail"] == runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL
+    assert r.status_code == 200, r.text
 
 
 def test_claim_rejects_macro_that_became_a_portfolio_after_the_ticket():
@@ -282,9 +302,22 @@ def test_claim_rejects_macro_that_became_a_portfolio_after_the_ticket():
         db.add(row)
         db.commit()
     r = client.post("/api/runner/launch-tickets/claim", json={"ticket": ticket, "runner_version": "10"})
-    assert r.status_code == 422 and r.json()["detail"] == runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL
+    # 2026-10-30: 묶음은 돌릴 수 있게 됐지만 **레그를 아는 실행기**여야 한다 — 옛 실행기는
+    # macro["symbol"] 하나만 읽어 첫 종목에 전액을 넣는다. 업데이트로 풀리는 문제다.
+    assert r.status_code == 426 and r.json()["detail"] == runner_mod.PORTFOLIO_UPDATE_DETAIL
     status = client.get(f"/api/me/runner/launch-tickets/{created['launch_id']}", headers=_auth(token)).json()
-    assert status["status"] != "rejected" and status["status"] != "claimed"  # 업데이트로 풀리는 문제가 아니다
+    assert status["status"] != "claimed"
     with get_session() as db:
         row = db.get(RunnerLaunchTicket, created["launch_id"])
         assert row.claimed_at == "" and row.rejected_at == ""
+
+
+def test_a_runner_that_knows_legs_may_claim_a_bundle():
+    token = _signup()
+    saved = client.post("/api/me/macros", json={"macro": PORTFOLIO, "name": "t"}, headers=_auth(token)).json()["item"]
+    created = client.post("/api/me/runner/launch-tickets", json={"user_macro_id": saved["id"], "testnet": True},
+                          headers=_auth(token)).json()
+    ticket = parse_qs(urlsplit(created["launch_url"]).query)["ticket"][0]
+    r = client.post("/api/runner/launch-tickets/claim",
+                    json={"ticket": ticket, "runner_version": runner_mod.PORTFOLIO_MIN_VERSION})
+    assert r.status_code == 200, r.text

@@ -522,6 +522,14 @@ class RunSession(SQLModel, table=True):
     # 구동 중 설정을 바꾼 횟수(2026-10-30). macro_origin 은 **시작 시점**의 출처라
     # "시작한 뒤에 고쳤다" 를 표현하지 못한다. 기록 전체는 RunnerSettingChange 에 있다.
     settings_changed_count: int = 0
+    # 묶음(포트폴리오)을 레그마다 세션 하나로 갈라 돌릴 때의 자리표 (2026-10-30).
+    # 빈 bundle_key 는 "묶음이 아니다" — 단일 종목 실행은 지금까지와 똑같다.
+    bundle_key: str = Field(default="", index=True)
+    bundle_index: int = 0
+    bundle_size: int = 0
+    # 원본 묶음 매크로의 지문. 레그의 macro_digest 와 다르다 — 이건 "무엇을 돌렸나" 를
+    # 원본으로 되짚는 값이고, macro_digest 는 이 세션이 실제로 도는 레그의 값이다.
+    bundle_digest: str = ""
     # 매크로 출처 — web | file_verified | file_modified | file_unsigned (macro_signing 참고).
     # 옛 실행기가 만든 세션은 빈 문자열.
     macro_origin: str = ""
@@ -1396,6 +1404,10 @@ def _migrate() -> None:
             "macro_origin": "ALTER TABLE runsession ADD COLUMN macro_origin TEXT DEFAULT ''",
             "macro_digest": "ALTER TABLE runsession ADD COLUMN macro_digest TEXT DEFAULT ''",
             "settings_changed_count": "ALTER TABLE runsession ADD COLUMN settings_changed_count INTEGER NOT NULL DEFAULT 0",
+            "bundle_key": "ALTER TABLE runsession ADD COLUMN bundle_key TEXT NOT NULL DEFAULT ''",
+            "bundle_index": "ALTER TABLE runsession ADD COLUMN bundle_index INTEGER NOT NULL DEFAULT 0",
+            "bundle_size": "ALTER TABLE runsession ADD COLUMN bundle_size INTEGER NOT NULL DEFAULT 0",
+            "bundle_digest": "ALTER TABLE runsession ADD COLUMN bundle_digest TEXT NOT NULL DEFAULT ''",
             "pending_macro_json": "ALTER TABLE runsession ADD COLUMN pending_macro_json TEXT NOT NULL DEFAULT ''",
             "pending_change_id": "ALTER TABLE runsession ADD COLUMN pending_change_id INTEGER NOT NULL DEFAULT 0",
             "pnl_alert_pct": "ALTER TABLE runsession ADD COLUMN pnl_alert_pct REAL DEFAULT 0",
@@ -1613,6 +1625,10 @@ _PG_ADDED_COLUMNS = {
         "macro_origin": "TEXT DEFAULT ''",
         "macro_digest": "TEXT DEFAULT ''",
         "settings_changed_count": "INTEGER NOT NULL DEFAULT 0",
+        "bundle_key": "TEXT NOT NULL DEFAULT ''",
+        "bundle_index": "INTEGER NOT NULL DEFAULT 0",
+        "bundle_size": "INTEGER NOT NULL DEFAULT 0",
+        "bundle_digest": "TEXT NOT NULL DEFAULT ''",
         "pending_macro_json": "TEXT NOT NULL DEFAULT ''",
         "pending_change_id": "INTEGER NOT NULL DEFAULT 0",
         "pnl_alert_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",

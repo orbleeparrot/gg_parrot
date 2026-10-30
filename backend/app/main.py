@@ -418,6 +418,12 @@ class RunnerStartRequest(BaseModel):
     # 매크로 파일에 동봉된 서명(`_sig`). 실행기 v7+ 가 파일을 열면 그대로 올린다.
     # 서버가 검증해 세션 출처(원본/수정본)를 남긴다. 티켓 경로·옛 실행기는 None.
     macro_sig: Optional[dict] = None
+    # 묶음(포트폴리오)을 레그마다 세션 하나로 갈라 돌릴 때 (2026-10-30).
+    # 실행기는 **원본 묶음 매크로를 그대로** 보내고 몇 번째 레그인지만 덧붙인다 —
+    # 쪼개서 보내면 서명이 깨져 모든 묶음이 "고친 파일" 로 기록된다.
+    leg_index: Optional[int] = None
+    # 한 번의 시작 묶음에 같은 값. 실행기가 만든다 — 서버가 만들면 레그마다 달라진다.
+    bundle_key: str = ""
     macro_source: str = ""  # web | file | "" (실행기가 스스로 밝히는 값, 참고용)
 
 

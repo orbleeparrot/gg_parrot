@@ -36,6 +36,7 @@ from sqlmodel import Session, select
 from . import macro_signing
 from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
+from . import runner_legs
 from . import runner_settings
 from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerKey, RunnerLaunchTicket,
                  RunnerSettingChange, RunSession, RunSessionEvent, User, UserMacro, get_session)
@@ -140,9 +141,16 @@ def unsupported_rule(macro: Macro, decides_locally: bool) -> bool:
     if decides_locally:
         return False
     return macro.rule_type in SERVER_DRIVEN_UNSUPPORTED_RULES
-# 실행기는 macro["symbol"] 하나만 읽는다 — 여러 종목 매크로를 넘기면 첫 종목에 전액이 들어가고,
-# 사용자가 백테스트·모의로 확인한 분산과 실제로 돌아가는 것이 달라진다. 어느 버전으로도 열지 않는다.
-PORTFOLIO_UNSUPPORTED_DETAIL = "실행기는 아직 여러 종목 포트폴리오 매크로를 지원하지 않아요. 종목 하나로 나눠 실행해 주세요."
+# 묶음은 **레그마다 세션 하나**로 갈라 돌린다(2026-10-30). 옛 실행기는 macro["symbol"]
+# 하나만 읽어서 묶음을 넘기면 첫 종목에 전액이 들어간다 — 그래서 레그를 아는 실행기에만 연다.
+PORTFOLIO_UNSUPPORTED_DETAIL = "이 실행기는 여러 종목 묶음을 돌릴 수 없어요. 실행기를 업데이트해 주세요."
+# 묶음을 레그로 갈라 시작할 줄 아는 실행기의 최소 연동 레벨.
+PORTFOLIO_MIN_VERSION = os.environ.get("RUNNER_PORTFOLIO_MIN_VERSION", "23").strip() or "23"
+PORTFOLIO_UPDATE_DETAIL = "여러 종목 묶음은 새 실행기부터 돌릴 수 있어요. 실행기를 업데이트해 주세요."
+
+
+def supports_portfolio(version: str) -> bool:
+    return _version_at_least(version, PORTFOLIO_MIN_VERSION)
 # 서버(runner_engine)가 세션 note 에 쓰는 마커 — 실행기 heartbeat 의 note 가 덮어쓰면 안 된다.
 _SERVER_NOTE_MARKERS = (runner_engine.EXIT_FAIL_NOTE, runner_engine.LOOP_ERROR_NOTE, runner_engine.START_FAIL_NOTE)
 
@@ -389,8 +397,10 @@ def create_launch_ticket(
         # 여러 종목은 버전과 무관하게 못 돌리므로 여기서 막는다 — 실행기는 청구 실패의 사유 문구를 버리므로
         # (티켓·키 유출 방지) 발급 시점에 막아야 사용자가 브라우저에서 이유를 읽는다. 청구 경로의 같은 게이트는
         # 발급 뒤 매크로가 여러 종목으로 바뀌는 경우를 받는다.
-        if macro.is_portfolio():
-            raise _ticket_error(422, PORTFOLIO_UNSUPPORTED_DETAIL)
+        # 묶음 한도가 걸린 묶음만 막는다 — 레그를 갈라도 "지금 몇 종목 들고 있나" 를
+        # 물을 자리가 없다. 나머지 묶음은 실행기가 레그마다 세션 하나로 시작한다.
+        if macro.is_portfolio() and not runner_legs.can_split(macro):
+            raise _ticket_error(422, runner_legs.BUNDLE_RISK_UNSUPPORTED)
 
         row = RunnerLaunchTicket(
             user_id=user_id,
@@ -581,10 +591,14 @@ def claim_launch_ticket(
             # 소비하지 않는다(잠금만 푼다).
             db.rollback()
             raise _ticket_error(422, UNSUPPORTED_RULE_DETAIL)
-        if macro.is_portfolio():
+        if macro.is_portfolio() and not runner_legs.can_split(macro):
             # 못 돌리는 유형과 같은 취급 — 업데이트로 풀리는 문제가 아니므로 거절 표시도, 티켓 소비도 하지 않는다.
             db.rollback()
-            raise _ticket_error(422, PORTFOLIO_UNSUPPORTED_DETAIL)
+            raise _ticket_error(422, runner_legs.BUNDLE_RISK_UNSUPPORTED)
+        if macro.is_portfolio() and not supports_portfolio(runner_version):
+            # 이쪽은 업데이트로 풀린다 — 거절만 남기고 티켓은 소비하지 않는다.
+            db.rollback()
+            raise _ticket_error(426, PORTFOLIO_UPDATE_DETAIL)
         try:
             _require_supported_exchange(macro, runner_version)
         except HTTPException:
@@ -705,12 +719,39 @@ def start_session(user: User, payload: dict) -> dict:
     if isinstance(macro, dict):
         try:
             normalized_macro = Macro.model_validate(macro)
-            dumped = normalized_macro.model_dump_json()
-            if len(dumped) <= 20000:  # 방어적 상한(정상 매크로는 ~1KB)
-                macro_json = dumped
         except (TypeError, ValueError):
-            macro_json = ""
             normalized_macro = None
+
+    # 묶음은 **레그마다 세션 하나**로 갈라 돌린다. 실행기는 원본 매크로를 그대로 보내고
+    # (서명이 깨지지 않게) 몇 번째 레그인지만 덧붙인다 — 나누기는 서버가 한다.
+    # 설계: docs/superpowers/specs/2026-10-30-portfolio-live-run-design.md
+    original_macro = normalized_macro
+    bundle_index, bundle_size, bundle_key = 0, 0, ""
+    if normalized_macro is not None and normalized_macro.is_portfolio():
+        if not runner_legs.can_split(normalized_macro):
+            raise HTTPException(status_code=422, detail=runner_legs.BUNDLE_RISK_UNSUPPORTED)
+        raw_leg = payload.get("leg_index")
+        if raw_leg is None:
+            # 레그를 말하지 않는 실행기(옛 버전)는 묶음을 못 돌린다 — 보냈다면 첫 종목에
+            # 전액이 들어간다. 업데이트 안내가 아니라 왜 못 도는지로 알린다.
+            raise HTTPException(status_code=422, detail=PORTFOLIO_UNSUPPORTED_DETAIL)
+        try:
+            bundle_index = int(raw_leg)
+            normalized_macro = runner_legs.leg_macro(normalized_macro, bundle_index)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc) or "묶음 레그 번호가 올바르지 않아요.")
+        bundle_size = runner_legs.leg_count(original_macro)
+        bundle_key = str(payload.get("bundle_key") or "").strip()[:64]
+        # 아래 게이트와 세션에 적히는 값은 **실제로 돌 레그**의 것이어야 한다.
+        symbol = normalized_macro.symbol
+        side = normalized_macro.position_side.value
+        leverage = normalized_macro.leverage
+        market = normalized_macro.resolved_market()
+
+    if normalized_macro is not None:
+        dumped = normalized_macro.model_dump_json()
+        if len(dumped) <= 20000:  # 방어적 상한(정상 매크로는 ~1KB)
+            macro_json = dumped
 
     # 버전 게이트(2026-09-22 결정): v8+ 는 서버가 전략을 돌리므로 매크로가 필수(422).
     # v8 미만은 A/B 만 로컬 판단으로 돌릴 수 있고, 지표형이거나 매크로를 안 보내 판별 불가면 426.
@@ -726,7 +767,7 @@ def start_session(user: User, payload: dict) -> dict:
         # 먼저 알린다. 실행기가 스스로 판단하면 그 제약이 없으므로 열어 준다.
         raise HTTPException(status_code=422, detail=UNSUPPORTED_RULE_DETAIL)
     if normalized_macro is not None and normalized_macro.is_portfolio():
-        # 여러 종목은 어느 실행기 버전으로도 돌리지 않는다(위 상수 주석 참고) — 업데이트 안내(426)보다 먼저 알린다.
+        # 여기까지 묶음으로 남아 있다면 나누지 못한 것이다(위 묶음 처리를 보라).
         raise HTTPException(status_code=422, detail=PORTFOLIO_UNSUPPORTED_DETAIL)
     # 매크로를 읽은 경우의 국내 거래소 게이트 — 업데이트로 풀리는 문제라 위 '못 돌리는 유형(422)' 뒤, 지표형 게이트 앞에 둔다
     # (청구 경로와 같은 순서).
@@ -752,10 +793,15 @@ def start_session(user: User, payload: dict) -> dict:
     now = _now_iso()
     # 매크로 출처: 티켓 경로면 web, 파일이면 동봉된 서명을 검증해 원본/수정본을 가른다.
     macro_sig = payload.get("macro_sig")
+    # 서명은 **원본 전체**로 확인한다 — 레그로 확인하면 모든 묶음이 "고친 파일" 이 된다.
     macro_origin = macro_signing.classify_origin(
-        normalized_macro, user_macro_id=user_macro_id, sig=macro_sig if isinstance(macro_sig, dict) else None
+        original_macro, user_macro_id=user_macro_id, sig=macro_sig if isinstance(macro_sig, dict) else None
     )
+    # 세션의 지문은 **이 세션이 실제로 도는 매크로**(= 레그)의 것이다. 설정 변경이 반영을
+    # 확인할 때 실행기가 돌리는 것과 같은 값이어야 한다.
     macro_digest = macro_signing.digest(normalized_macro) if normalized_macro is not None else ""
+    bundle_digest = (macro_signing.digest(original_macro)
+                     if bundle_size and original_macro is not None else "")
     with get_session() as db:
         _active_account(db, user.id)
         if user_macro_id is not None:
@@ -767,9 +813,10 @@ def start_session(user: User, payload: dict) -> dict:
                 stored_macro = Macro.model_validate_json(stored_row.macro_json)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=422, detail="저장된 매크로 형식이 올바르지 않아요.")
+            # 묶음이면 실행기가 보낸 것은 원본이다 — 레그와 비교하면 늘 어긋난다.
             if (
-                normalized_macro is None
-                or normalized_macro.model_dump(mode="json")
+                original_macro is None
+                or original_macro.model_dump(mode="json")
                 != stored_macro.model_dump(mode="json")
             ):
                 raise HTTPException(
@@ -779,10 +826,11 @@ def start_session(user: User, payload: dict) -> dict:
             # An ID-bound session has one authoritative identity: the stored,
             # normalized UserMacro. Do not let redundant runner fields drift
             # from the macro selected by the signed-in user.
-            symbol = stored_macro.symbol
-            side = stored_macro.position_side.value
-            leverage = stored_macro.leverage
-            market = stored_macro.resolved_market()
+            authoritative = normalized_macro if bundle_size else stored_macro
+            symbol = authoritative.symbol
+            side = authoritative.position_side.value
+            leverage = authoritative.leverage
+            market = authoritative.resolved_market()
             summary = stored_row.human_summary[:300]
 
         row = RunSession(
@@ -805,6 +853,10 @@ def start_session(user: User, payload: dict) -> dict:
             decides_locally=decides_locally,
             macro_origin=macro_origin,
             macro_digest=macro_digest,
+            bundle_key=bundle_key,
+            bundle_index=bundle_index,
+            bundle_size=bundle_size,
+            bundle_digest=bundle_digest,
         )
         db.add(row)
         db.commit()
@@ -1527,6 +1579,16 @@ def _settings_form(row: RunSession, stopping: bool) -> dict:
     return out
 
 
+def _bundle_view(row: RunSession) -> Optional[dict]:
+    """이 세션이 묶음의 한 레그인가. 아니면 ``None``."""
+    key = str(getattr(row, "bundle_key", "") or "")
+    size = int(getattr(row, "bundle_size", 0) or 0)
+    if not key or size < 2:
+        return None
+    return {"key": key, "index": int(getattr(row, "bundle_index", 0) or 0), "size": size,
+            "digest": str(getattr(row, "bundle_digest", "") or "")}
+
+
 def _session_view(row: RunSession) -> dict:
     connected = _is_connected(row)
     # 실행기가 종료 명령을 받아 정리 중인 상태(플래그는 섰지만 아직 확정 보고 전).
@@ -1551,6 +1613,9 @@ def _session_view(row: RunSession) -> dict:
         "human_summary": row.human_summary,
         # 구동 중 설정 변경(2026-10-30) — 바꿀 수 있는 칸과, 못 바꾸면 그 이유.
         "settings": _settings_form(row, stopping),
+        # 묶음을 레그로 갈라 돌리는 중이면 어느 묶음의 몇 번째인지. 묶음이 아니면 None —
+        # 화면이 레그 N개를 한 줄로 묶고, 종료도 묶음 단위로 걸 수 있게.
+        "bundle": _bundle_view(row),
         "macro": macro,
         "status": row.status,
         "stopping": stopping,

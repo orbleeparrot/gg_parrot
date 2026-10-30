@@ -1248,3 +1248,60 @@ def test_candidates_feed_the_30d_window_into_the_pool(monkeypatch):
     res = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token))
     assert res.status_code == 200, res.text
     assert seen.get("daily") == {"BTCUSDT": [100.0, 110.0, 105.0]}
+
+
+def test_a_falling_market_shows_short_cards_end_to_end(monkeypatch):
+    """하락 구간에서 화면이 "살아남은 후보가 없었다" 로 끝나지 않는다 (2026-10-30).
+
+    예전에는 선물·레버리지를 골라도 롱 후보만 만들어, 내린 구간에서는 전부
+    ``worth_the_macro`` 의 첫 관문(그 자체로 벌었나)에서 떨어졌다. 같은 구간에서 숏은
+    벌었는데 아예 재 보지 않았다 — 이 시험은 그 경로 전체(세션 → 후보 → 카드)를 지난다.
+    """
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    monkeypatch.setattr(ask, "ai_available", lambda: False)
+
+    def fake_run_any(macro):
+        # 내린 구간: 홀딩 -20%, 롱은 지고 숏은 번다.
+        if macro.position_side.value == "short":
+            return _result(15, 6, trades=12, bh=-20), [], "test", macro.period.preset
+        return _result(-8, 12, trades=12, bh=-20), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    token, _user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    body = _candidates_body(risk_profile="aggressive", market="futures", leverage=2)
+    flow = client.post("/api/ask/candidates", json=body, headers=_auth(token)).json()
+    res = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+                      headers=_auth(token))
+    assert res.status_code == 200, res.text
+    data = res.json()
+    assert data["results"], "숏이 벌었으면 빈 화면이 아니어야 한다"
+    assert data["no_edge"] is False
+    assert all(r["macro"]["position_side"] == "short" for r in data["results"])
+    assert all(r["macro"]["market"] == "futures" and r["macro"]["leverage"] == 2 for r in data["results"])
+    assert all("숏" in r["label"] for r in data["results"])
+    # 숏 카드만 나오는 방식은 엔진이 방향을 뒤집는 넷뿐이다.
+    assert set(r["rule_type"] for r in data["results"]) <= set(ask.SHORT_RULE_TYPES)
+
+
+def test_a_rising_market_keeps_short_cards_out(monkeypatch):
+    # 예측을 하지 않는다는 뜻 — 오른 구간에서는 숏이 관문에서 저절로 떨어진다.
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    monkeypatch.setattr(ask, "ai_available", lambda: False)
+
+    def fake_run_any(macro):
+        if macro.position_side.value == "short":
+            return _result(-12, 10, trades=12, bh=20), [], "test", macro.period.preset
+        return _result(30, 6, trades=12, bh=20), [], "test", macro.period.preset
+
+    monkeypatch.setattr("app.main._run_any", fake_run_any)
+    token, _user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    body = _candidates_body(risk_profile="aggressive", market="futures", leverage=2)
+    flow = client.post("/api/ask/candidates", json=body, headers=_auth(token)).json()
+    data = client.post("/api/ask/macros", json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+                       headers=_auth(token)).json()
+    assert data["results"]
+    assert all(r["macro"]["position_side"] == "long" for r in data["results"])

@@ -60,24 +60,76 @@ export function noEdgeDetail(best) {
 }
 
 // 조건 한 줄 — 매매 방식의 핵심 설정(최대 2구) + 봉 간격.
+//
+// 2026-10-30: **방향을 따라간다.** 예전 문구는 "하단 매수" · "골든크로스 매수" 처럼 롱의
+// 말로만 적혀 있었다. 숏 후보가 들어오면서 그대로 쓰면 카드가 거짓을 말한다 — 엔진의 숏은
+// 조건을 뒤집는다(backend/engine/candles.py 의 RSISim · BollingerSim · MACrossSim `_signal`:
+// 과매수에서 공매도, 상단에서 공매도, 데드크로스에서 진입).
 export function conditionLines(macro) {
   const p = macro?.params || {};
   const r = macro?.risk || {};
   const quote = quoteForExchange(macro?.exchange);
+  const isShort = macro?.position_side === "short";
+  const open = isShort ? "공매도" : "매수";
+  const close = isShort ? "청산" : "매도";
   const lines = [];
   switch (macro?.rule_type) {
+    // A 의 익절·손절은 진입가 기준 퍼센트라 양쪽에서 같은 말이다 — 방향은 배지가 말한다.
     case "A": lines.push(`익절 +${p.take_profit_pct}%`, r.stop_loss_pct != null ? `손절 -${r.stop_loss_pct}%` : "손절 없음"); break;
     case "C": lines.push(`${p.interval_days}일마다 ${Number(p.amount_per_buy).toLocaleString()} ${quote}씩 매수`); break;
     case "E": lines.push(`+${p.activation_profit}% 뒤 트레일링 시작`, `고점 대비 -${p.trail_percent}% 에 청산`); break;
-    case "F": lines.push(`RSI(${p.rsi_period}) ${p.entry_threshold} 아래 매수`, `${p.exit_threshold} 위 매도`); break;
-    case "G": lines.push(`볼린저(${p.bb_period}, ${p.bb_std}σ) 하단 매수`, p.exit_target === "mid" ? "중심선 매도" : "상단 매도"); break;
+    case "F": lines.push(
+      `RSI(${p.rsi_period}) ${isShort ? `${p.exit_threshold} 위` : `${p.entry_threshold} 아래`} ${open}`,
+      `${isShort ? p.entry_threshold : p.exit_threshold} ${isShort ? "아래" : "위"} ${close}`); break;
+    // 되돌림은 밴드 안쪽으로 되돌아오길 보고 하단에서 사고, 돌파는 뚫고 나가길 보고 상단에서 산다.
+    // 숏은 그 반대다. 청산 자리(중심선 / 반대 밴드)도 방향을 따라 뒤집힌다.
+    case "G": lines.push(
+      `볼린저(${p.bb_period}, ${p.bb_std}σ) ${bollingerEntry(p.strategy, isShort)} ${open}`,
+      `${p.exit_target === "mid" ? "중심선" : (isShort ? "하단" : "상단")} ${close}`); break;
     case "H": lines.push(`기본 ${Number(p.base_order_size).toLocaleString()} ${quote} + 세이프티 ${p.max_safety_orders}회`, `평단 +${p.take_profit}% 익절`); break;
     case "I": lines.push(`변동성 돌파 k=${p.k}`, p.exit_mode === "next_open" ? "다음 봉 시가 청산" : `청산: ${p.exit_mode}`); break;
-    case "J": lines.push(`${p.ma_type} ${p.fast_period}/${p.slow_period} 골든크로스 매수`, "데드크로스 매도"); break;
+    case "J": lines.push(
+      `${p.ma_type} ${p.fast_period}/${p.slow_period} ${isShort ? "데드크로스" : "골든크로스"} ${open}`,
+      `${isShort ? "골든크로스" : "데드크로스"} ${close}`); break;
     default: break;
   }
   if (macro?.candle_interval) lines.push(intervalLabel(macro));
   return lines;
+}
+
+function bollingerEntry(strategy, isShort) {
+  const upper = strategy === "breakout" ? !isShort : isShort;
+  return upper ? "상단" : "하단";
+}
+
+// 방향 배지 — 롱은 기본값이라 빈 문자열(배지를 띄우지 않는다). 숏만 눈에 띄어야 한다.
+export function sideLabel(macro) {
+  return macro?.position_side === "short" ? "숏" : "";
+}
+
+// 조합 이름에 방향을 붙인다. 배지만으로는 모자란 자리가 있어서다.
+//
+// 다양성 상한이 (방식 · 방향) 짝으로 세어지면서 **같은 방식의 롱과 숏이 함께 뽑힐 수
+// 있다.** 카드 이름도 비교표의 '조합' 칸도 RULE_TYPES[rule_type].label 에서 오므로, 그냥
+// 두면 똑같은 이름의 줄이 둘 생겨 어느 쪽이 숏인지 알 길이 없다. 읽어 주는 화면(aria-label)
+// 에서는 배지가 아예 안 들린다.
+export function withSide(name, macro) {
+  const side = sideLabel(macro);
+  if (!side) return name;
+  return name ? `${name} · ${side}` : side;
+}
+
+// 숏 카드에만 붙는 한 줄. **사실만 말한다** — 어느 쪽으로 갈지는 말하지 않는다.
+//
+// 왜 필요한가: 숏은 "떨어질 것 같아서" 올라온 게 아니라 고른 과거 구간에서 그 자체로
+// 벌고 홀딩을 넘었기 때문에 올라왔다(backend/app/ask.py worth_the_macro). 사용자가 그걸
+// "껄무새가 하락을 예상한다" 로 읽지 않도록, 이 설정이 **어느 방향에서 돈이 되는 구조인지**
+// 와 반대로 갔을 때 무엇이 일어나는지만 적는다. 레버리지가 있으면 청산을 함께 말한다.
+export function shortNote(macro) {
+  if (macro?.position_side !== "short") return "";
+  const lev = Number(macro?.leverage) || 1;
+  const base = "빌려 먼저 팔고 나중에 되사는 설정이에요 — 가격이 내려가면 벌고, 올라가면 손실이 커져요.";
+  return lev > 1 ? `${base} ${lev}배를 썼으니 올라가면 증거금을 통째로 잃는 청산이 날 수 있어요.` : base;
 }
 
 export function intervalLabel(macro) {

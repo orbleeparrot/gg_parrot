@@ -106,6 +106,20 @@ PROFILES: dict[str, dict] = {
 # 세 성향이 여덟 방식을 다 본다. 순서는 템플릿 우선순위(앞쪽이 시간 예산에서 먼저 평가된다).
 ALL_RULE_TYPES = ("C", "J", "G", "A", "F", "E", "I", "H")
 
+# 숏(공매도) 후보를 만들 방식 — **엔진이 정말 방향을 뒤집는 것만** (2026-10-30).
+#
+# 근거는 엔진 구현이다. candles.py 의 F(RSISim) · G(BollingerSim) · J(MACrossSim) 는
+# ``self.side`` 로 진입·청산 조건을 뒤집고(과매도 매수 → 과매수 공매도, 하단 → 상단,
+# 골든크로스 → 데드크로스) ``_open_short`` 를 부른다. A 는 stepper.py 가 같은 일을 한다.
+# E(TrailingSim) · H(MartingaleSim) · I(BreakoutSim) 는 진입에서 side 를 **읽지 않고**
+# ``_open_long`` 을 하드코딩한다 — 숏으로 내보내면 매크로는 숏이라 말하면서 엔진은 롱을
+# 잡는다. C(적립식)는 스키마가 숏을 거절한다.
+#
+# 빌더의 화이트리스트(frontend/src/lib/macro.js RULE_TYPES[*].allowShort)와 같은 집합이어야
+# 한다 — 어긋나면 물어볼까가 내준 카드를 빌더로 불러올 때 "숏을 지원하지 않아요" 로 막힌다.
+# tests/test_ask_short.py 가 두 벌의 동일성을 고정한다.
+SHORT_RULE_TYPES = ("A", "F", "G", "J")
+
 # 봉 × 기간 짝 — 백테스트 봉 상한(MAX_BACKTEST_BARS=20,000)을 넘지 않는 조합만.
 LONG_INTERVALS = ("1h", "4h", "1d")
 LONG_PERIODS = ("3m", "6m", "1y")
@@ -377,6 +391,50 @@ def _allowed_types(req: _Plan) -> tuple[str, ...]:
     return types
 
 
+def _short_types(req: _Plan) -> tuple[str, ...]:
+    """숏 후보를 만들 방식. 숏이 불가능한 조건이면 빈 튜플.
+
+    현물은 공매도를 할 수 없고(빌려 팔 물건이 없다), 국내 원화 거래소는 현물만 다룬다.
+    그래서 조건은 하나다 — **바이낸스 선물**. 성향 제약은 이미 앞에서 걸린다:
+    ``CandidatesRequest`` 가 안정형에 선물을 주지 않으므로 안정형에는 숏이 올 일이 없다.
+
+    순서는 ``_allowed_types`` 를 따른다(ALL_RULE_TYPES 의 템플릿 우선순위). SHORT_RULE_TYPES
+    를 그대로 돌면 A·F·G·J 가 되어, 우선순위가 뒤 프리셋마다 뒤집힌다 — 시간 예산이
+    자르는 자리가 바로 거기다.
+    """
+    if req.market != "futures" or is_domestic(req.exchange):
+        return ()
+    shorts = set(SHORT_RULE_TYPES)
+    return tuple(t for t in _allowed_types(req) if t in shorts)
+
+
+# 바이낸스 무기한 선물의 기준 펀딩 요율 — 8시간마다 0.01%, 하루 세 번 → 하루 0.03%.
+DAILY_FUNDING_PCT = 0.03
+
+
+def _funding_pct(req: _Plan, side: str) -> float:
+    """이 매크로에 넣을 ``fees.funding_pct``. 숏 · 선물이 아니면 0.
+
+    **왜 0 으로 두면 안 되나**: 엔진에서 펀딩비는 숏에만 붙는 비용이다(candles.py ·
+    stepper.py 모두 ``side is SHORT`` 일 때만 깎는다). 0 으로 두면 숏만 자기 고유 비용을
+    면제받아 "홀딩을 의미 있게 넘었나"(worth_the_macro) 관문이 숏 쪽으로 기운다. 그 관문이
+    숏 카드를 보여 주는 **유일한 근거**라 그냥 둘 수 없다. 3개월 창이면 대략 2.7%p 로,
+    그 기간의 문턱(2.0%p)보다 크다.
+
+    **왜 하루 요율을 그대로 넣지 않나**: 엔진은 이 값을 **봉마다** 깎는다(candles.py:
+    "per bar, prorated only for 1d"). 하루 요율을 그대로 넣으면 1시간봉에서 24배,
+    15분봉에서 96배가 된다. 봉 수로 나눠 하루 총액이 맞게 한다.
+
+    종목별 실제 평균은 ``data/binance.average_daily_funding_pct`` 로 받을 수 있지만, 후보
+    단계는 40초 예산 안에서 도는 길이라 여기에 거래소 호출을 하나 더 두지 않는다.
+    """
+    if side != "short" or req.market != "futures" or is_domestic(req.exchange):
+        return 0.0
+    bars = _BARS_PER_DAY.get(str(req.interval), 24)
+    # 자리를 넉넉히 둔다 — 6자리로 자르면 15분봉(÷96)에서 하루 총액이 0.03 을 벗어난다.
+    return round(DAILY_FUNDING_PCT / max(1, bars), 10)
+
+
 def _fit_martingale(params: dict, budget: float, floor: Optional[float]) -> Optional[dict]:
     """마틴게일 주문 크기를 거래소 최소 주문 금액에 맞춘다.
 
@@ -412,7 +470,8 @@ def _fit_martingale(params: dict, budget: float, floor: Optional[float]) -> Opti
     return None
 
 
-def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) -> Optional[Macro]:
+def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str],
+                side: str = "long") -> Optional[Macro]:
     params = dict(preset["params"])
     capital = float(req.account_balance)
     old_capital = params.get("initial_capital", CAPITAL)
@@ -447,7 +506,9 @@ def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) ->
         "symbol": symbols[0],
         "symbols": symbols if len(symbols) > 1 else None,
         "rule_type": rule_type,
-        "position_side": "long",
+        # 숏은 _short_types 가 고른 방식에만 붙는다. 스키마가 한 번 더 본다(숏 A 는
+        # risk.stop_loss_pct > 0 이 필수 — 숏 손실은 이론상 무한하다).
+        "position_side": side,
         "candle_interval": "1d" if rule_type == "C" else req.interval,
         "market": req.market,
         "leverage": req.leverage if rule_type != "C" else 1,
@@ -455,7 +516,8 @@ def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) ->
         "risk": dict(preset.get("risk", {})),
         # 거래소 실제 요율을 쓴다 — 예전에는 전부 0.1%(바이낸스) 라 국내 결과가 실제보다
         # 나쁘게 나왔다. 거래가 잦은 설정에서 차이가 커진다.
-        "fees": {"commission_pct": spot_commission_pct(req.exchange)},
+        "fees": {"commission_pct": spot_commission_pct(req.exchange),
+                 "funding_pct": _funding_pct(req, side)},
         "period": {"preset": req.period_preset},
     }
     try:
@@ -464,48 +526,69 @@ def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str]) ->
         return None
 
 
-def _label(rule_type: str, req: _Plan, symbols: list[str]) -> str:
+def _label(rule_type: str, req: _Plan, symbols: list[str], side: str = "long") -> str:
+    """후보 한 줄 이름. 숏이면 방식 이름 뒤에 '(숏)' 을 붙인다.
+
+    왜 라벨에 넣나: 화면이 ``label + rule_type`` 을 카드의 React 키로 쓴다. 같은 방식의
+    롱·숏이 같은 키를 가지면 한 장이 조용히 사라진다. 세션 기록(results_json)에도 같은
+    이름이 남으므로 나중에 어느 쪽이었는지 읽을 수 있다.
+    """
     where = "포트폴리오" if len(symbols) > 1 else symbols[0]
-    return f"{RULE_LABELS.get(rule_type, rule_type)} · {req.interval} · {where}"
+    name = RULE_LABELS.get(rule_type, rule_type) + ("(숏)" if side == "short" else "")
+    return f"{name} · {req.interval} · {where}"
 
 
 def build_templates(req: _Plan) -> list[Candidate]:
     """성향별 템플릿 후보.
 
-    상한(24)에 걸리면 뒤쪽부터 잘리므로 모든 유형의 단일 종목 후보가 먼저,
-    포트폴리오가 그다음, 두 번째 프리셋이 마지막에 오도록 순서를 정한다:
-    1) 유형 × 종목 전부의 첫 프리셋(단일 종목), 2) 종목이 2개 이상이면 유형별
-    포트폴리오(첫 프리셋), 3) 유형 × 종목 전부의 두 번째 프리셋(단일 종목).
+    상한(MAX_CANDIDATES)에 걸리면 뒤쪽부터 잘리고, **그보다 먼저 시간 예산이 자른다**
+    (evaluate 가 후보마다 예산을 보고 넘으면 거기서 멈춘다). 그래서 순서가 곧 산출 여부다:
+
+    1) 모든 유형 × 모든 종목의 첫 프리셋 — 롱
+    2) 숏을 할 수 있는 유형 × 모든 종목의 첫 프리셋 — 숏(선물에서만)
+    3) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋, 롱)
+    4) 두 번째 이상 프리셋 — 롱, 그다음 숏
+
+    숏이 2) 에 오는 이유: 맨 뒤에 붙이면 예산이 끝난 뒤라 한 장도 평가되지 않는다 —
+    기능이 조용히 꺼진다. 롱 한 바퀴 뒤에 두면 두 방향의 '대표 설정' 이 늘 함께 재어진다.
     """
     out: list[Candidate] = []
     types = _allowed_types(req)
+    shorts = _short_types(req)
     presets = _presets_for(req)
 
-    # 1) 모든 유형 × 모든 종목의 첫 프리셋(단일 종목)
+    def add(rule_type: str, preset: dict, symbols: list[str], side: str = "long") -> None:
+        macro = _make_macro(req, rule_type, preset, symbols, side=side)
+        if macro is not None:
+            out.append(Candidate(_label(rule_type, req, symbols, side=side), macro, "template"))
+
+    # 1) 모든 유형 × 모든 종목의 첫 프리셋(단일 종목, 롱)
     for rule_type in types:
         for sym in req.symbols:
-            macro = _make_macro(req, rule_type, presets[rule_type][0], [sym])
-            if macro is not None:
-                out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+            add(rule_type, presets[rule_type][0], [sym])
 
-    # 2) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋)
+    # 2) 숏 가능 유형의 첫 프리셋 — 선물에서만 비어 있지 않다.
+    for rule_type in shorts:
+        for sym in req.symbols:
+            add(rule_type, presets[rule_type][0], [sym], side="short")
+
+    # 3) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋). 묶음은 롱만 만든다 —
+    #    레그별 규칙의 숏 지원을 서버가 보지 않으므로(frontend/src/lib/macro.js 주석)
+    #    묶음 숏은 빌더로 불러올 때 막힐 수 있다. 물어볼까는 종목을 하나만 쓴다(_plan).
     if len(req.symbols) > 1:
         for rule_type in types:
-            macro = _make_macro(req, rule_type, presets[rule_type][0], req.symbols)
-            if macro is not None:
-                out.append(Candidate(_label(rule_type, req, req.symbols), macro, "template"))
+            add(rule_type, presets[rule_type][0], req.symbols)
 
-    # 3) 두 번째 이상 프리셋 — 종목별·유형별로 추가
+    # 4) 두 번째 이상 프리셋 — 종목별·유형별로 추가. 같은 깊이 안에서 롱이 먼저다.
     depth = max(len(presets[t]) for t in types)
     for preset_idx in range(1, depth):
         for sym in req.symbols:
             for rule_type in types:
-                type_presets = presets[rule_type]
-                if preset_idx >= len(type_presets):
-                    continue
-                macro = _make_macro(req, rule_type, type_presets[preset_idx], [sym])
-                if macro is not None:
-                    out.append(Candidate(_label(rule_type, req, [sym]), macro, "template"))
+                if preset_idx < len(presets[rule_type]):
+                    add(rule_type, presets[rule_type][preset_idx], [sym])
+            for rule_type in shorts:
+                if preset_idx < len(presets[rule_type]):
+                    add(rule_type, presets[rule_type][preset_idx], [sym], side="short")
 
     return out[:MAX_CANDIDATES]
 
@@ -682,15 +765,47 @@ def select_top(evaluated: list[Evaluated], profile: str, n: int = TOP_N,
     ]
     pool.sort(key=lambda e: (ranking_key(profile, e.result), e.result.total_trades), reverse=True)
     picked: list[Evaluated] = []
-    per_type: dict[str, int] = {}
+    per_key: dict[tuple[str, str], int] = {}
     for e in pool:
-        rt = e.candidate.macro.rule_type.value
-        if per_type.get(rt, 0) >= MAX_PER_TYPE:
+        # 같은 방식의 롱과 숏은 **서로 다른 설정**이다(진입 조건이 뒤집힌다). 다양성은
+        # 방식 하나가 아니라 (방식 · 방향) 짝으로 센다 — 롱 전용 세션에서는 예전과 같다.
+        key = (e.candidate.macro.rule_type.value, _side_of(e))
+        if per_key.get(key, 0) >= MAX_PER_TYPE:
             continue
-        per_type[rt] = per_type.get(rt, 0) + 1
+        per_key[key] = per_key.get(key, 0) + 1
         picked.append(e)
         if len(picked) >= n:
             break
+    return _with_other_side(picked, pool, n)
+
+
+def _side_of(e: Evaluated) -> str:
+    return e.candidate.macro.position_side.value
+
+
+def _with_other_side(picked: list[Evaluated], pool: list[Evaluated], n: int) -> list[Evaluated]:
+    """상위 n개가 모두 한 방향이면 꼴찌 자리를 반대 방향 1등에게 넘긴다 (2026-10-30).
+
+    왜: 두 방향이 **같은 관문을 넘었는데** 점수순으로 한쪽만 보여 주면 사용자는 반대
+    방향이 가능했다는 사실 자체를 모른다. 사장님 요청("롱·숏별로 보여 달라")의 본체다.
+
+    **억지로 끼워 넣지는 않는다.** ``pool`` 은 이미 거른 뒤다 — 그 방향이 그 구간에서
+    벌지 못했거나 홀딩을 못 넘었으면 ``pool`` 에 없고, 그러면 자리는 그대로 롱이 쓴다.
+    이것이 예측을 하지 않는 방식이다: 상승 구간에서는 숏이 저절로 사라진다.
+
+    자리를 내준 뒤 점수순으로 다시 세운다 — 화면이 목록 순서를 1위·2위·3위로 읽는다.
+    """
+    if n < 2 or not picked:
+        return picked
+    present = {_side_of(e) for e in picked}
+    for side in ("long", "short"):
+        if side in present:
+            continue
+        best = next((e for e in pool if _side_of(e) == side), None)
+        if best is None:
+            continue
+        keep = picked[: n - 1] if len(picked) >= n else picked
+        picked = sorted(keep + [best], key=lambda e: pool.index(e))
     return picked
 
 

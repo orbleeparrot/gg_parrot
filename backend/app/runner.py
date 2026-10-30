@@ -914,6 +914,8 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
             if action != "continue":
                 # 종료 중인 세션엔 매매 명령을 주지 않는다(명령 행은 그대로 — 만료로 정리된다).
                 commands = []
+        # 실행기가 "이 설정으로 돌고 있다" 고 보낸 지문 — 증빙에 반영 시각을 적는다.
+        confirm_settings(db, row, snapshot.get("settings_digest"))
         # 예약해 둔 설정 변경은 포지션이 빈 뒤에 적용한다 — 위에서 이번 스냅샷의
         # 포지션을 반영한 **뒤**라, 막 청산된 경우에도 이번 heartbeat 에서 바로 적용된다.
         restart = apply_pending_settings(db, row)
@@ -1962,6 +1964,31 @@ def request_settings_change(user_id: int, session_id: int, changes: dict, *,
                      else "지금 포지션이 정리되면 적용해요.")}
 
 
+def confirm_settings(db, row: RunSession, echoed: object) -> None:
+    """실행기가 "이 설정으로 돌고 있다" 고 보낸 지문을 받아 기록에 반영 시각을 적는다.
+
+    왜 필요한가: 증빙은 "사용자가 바꿨다" 뿐 아니라 **"실행기가 그걸 받아 돌았다"** 까지
+    말할 수 있어야 한다. 바꿨는데 실행기가 못 받은 채 사고가 나면 이야기가 달라진다.
+
+    지금 매크로의 지문과 같을 때만 적는다 — 옛 지문을 늦게 보내온 heartbeat 로 엉뚱한
+    줄에 시각이 찍히지 않게.
+    """
+    digest = str(echoed or "").strip()
+    if not digest or digest != (row.macro_digest or ""):
+        return
+    record = db.exec(
+        select(RunnerSettingChange)
+        .where(RunnerSettingChange.session_id == row.id,
+               RunnerSettingChange.after_digest == digest,
+               RunnerSettingChange.applied_ms == 0)
+        .order_by(RunnerSettingChange.id.desc())
+    ).first()
+    if record is None:
+        return
+    record.applied_ms = runner_engine._now_ms()
+    db.add(record)
+
+
 def _settings_view(row: RunSession) -> Optional[dict]:
     """heartbeat 응답에 실을 설정 — **실행기가 실제로 쓰는 값만**.
 
@@ -1984,6 +2011,9 @@ def _settings_view(row: RunSession) -> Optional[dict]:
     return {
         "digest": macro_signing.digest(macro),
         "changed_count": int(row.settings_changed_count or 0),
+        # 실행기 화면도 같은 칸을 그린다 — 목록을 실행기가 따로 들면 두 벌이 되어
+        # 화면에는 보이는데 서버가 거절하는 칸이 생긴다.
+        "fields": runner_settings.form_view(macro),
         "initial_capital": float(macro.params.get("initial_capital") or 0.0),
         "invest_ratio": float(risk.invest_ratio),
         "stop_loss_pct": risk.stop_loss_pct,

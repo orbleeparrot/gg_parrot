@@ -319,3 +319,68 @@ def test_an_old_runners_session_says_why_it_cannot_be_edited():
     assert row["settings"]["editable"] is False
     assert "업데이트" in row["settings"]["reason"], "못 바꾸면 이유를 말해야 한다"
     assert row["settings"]["fields"] == []
+
+
+# --- 실행기가 반영했는가 ------------------------------------------------------
+
+def test_the_runner_echo_marks_the_record_as_applied():
+    """증빙은 "바꿨다" 뿐 아니라 "실행기가 받아 돌았다" 까지 말할 수 있어야 한다."""
+    token = _signup()
+    session_id, key = _start(token)
+    _change(token, session_id, {"params": {"initial_capital": 2_000_000}})
+    row = _rows(session_id)[-1]
+    assert row.applied_ms == 0, "아직 실행기가 확인하기 전이다"
+
+    client.post("/api/runner/heartbeat", json={
+        "session_id": session_id, "last_price": 100.0, "in_position": False,
+        "settings_digest": row.after_digest,
+    }, headers={"X-Runner-Key": key})
+    assert _rows(session_id)[-1].applied_ms > 0
+
+
+def test_an_old_digest_never_marks_the_wrong_record():
+    # 늦게 도착한 heartbeat 가 엉뚱한 줄에 시각을 찍으면 증빙이 거짓이 된다.
+    token = _signup()
+    session_id, key = _start(token)
+    _change(token, session_id, {"params": {"initial_capital": 2_000_000}})
+    stale = _rows(session_id)[-1].after_digest
+    _change(token, session_id, {"params": {"initial_capital": 3_000_000}})
+
+    client.post("/api/runner/heartbeat", json={
+        "session_id": session_id, "last_price": 100.0, "settings_digest": stale,
+    }, headers={"X-Runner-Key": key})
+    assert all(row.applied_ms == 0 for row in _rows(session_id)), "옛 지문으로는 아무것도 확정하지 않는다"
+
+
+# --- 실행기 화면에서 바꾸기 --------------------------------------------------
+
+def test_the_runner_can_change_its_own_session_with_its_key():
+    """실행기는 로그인 토큰이 없다 — 회원 키로 들어오되 하는 일은 웹과 같은 길이다."""
+    token = _signup()
+    session_id, key = _start(token)
+    res = client.post(f"/api/runner/sessions/{session_id}/settings",
+                      json={"changes": {"params": {"initial_capital": 2_000_000}}},
+                      headers={"X-Runner-Key": key})
+    assert res.status_code == 200, res.text
+    row = _rows(session_id)[-1]
+    assert row.source == "runner", "요청이 뭐라 하든 출처는 실행기다"
+
+
+def test_the_runner_key_cannot_touch_another_members_session():
+    owner, stranger = _signup(), _signup()
+    session_id, _key = _start(owner)
+    other_key = client.get("/api/me/runner/key", headers=_auth(stranger)).json()["key"]
+    res = client.post(f"/api/runner/sessions/{session_id}/settings",
+                      json={"changes": {"risk": {"stop_loss_pct": 1.0}}},
+                      headers={"X-Runner-Key": other_key})
+    assert res.status_code == 404
+    assert _rows(session_id) == []
+
+
+def test_the_runner_cannot_forge_the_source():
+    token = _signup()
+    session_id, key = _start(token)
+    client.post(f"/api/runner/sessions/{session_id}/settings",
+                json={"changes": {"risk": {"stop_loss_pct": 1.0}}, "source": "web"},
+                headers={"X-Runner-Key": key})
+    assert _rows(session_id)[-1].source == "runner"

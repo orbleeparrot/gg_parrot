@@ -434,6 +434,9 @@ class RunnerHeartbeatRequest(BaseModel):
     unrealized_net_pct: Optional[float] = None
     realized_net: Optional[float] = None
     note: str = ""
+    # v22: 실행기가 지금 들고 있는 설정의 지문. 서버가 "실행기가 반영했다" 를 이걸로 확인해
+    # 증빙(RunnerSettingChange.applied_ms)에 적는다. 옛 실행기는 보내지 않는다.
+    settings_digest: str = ""
     # 실행기 창 로그를 서버에 쌓는다(v7+). [{ts, kind, message}] — 한 번에 100개까지.
     events: list[dict] = []
     # v8: 직전 heartbeat 로 받은 명령의 실행 결과 [{command_id, ok, executed_qty, fill_price, error}]
@@ -2626,6 +2629,20 @@ def runner_start(req: RunnerStartRequest, user: User = Depends(_runner_user)) ->
             detail=f"실행기 v{_RUNNER_MIN_VERSION or MIN_SUPPORTED_RUNNER_VERSION} 이상으로 업데이트해 주세요.",
         )
     return runner_mod.start_session(user, req.model_dump())
+
+
+@app.post("/api/runner/sessions/{session_id}/settings")
+def runner_self_change_settings(
+    session_id: int, req: RunnerSettingsRequest, user: User = Depends(_runner_user)
+) -> dict:
+    """실행기 화면에서 자기 세션의 설정을 바꾼다 — 회원 키로 인증한다.
+
+    실행기는 로그인 토큰이 없어 웹 엔드포인트를 쓸 수 없다. 길은 둘이지만 **하는 일은
+    하나**다(``request_settings_change``) — 실행기가 혼자 바꾸지 않고 서버를 거치게 하는
+    것이 이 설계의 요점이다. 출처는 요청이 뭐라 하든 "runner" 로 못 박는다.
+    """
+    return runner_mod.request_settings_change(
+        user.id, session_id, req.changes, source="runner", apply_mode=req.apply_mode)
 
 
 @app.post("/api/runner/heartbeat")

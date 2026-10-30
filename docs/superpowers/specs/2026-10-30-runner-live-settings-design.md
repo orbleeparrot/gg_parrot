@@ -97,6 +97,22 @@ heartbeat 응답에 `settings` 를 싣는다 — 실행기가 쓰는 값만: 투
 바뀌고 실행기 안전망은 옛 값으로 남는 **어긋남**이 생긴다. 그래서 최소 버전에 못 미치는
 실행기가 붙은 세션은 변경 요청 자체를 거절한다("실행기를 업데이트해 주세요").
 
+## 만든 것 (2026-10-30)
+
+| 자리 | 한 일 |
+|---|---|
+| `app/runner_settings.py` | 바꿀 수 있는 칸 · 변경 적용 · 화면이 그릴 칸 목록 |
+| `app/runner.py` | 변경 요청 · 증빙 적립 · 예약 적용 · 실행기 반영 확인 · heartbeat 전달 |
+| `app/runner_engine.py` | `restart_driver` — 상태 저장 → 멈춤 → 새 매크로로 시작 |
+| `app/db.py` | `RunnerSettingChange` · 세션의 수정 횟수 · 예약 칸 |
+| `app/main.py` | 웹용(`/api/me/runner/sessions/{id}/settings`) · 실행기용(`/api/runner/sessions/{id}/settings`) |
+| 웹 | `RunnerSettingsDialog` + `features/agents/settingsForm.js` |
+| 실행기(Rust) | `bot/settings.rs` — 받은 설정 반영 · 안전망 재구성 · 지문 되돌려 보내기 |
+| 실행기(화면) | `components/run/LiveSettings.tsx` |
+
+입구가 둘인 이유: 실행기는 로그인 토큰이 없어 회원 키로 들어온다. **하는 일은 하나**다 —
+둘 다 `request_settings_change` 를 부르고, 실행기 쪽은 출처를 "runner" 로 못 박는다.
+
 ## 범위 밖
 
 * `decides_locally` 모드는 지금 꺼져 있다. 그 모드에서는 매크로 전체를 실행기로 내려

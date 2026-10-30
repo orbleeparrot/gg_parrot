@@ -26,12 +26,17 @@ export default function RunnerSettingsDialog({ open, session, busy = false, erro
   const fields = useMemo(() => settings.fields || [], [settings.fields]);
   const inPosition = !!session?.in_position;
 
-  // 창을 열 때마다 입력을 현재 값으로 되돌린다 — 앞서 치다 만 값이 되살아나면 안 된다.
+  // ``edits`` 는 **사람이 손댄 칸만** 담는다. 안 담긴 칸은 그릴 때 지금 값으로 채운다.
+  //
+  // 열 때 모든 칸을 미리 채워 두면 그러려고 effect 가 필요한데, 그 effect 는 ``fields`` 가
+  // 바뀔 때마다 돈다. 세션 목록은 계속 새로 받아 오므로 ``fields`` 는 매번 새 배열이고,
+  // 그러면 **사용자가 치고 있는 중에 입력이 초기화된다.** 손댄 칸만 담으면 effect 가 없다.
+  // 창이 닫힐 때 비워, 다음에 열면 그때의 현재 값으로 시작한다.
   useEffect(() => {
-    if (!open) return;
-    setEdits(Object.fromEntries(fields.map((field) => [field.path, fieldText(field)])));
+    if (open) return;
+    setEdits({});
     setApplyMode(APPLY_NOW);
-  }, [open, fields]);
+  }, [open]);
 
   useModalLayer({ open, ref: dialogRef, onEscape: () => onClose?.(), busy, trap: true, initialFocusRef: firstRef });
 
@@ -82,7 +87,7 @@ export default function RunnerSettingsDialog({ open, session, busy = false, erro
                 type="text"
                 inputMode="decimal"
                 className="input"
-                value={edits[field.path] ?? ""}
+                value={edits[field.path] ?? fieldText(field)}
                 disabled={busy}
                 aria-invalid={bad.includes(field) || undefined}
                 placeholder={field.clearable ? "비우면 끔" : ""}

@@ -24,7 +24,7 @@ import {
 } from "../lib/askFlow.js";
 import {
   coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, noEdgeDetail, numberParts,
-  resultsHeadline, shortNote, sideLabel,
+  resultsHeadline, shortNote, sideLabel, withSide,
   signedPct, signedPoints, sparkPaths, splitRuleLabel, whyHeadline, whyPoints,
 } from "../lib/askView.js";
 import { coinName } from "../lib/macroSource.js";
@@ -180,7 +180,7 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
   const side = sideLabel(macro);
   const note = shortNote(macro);
   return (
-    <article className={"ask-mc" + (best ? " is-best" : "") + (compact ? " is-compact" : "")} style={{ "--coin": coinTint(baseOf(first)) || "transparent" }} aria-label={`${rank}위 · ${name}`}>
+    <article className={"ask-mc" + (best ? " is-best" : "") + (compact ? " is-compact" : "")} style={{ "--coin": coinTint(baseOf(first)) || "transparent" }} aria-label={`${rank}위 · ${withSide(name, macro)}`}>
       <header className="ask-mc-head">
         <span className={`ask-rank is-${rank}`}><b className="num">{rank}</b>위</span>
         <CoinIcon symbol={first} size={32} alt="" className="ask-logo" />
@@ -188,7 +188,7 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
           {/* 방향 배지는 티커 줄에 둔다 — 휴대폰 카드는 ask-mc-tags 를 숨기므로(.is-compact),
               거기 두면 가장 중요한 표시가 작은 화면에서만 사라진다. */}
           <span className="ask-tk num"><strong>{symbols.length > 1 ? symbols.map(baseOf).join(" · ") : baseOf(first)}</strong><small>{quoteOf(first)}</small>{side ? <b className="ask-side">{side}</b> : null}</span>
-          <span className="ask-mc-rule">{name}{by ? <em> · {by}</em> : null}</span>
+          <span className="ask-mc-rule">{withSide(name, macro)}{by ? <em> · {by}</em> : null}</span>
         </span>
         <span className="ask-mc-tags">
           <span className="ask-tag">{exchangeLabel(macro.exchange)}</span>
@@ -343,7 +343,7 @@ function CompareTable({ results, hold }) {
             return (
               <tr key={item.label + item.rule_type}>
                 <td><span className={`ask-rank is-${idx + 1}`}><b className="num">{idx + 1}</b>위</span></td>
-                <td className="is-name">{splitRuleLabel(RULE_TYPES[item.rule_type]?.label ?? item.label).name}</td>
+                <td className="is-name">{withSide(splitRuleLabel(RULE_TYPES[item.rule_type]?.label ?? item.label).name, item.macro)}</td>
                 <td className={"num " + (ret >= 0 ? "is-up" : "is-down")}>{signedPct(ret)}</td>
                 <td className="num is-down is-mdd">-{Number(item.metrics?.mdd_pct).toFixed(2)}%</td>
                 <td className={"num " + (diff == null ? "" : diff >= 0 ? "is-up" : "is-down")}>{signedPoints(diff)}</td>

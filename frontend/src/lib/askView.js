@@ -107,6 +107,18 @@ export function sideLabel(macro) {
   return macro?.position_side === "short" ? "숏" : "";
 }
 
+// 조합 이름에 방향을 붙인다. 배지만으로는 모자란 자리가 있어서다.
+//
+// 다양성 상한이 (방식 · 방향) 짝으로 세어지면서 **같은 방식의 롱과 숏이 함께 뽑힐 수
+// 있다.** 카드 이름도 비교표의 '조합' 칸도 RULE_TYPES[rule_type].label 에서 오므로, 그냥
+// 두면 똑같은 이름의 줄이 둘 생겨 어느 쪽이 숏인지 알 길이 없다. 읽어 주는 화면(aria-label)
+// 에서는 배지가 아예 안 들린다.
+export function withSide(name, macro) {
+  const side = sideLabel(macro);
+  if (!side) return name;
+  return name ? `${name} · ${side}` : side;
+}
+
 // 숏 카드에만 붙는 한 줄. **사실만 말한다** — 어느 쪽으로 갈지는 말하지 않는다.
 //
 // 왜 필요한가: 숏은 "떨어질 것 같아서" 올라온 게 아니라 고른 과거 구간에서 그 자체로

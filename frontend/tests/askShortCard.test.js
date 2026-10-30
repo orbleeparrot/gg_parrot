@@ -6,7 +6,7 @@
 // 엔진 근거: backend/engine/candles.py 의 RSISim · BollingerSim · MACrossSim `_signal`.
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conditionLines, marketLabel, sideLabel, shortNote } from "../src/lib/askView.js";
+import { conditionLines, marketLabel, shortNote, sideLabel, withSide } from "../src/lib/askView.js";
 
 const macro = (rule_type, params, extra = {}) => ({
   rule_type, params, risk: {}, exchange: "binance", candle_interval: "1h",
@@ -89,4 +89,25 @@ test("shortNote: never predicts a direction", () => {
 
 test("marketLabel: unchanged — the side is its own badge, not part of the market tag", () => {
   assert.equal(marketLabel(short("J", {}, { leverage: 2 })), "선물 · 격리 2배");
+});
+
+// --- 이름에 방향이 들어가야 하는 이유 (리뷰 지적) ---------------------------
+//
+// 다양성 상한을 (방식 · 방향) 짝으로 세면서 같은 방식의 롱과 숏이 **함께** 뽑힐 수 있게
+// 됐다. 카드 이름과 비교표의 '조합' 칸은 둘 다 RULE_TYPES[rule_type].label 에서 오므로,
+// 그대로 두면 똑같은 이름의 줄이 둘 생긴다 — 어느 쪽이 숏인지 알 길이 없다.
+// (ask.py MAX_PER_TYPE 주석이 상한을 1로 둔 이유로 적어 둔 바로 그 문제다.)
+test("withSide: appends the direction only for a short", () => {
+  assert.equal(withSide("이동평균 크로스", macro("J", {})), "이동평균 크로스");
+  assert.equal(withSide("이동평균 크로스", short("J", {})), "이동평균 크로스 · 숏");
+});
+
+test("withSide: a long and a short of the same rule type never read the same", () => {
+  const name = "이동평균 크로스";
+  assert.notEqual(withSide(name, macro("J", {})), withSide(name, short("J", {})));
+});
+
+test("withSide: survives a missing macro and an empty name", () => {
+  assert.equal(withSide("이동평균 크로스", null), "이동평균 크로스");
+  assert.equal(withSide("", short("J", {})), "숏");
 });

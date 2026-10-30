@@ -17,14 +17,14 @@ from __future__ import annotations
 
 import math
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 from app import ask
-from engine import run_backtest
 from engine.backtest import BacktestResult
+from engine.live_session import build_driver
 from engine.schema import PositionSide
 
 FUTURES = dict(risk_profile="aggressive", market="futures", leverage=2)
@@ -69,8 +69,9 @@ def test_only_engine_mirrored_types_go_short():
     cands = ask.build_templates(_plan(**FUTURES))
     short_types = {c.macro.rule_type.value for c in cands if _side(c.macro) == "short"}
     assert short_types == set(ask.SHORT_RULE_TYPES)
-    # 엔진이 side 를 안 읽는 방식 — 숏으로 내보내면 매크로와 엔진이 다른 일을 한다.
-    assert not short_types & {"C", "E", "H", "I"}
+    # 롱은 여덟 방식을 다 본다 — 숏을 더하면서 롱이 좁아지지 않았다.
+    assert {c.macro.rule_type.value for c in cands if _side(c.macro) == "long"} == set(
+        ask._allowed_types(_plan(**FUTURES)))
 
 
 def test_short_first_presets_come_before_the_deeper_long_presets():
@@ -134,43 +135,61 @@ def test_short_rule_types_agree_with_the_builder_whitelist():
 
 # --- 엔진이 정말 방향을 뒤집는가 ---------------------------------------------
 
-def _wave_df(bars: int = 600) -> pd.DataFrame:
-    """주기가 다른 파동 셋을 겹친 봉. 지표가 실제로 발동하는 모양이다.
+def _wave_closes(bars: int = 400) -> list[float]:
+    """주기가 다른 파동 셋을 겹친 종가. 지표가 실제로 발동하는 모양이다.
 
     규칙적인 톱니로는 안 된다 — 변동폭이 일정하면 볼린저 밴드를 한 번도 뚫지 않아 G 가
-    거래 0회로 끝나고, 그러면 '롱과 숏이 다르다' 는 시험이 0 == 0 으로 헛돈다.
+    한 번도 진입하지 않고, 그러면 방향을 볼 체결 자체가 없다.
     """
-    closes = []
+    closes: list[float] = []
     price = 1000.0
     for i in range(bars):
         price *= 1 + 0.012 * math.sin(i / 4.0) + 0.009 * math.sin(i / 11.0) + 0.006 * math.sin(i / 29.0)
         closes.append(round(price, 4))
-    ts = pd.date_range("2026-01-01", periods=bars, freq="h", tz="UTC")
-    return pd.DataFrame({"timestamp": ts, "open": closes, "high": [c * 1.003 for c in closes],
-                         "low": [c * 0.997 for c in closes], "close": closes,
-                         "volume": [1.0] * bars})
+    return closes
 
 
-@pytest.mark.parametrize("rule_type", ask.SHORT_RULE_TYPES)
-def test_short_macros_run_and_differ_from_their_long_twin(rule_type):
-    """같은 프리셋 · 같은 봉에서 숏과 롱의 결과가 달라야 한다.
+def _first_open_side(rule_type: str, side: str) -> str:
+    """이 매크로가 **실제로 연 포지션의 방향**. 체결이 없으면 "none".
 
-    엔진이 ``position_side`` 를 읽지 않는 방식이 화이트리스트에 섞여 들어오면 두 결과가
-    똑같아진다 — 그게 이 시험이 잡는 것이다.
-
-    레버리지는 1배로 둔다. 2배에서는 이 구간에서 양쪽이 모두 청산돼 둘 다 -100% 가 되고,
-    그러면 '같다' 가 버그가 아니라 청산 때문이 되어 시험이 아무것도 못 가린다.
+    왜 수익률 비교가 아니라 체결 방향인가: 엔진은 진입에서 side 를 안 읽는 방식도
+    청산 · 자산 · 손절 · 청산가는 side 로 가른다. 그래서 E·H·I 를 숏으로 돌려도 숫자는
+    롱과 **다르게** 나온다 — "결과가 다르다" 로는 아무것도 못 가린다. 가리는 것은
+    ``Fill.side`` 하나다: 미러링하는 방식은 "short" 로 열고, 안 하는 방식은 "buy" 로 연다.
     """
     plan = _plan(**{**FUTURES, "leverage": 1})
     preset = ask._presets_for(plan)[rule_type][0]
-    df = _wave_df()
-    long_macro = ask._make_macro(plan, rule_type, preset, ["BTCUSDT"], side="long")
-    short_macro = ask._make_macro(plan, rule_type, preset, ["BTCUSDT"], side="short")
-    assert long_macro is not None and short_macro is not None
-    long_result = run_backtest(long_macro, df)
-    short_result = run_backtest(short_macro, df)
-    assert long_result.total_trades > 0 and short_result.total_trades > 0, "거래가 없으면 비교가 헛돈다"
-    assert long_result.final_return_pct != short_result.final_return_pct
+    macro = ask._make_macro(plan, rule_type, preset, ["BTCUSDT"], side=side)
+    assert macro is not None
+    driver = build_driver(macro, "BTCUSDT")
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for index, close in enumerate(_wave_closes()):
+        ts = start + timedelta(hours=index)
+        driver.push_candle("BTCUSDT", (int(ts.timestamp() * 1000), close, close * 1.003,
+                                       close * 0.997, close, 1.0))
+        fill = driver.tick(close, ts)
+        if fill is not None and fill.side in ("buy", "short"):
+            return fill.side
+    return "none"
+
+
+@pytest.mark.parametrize("rule_type", ask.SHORT_RULE_TYPES)
+def test_short_macros_really_open_short(rule_type):
+    assert _first_open_side(rule_type, "long") == "buy"
+    assert _first_open_side(rule_type, "short") == "short"
+
+
+@pytest.mark.parametrize("rule_type", ["E", "H", "I"])
+def test_the_excluded_types_would_open_long_even_when_told_to_short(rule_type):
+    """화이트리스트가 왜 넷뿐인지를 **보여 주는** 시험.
+
+    E(TrailingSim) · H(MartingaleSim) · I(BreakoutSim) 는 진입에서 ``self.side`` 를 읽지
+    않고 ``_open_long`` 을 부른다. 숏으로 만들면 매크로는 숏이라 말하면서 엔진은 롱을
+    잡는다. 이 시험이 깨진다면 그 방식이 고쳐졌다는 뜻이니, 그때 SHORT_RULE_TYPES 에
+    더하면 된다.
+    """
+    assert rule_type not in ask.SHORT_RULE_TYPES
+    assert _first_open_side(rule_type, "short") == "buy"
 
 
 # --- 줄 세우기 ---------------------------------------------------------------
@@ -248,3 +267,36 @@ def test_select_top_stays_long_only_when_no_short_qualifies():
     top = ask.select_top(ev, "aggressive", period="3m", interval="1h")
     assert len(top) == 3
     assert all(_side(e.candidate.macro) == "long" for e in top)
+
+
+# --- 숏만 내는 비용(펀딩비) --------------------------------------------------
+
+def test_shorts_carry_a_funding_cost_and_longs_do_not():
+    """엔진에서 펀딩비는 숏에만 붙는 비용이다 — 0 으로 두면 숏만 면제받는다.
+
+    그 면제가 그대로 "홀딩을 넘었나" 관문(worth_the_macro)을 숏 쪽으로 기울인다.
+    그 관문이 숏 카드를 보여 주는 유일한 근거라 그냥 둘 수 없다.
+    """
+    plan = _plan(**FUTURES)
+    preset = ask._presets_for(plan)["J"][0]
+    long_macro = ask._make_macro(plan, "J", preset, ["BTCUSDT"], side="long")
+    short_macro = ask._make_macro(plan, "J", preset, ["BTCUSDT"], side="short")
+    assert long_macro.fees.funding_pct == 0.0
+    assert short_macro.fees.funding_pct > 0.0
+
+
+def test_the_funding_rate_is_prorated_to_the_bar():
+    """엔진은 funding_pct 를 **봉마다** 깎는다 — 하루 요율을 그대로 넣으면 24~96배가 된다."""
+    for interval, bars_per_day in (("1h", 24), ("15m", 96), ("1d", 1)):
+        plan = _plan(**FUTURES, interval=interval)
+        preset = ask._presets_for(plan)["J"][0]
+        macro = ask._make_macro(plan, "J", preset, ["BTCUSDT"], side="short")
+        daily = macro.fees.funding_pct * bars_per_day
+        assert daily == pytest.approx(ask.DAILY_FUNDING_PCT, rel=1e-3), interval
+
+
+def test_spot_and_domestic_never_carry_funding():
+    for plan in (_plan(), _plan(exchange="upbit", symbols=["KRW-BTC"])):
+        preset = ask._presets_for(plan)["J"][0]
+        macro = ask._make_macro(plan, "J", preset, [plan.symbols[0]], side="long")
+        assert macro.fees.funding_pct == 0.0

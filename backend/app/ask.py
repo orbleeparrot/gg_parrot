@@ -397,11 +397,42 @@ def _short_types(req: _Plan) -> tuple[str, ...]:
     현물은 공매도를 할 수 없고(빌려 팔 물건이 없다), 국내 원화 거래소는 현물만 다룬다.
     그래서 조건은 하나다 — **바이낸스 선물**. 성향 제약은 이미 앞에서 걸린다:
     ``CandidatesRequest`` 가 안정형에 선물을 주지 않으므로 안정형에는 숏이 올 일이 없다.
+
+    순서는 ``_allowed_types`` 를 따른다(ALL_RULE_TYPES 의 템플릿 우선순위). SHORT_RULE_TYPES
+    를 그대로 돌면 A·F·G·J 가 되어, 우선순위가 뒤 프리셋마다 뒤집힌다 — 시간 예산이
+    자르는 자리가 바로 거기다.
     """
     if req.market != "futures" or is_domestic(req.exchange):
         return ()
-    allowed = set(_allowed_types(req))
-    return tuple(t for t in SHORT_RULE_TYPES if t in allowed)
+    shorts = set(SHORT_RULE_TYPES)
+    return tuple(t for t in _allowed_types(req) if t in shorts)
+
+
+# 바이낸스 무기한 선물의 기준 펀딩 요율 — 8시간마다 0.01%, 하루 세 번 → 하루 0.03%.
+DAILY_FUNDING_PCT = 0.03
+
+
+def _funding_pct(req: _Plan, side: str) -> float:
+    """이 매크로에 넣을 ``fees.funding_pct``. 숏 · 선물이 아니면 0.
+
+    **왜 0 으로 두면 안 되나**: 엔진에서 펀딩비는 숏에만 붙는 비용이다(candles.py ·
+    stepper.py 모두 ``side is SHORT`` 일 때만 깎는다). 0 으로 두면 숏만 자기 고유 비용을
+    면제받아 "홀딩을 의미 있게 넘었나"(worth_the_macro) 관문이 숏 쪽으로 기운다. 그 관문이
+    숏 카드를 보여 주는 **유일한 근거**라 그냥 둘 수 없다. 3개월 창이면 대략 2.7%p 로,
+    그 기간의 문턱(2.0%p)보다 크다.
+
+    **왜 하루 요율을 그대로 넣지 않나**: 엔진은 이 값을 **봉마다** 깎는다(candles.py:
+    "per bar, prorated only for 1d"). 하루 요율을 그대로 넣으면 1시간봉에서 24배,
+    15분봉에서 96배가 된다. 봉 수로 나눠 하루 총액이 맞게 한다.
+
+    종목별 실제 평균은 ``data/binance.average_daily_funding_pct`` 로 받을 수 있지만, 후보
+    단계는 40초 예산 안에서 도는 길이라 여기에 거래소 호출을 하나 더 두지 않는다.
+    """
+    if side != "short" or req.market != "futures" or is_domestic(req.exchange):
+        return 0.0
+    bars = _BARS_PER_DAY.get(str(req.interval), 24)
+    # 자리를 넉넉히 둔다 — 6자리로 자르면 15분봉(÷96)에서 하루 총액이 0.03 을 벗어난다.
+    return round(DAILY_FUNDING_PCT / max(1, bars), 10)
 
 
 def _fit_martingale(params: dict, budget: float, floor: Optional[float]) -> Optional[dict]:
@@ -485,7 +516,8 @@ def _make_macro(req: _Plan, rule_type: str, preset: dict, symbols: list[str],
         "risk": dict(preset.get("risk", {})),
         # 거래소 실제 요율을 쓴다 — 예전에는 전부 0.1%(바이낸스) 라 국내 결과가 실제보다
         # 나쁘게 나왔다. 거래가 잦은 설정에서 차이가 커진다.
-        "fees": {"commission_pct": spot_commission_pct(req.exchange)},
+        "fees": {"commission_pct": spot_commission_pct(req.exchange),
+                 "funding_pct": _funding_pct(req, side)},
         "period": {"preset": req.period_preset},
     }
     try:

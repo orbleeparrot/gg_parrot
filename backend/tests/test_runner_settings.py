@@ -145,3 +145,47 @@ def test_the_summary_reads_in_korean_and_shows_both_sides():
     text = rs.summary(before, after)
     assert "1,000,000" in text and "2,000,000" in text
     assert "→" in text
+
+
+# --- 화면이 그릴 재료 --------------------------------------------------------
+
+def test_form_view_offers_the_numeric_fields_with_korean_labels():
+    fields = {f["path"]: f for f in rs.form_view(_macro())}
+    assert fields["params.initial_capital"]["label"] == "투자 금액"
+    assert fields["params.initial_capital"]["unit"] == "money"
+    assert fields["params.rsi_period"]["value"] == 14
+    assert fields["risk.stop_loss_pct"]["unit"] == "pct"
+
+
+def test_form_view_leaves_out_the_structural_choices():
+    """문자 칸은 값이 아니라 구조의 선택이다 — 바꾸면 사실상 다른 매크로다."""
+    macro = _macro(rule_type="J",
+                   params={"ma_type": "EMA", "fast_period": 10, "slow_period": 30,
+                           "initial_capital": 1_000_000})
+    paths = {f["path"] for f in rs.form_view(macro)}
+    assert "params.fast_period" in paths and "params.slow_period" in paths
+    assert "params.ma_type" not in paths
+
+
+def test_form_view_still_offers_a_risk_setting_that_is_turned_off():
+    macro = _macro(risk={"invest_ratio": 1.0})
+    fields = {f["path"]: f for f in rs.form_view(macro)}
+    assert fields["risk.stop_loss_pct"]["value"] is None
+    assert fields["risk.stop_loss_pct"]["clearable"] is True
+    assert fields["risk.invest_ratio"]["clearable"] is False, "투자 비율은 비울 수 없다"
+
+
+def test_every_form_field_is_actually_accepted_by_apply_changes():
+    """화면에 보이는데 서버가 거절하는 칸이 있으면 안 된다 — 두 벌이 아니라는 뜻."""
+    macro = _macro()
+    for field in rs.form_view(macro):
+        section, key = field["path"].split(".", 1)
+        # 비율은 0~1 로 묶여 있다 — 올리면 스키마가 막는다. 칸마다 '유효한 다른 값' 을 고른다.
+        if field["unit"] == "ratio":
+            value = 0.5
+        elif field["value"] is None:
+            value = 7
+        else:
+            value = float(field["value"]) + 1
+        after = rs.apply_changes(macro, {section: {key: value}})
+        assert rs.changed_fields(macro, after) == [field["path"]]

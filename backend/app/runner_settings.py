@@ -155,3 +155,48 @@ def summary(before: Macro, after: Macro) -> str:
 def editable_view(macro: Macro) -> dict:
     """화면이 수정 칸을 그릴 때 쓰는 현재 값 — 바꿀 수 있는 것만 추려서."""
     return {section: _section(macro, section) for section in EDITABLE_SECTIONS}
+
+
+# 칸 이름 → 단위. 화면이 "3%" 와 "1,000,000 USDT" 를 다르게 그린다.
+_UNITS = {
+    "initial_capital": "money", "amount_per_buy": "money", "base_order_size": "money",
+    "safety_order_size": "money", "per_grid_invest": "money",
+    "invest_ratio": "ratio",
+    "stop_loss_pct": "pct", "daily_max_loss_pct": "pct", "take_profit_pct": "pct",
+    "take_profit": "pct", "price_deviation": "pct", "trail_percent": "pct",
+    "activation_profit": "pct", "entry_dip": "pct", "long_take_profit_pct": "pct",
+    "max_holding_hours": "hours", "cooldown_minutes": "minutes", "interval_days": "days",
+}
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def form_view(macro: Macro) -> list[dict]:
+    """화면이 수정 칸을 그릴 재료 — **숫자로 고칠 수 있는 칸만**.
+
+    왜 숫자만인가: 문자 칸(``ma_type`` SMA/EMA, ``strategy`` reversion/breakout)은 값이
+    아니라 **구조의 선택**이다. 바꾸면 사실상 다른 매크로가 되는데, 조건 값 수정과 같은
+    자리에 두면 사용자가 그 차이를 모르고 누른다. 그런 변경은 종료하고 새로 시작한다.
+
+    왜 서버가 주는가: 무엇을 바꿀 수 있는지는 이 모듈이 정한다. 화면이 따로 목록을 들면
+    두 벌이 되어 어긋난다 — 화면에는 보이는데 서버가 거절하는 칸이 생긴다.
+
+    위험 설정은 값이 비어 있어도(손절 꺼 둠) 칸을 낸다 — 켜는 길이 있어야 한다.
+    """
+    out: list[dict] = []
+    for section in EDITABLE_SECTIONS:
+        values = _section(macro, section)
+        for key, value in values.items():
+            # params 는 들어 있는 숫자만. risk 는 꺼 둔 칸(None)도 낸다 — 켤 수 있어야 한다.
+            if not _is_number(value) and not (section == "risk" and value is None):
+                continue
+            out.append({
+                "path": f"{section}.{key}", "section": section, "key": key,
+                "label": _VALUE_LABELS.get(key, key), "value": value,
+                "unit": _UNITS.get(key, ""),
+                # 끌 수 있는 칸인가 — 위험 설정만 비울 수 있다(손절 없음 등).
+                "clearable": section == "risk" and key != "invest_ratio",
+            })
+    return out

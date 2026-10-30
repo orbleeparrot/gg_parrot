@@ -461,6 +461,21 @@ class RunnerStopRequest(BaseModel):
     mode: str  # stop_only | close_and_stop
 
 
+class RunnerSettingsRequest(BaseModel):
+    """구동 중 매크로 설정 변경 — 바꾼 칸만 보낸다(부분 수정).
+
+    ``changes`` 는 매크로와 같은 모양이고 ``params`` · ``risk`` 만 받는다. 값이 null 이면
+    그 칸을 **비우는 것**이다(손절 끄기). 무엇을 받고 무엇을 거절하는지는
+    ``app/runner_settings.py`` 한 곳에서 정한다.
+    """
+
+    changes: dict
+    # immediate | next_entry — 포지션을 들고 있을 때만 갈린다.
+    apply_mode: str = "immediate"
+    # web(에이전트 화면) | runner(실행기 화면). 증빙에 남는다.
+    source: str = "web"
+
+
 class RunnerLaunchTicketCreateRequest(BaseModel):
     user_macro_id: int
     testnet: Literal[True] = True
@@ -2779,6 +2794,15 @@ def runner_request_stop(
     session_id: int, req: RunnerStopRequest, user: User = Depends(auth_mod.current_user)
 ) -> dict:
     return runner_mod.request_stop(user.id, session_id, req.mode)
+
+
+@app.post("/api/me/runner/sessions/{session_id}/settings")
+def runner_change_settings(
+    session_id: int, req: RunnerSettingsRequest, user: User = Depends(auth_mod.current_user)
+) -> dict:
+    """구동 중인 매크로의 금액·조건을 바꾼다. 실행기 화면도 웹도 이 길 하나만 쓴다."""
+    return runner_mod.request_settings_change(
+        user.id, session_id, req.changes, source=req.source, apply_mode=req.apply_mode)
 
 
 @app.get("/api/me/runner/sessions/{session_id}/events")

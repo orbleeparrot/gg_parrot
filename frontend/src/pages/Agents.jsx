@@ -21,6 +21,7 @@ import { entryWaitFromServer, isWaitingMacro } from "../lib/entryWait.js";
 import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
+import RunnerSettingsDialog from "../components/RunnerSettingsDialog.jsx";
 import AppToast from "../components/AppToast.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import { AgentHistoryList, AgentIdle, AgentViewTabs } from "../components/AgentHistory.jsx";
@@ -63,8 +64,11 @@ function sessionSpeech(session) {
   return `${exchange ? `${exchangeLabel(exchange)} ` : ""}${coinTicker(session.symbol)} · ${strategyLine(session)}`;
 }
 
-function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete, lead = null }) {
+function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete, onEditSettings, lead = null }) {
   const running = selected.status === "running";
+  // 바꿀 수 있는지와 못 바꾸는 이유는 서버가 판단해 내려 준다 — 화면이 따로 세면 어긋난다.
+  const settingsEditable = !!selected.settings?.editable;
+  const settingsChanged = Number(selected.settings?.changed_count || 0);
   const connected = running && selected.connected;
   const stopping = selected.stopping;
   // 응답대기(실행 중이지만 heartbeat 끊김)와 오류·종료 항목만 목록에서 지운다.
@@ -97,6 +101,15 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete, lead 
 
       {/* 실행 상태·실행기 버전·매크로 출처는 오른쪽 열 위 포지션 블록(PositionStrip)이 맡는다. */}
       <div className="agent-macro-dock-actions">
+        <button
+          type="button"
+          disabled={busy || !settingsEditable}
+          onClick={onEditSettings}
+          className="btn btn-m btn-secondary"
+          title={settingsEditable ? "돌고 있는 그대로 금액과 조건을 바꿔요" : (selected.settings?.reason || "지금은 바꿀 수 없어요")}
+        >
+          설정 바꾸기{settingsChanged ? ` · ${settingsChanged}번 바뀜` : ""}
+        </button>
         <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("stop_only")} className="btn btn-m btn-secondary">매크로만 종료</button>
         <button type="button" disabled={busy || stopping || !running} onClick={() => onStop("close_and_stop")} className="btn btn-m btn-danger">청산 후 종료</button>
         <button
@@ -162,6 +175,12 @@ function AccountAgents() {
   // 불러오기 오류(화면 위 띠로 띄우지 않는다 — 다음 갱신이 스스로 고친다)와 버튼 행동 오류(토스트)를 나눈다.
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
+  // 설정 바꾸기 창 — 열림 · 보내는 중 · 실패 이유.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsError, setSettingsError] = useState("");
+  // 바뀐 내용을 한 번 말해 준다 — 창이 닫히고 나면 무엇을 눌렀는지 남는 게 없다.
+  const [actionNotice, setActionNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [retrying, setRetrying] = useState(false);
   // 확인 모달이 기다리는 동작: { type: "stop", mode } | { type: "delete" }
@@ -513,6 +532,28 @@ function AccountAgents() {
     setPending({ type: "delete" });
   }
 
+  async function changeSettings({ changes, apply_mode, summary }) {
+    if (!selected || !isCurrentAccount()) return;
+    setSettingsBusy(true);
+    setSettingsError("");
+    try {
+      const result = await api.runnerChangeSettings(selected.session_id, { changes, apply_mode });
+      if (!isCurrentAccount()) return;
+      setSettingsOpen(false);
+      // 목록을 다시 받아야 바뀐 값과 수정 횟수가 화면에 반영된다.
+      await loadSessions();
+      if (!isCurrentAccount()) return;
+      setActionNotice(result?.applied
+        ? `설정을 바꿨어요 · ${summary}`
+        : `이 포지션이 정리되면 적용해요 · ${summary}`);
+    } catch (reason) {
+      if (!isCurrentAccount()) return;
+      setSettingsError(String(reason.message || reason));
+    } finally {
+      if (isCurrentAccount()) setSettingsBusy(false);
+    }
+  }
+
   async function confirmPending() {
     if (!pending || !selected || !isCurrentAccount()) return;
     const action = pending;
@@ -571,6 +612,7 @@ function AccountAgents() {
         </div>
       ) : null}
       {actionError ? <AppToast key={actionError} tone="error" label="실패" title={actionError} onClose={() => setActionError("")} /> : null}
+      {actionNotice ? <AppToast key={actionNotice} tone="success" label="설정" title={actionNotice} onClose={() => setActionNotice("")} /> : null}
       {sessions && logLinkInvalid ? <div className="agent-inline-error" role="alert">요청한 활동 로그의 세션 또는 사건 ID를 확인하지 못했어요. 다른 세션의 기록으로 대체하지 않습니다.
         <button type="button" className="btn btn-s btn-secondary" onClick={() => { showPanel("agent"); }}>연결 조회 해제</button></div> : null}
       {sessions && mode === "overview" ? (
@@ -606,6 +648,7 @@ function AccountAgents() {
               onChange={changeSession}
               onStop={stopSession}
               onDelete={deleteSession}
+              onEditSettings={() => setSettingsOpen(true)}
               lead={<AgentViewTabs view="live" activeCount={activeSessions.length} historyCount={recentSessions.length} onSelect={showView} />}
             />
           )}
@@ -661,6 +704,14 @@ function AccountAgents() {
         </div>
       ) : null}
 
+      <RunnerSettingsDialog
+        open={settingsOpen}
+        session={selected}
+        busy={settingsBusy}
+        error={settingsError}
+        onSubmit={changeSettings}
+        onClose={() => { setSettingsOpen(false); setSettingsError(""); }}
+      />
       <ConfirmDialog
         open={!!confirmCopy}
         {...(confirmCopy || {})}

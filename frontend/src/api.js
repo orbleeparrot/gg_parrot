@@ -547,6 +547,11 @@ export const api = {
     req(`/api/me/runner/sessions/${sessionId}/pin`, { method: "PUT", body: JSON.stringify({ pinned: !!pinned }) }),
   runnerDeleteSession: (sessionId) =>
     req(`/api/me/runner/sessions/${sessionId}`, { method: "DELETE" }),
+  // 구동 중 매크로의 금액·조건 변경. 무엇을 바꿀 수 있는지는 서버가 정한다(runner_settings.py).
+  runnerChangeSettings: (sessionId, body) =>
+    req(`/api/me/runner/sessions/${sessionId}/settings`, {
+      method: "POST", body: JSON.stringify({ source: "web", ...body }),
+    }),
   runnerRequestStop: (sessionId, mode) =>
     req(`/api/me/runner/sessions/${sessionId}/request-stop`, {
       method: "POST",

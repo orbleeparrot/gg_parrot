@@ -327,7 +327,7 @@ class BundleRisk(BaseModel):
     """묶음 전체에 거는 한도. 레그 자금 분배(비중)와는 다른 것이다."""
 
     # 동시에 포지션을 들고 있을 수 있는 종목 수.
-    max_positions: Optional[int] = Field(default=None, ge=1, le=5)
+    max_positions: Optional[int] = Field(default=None, ge=1, le=10)  # Macro.MAX_SYMBOLS 와 같이 간다
     # 투입 자본(margin — 레버리지 걸린 명목금액이 아니다) 합이 묶음 초기자금의 몇 %까지 갈 수 있는가.
     max_exposure_pct: Optional[float] = Field(default=None, gt=0, le=100)
 
@@ -382,8 +382,13 @@ class Macro(BaseModel):
     bundle_risk: Optional[BundleRisk] = None
     created_at: Optional[str] = None
 
-    # Demo cap on how many symbols one portfolio macro may span.
-    MAX_SYMBOLS: ClassVar[int] = 5
+    # 한 묶음이 담을 수 있는 종목 수. 기술 한계가 아니라 **일부러 건 상한**이다 —
+    # 레그가 늘면 백테스트가 받아 오는 봉도 그만큼 늘고, 자금이 잘게 쪼개져 한 종목에
+    # 들어가는 돈이 최소 주문 금액 밑으로 내려갈 수 있다.
+    # 2026-10-30 에 5 → 10 으로 올렸다: 추천 묶음의 "시가총액 TOP10" 이 이름값을 하려면
+    # 열 종목이 들어가야 한다. 이 값을 고치면 BundleRisk.max_positions 상한과 화면
+    # (frontend/src/lib/macro.js MAX_SYMBOLS)도 같이 가야 한다.
+    MAX_SYMBOLS: ClassVar[int] = 10
 
     @model_validator(mode="after")
     def _validate(self) -> "Macro":

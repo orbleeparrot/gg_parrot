@@ -57,6 +57,7 @@ from . import rooms as rooms_mod
 from . import feargreed as feargreed_mod
 from . import hangang as hangang_mod
 from . import hotcoins as hotcoins_mod
+from . import portfolios
 from . import http_runtime as http_runtime_mod
 from . import kimchi as kimchi_mod
 from . import news as news_mod
@@ -2408,6 +2409,22 @@ def board_comment_delete(comment_id: int, user: User = Depends(auth_mod.current_
     if not board_mod.delete_comment(comment_id, user, db=db):
         raise HTTPException(status_code=403, detail="본인이 쓴 댓글만 지울 수 있어요.")
     return {"ok": True}
+
+
+@app.get("/api/portfolios")
+def portfolio_presets(response: Response, exchange: Exchange = "binance",
+                      market: str = "spot") -> dict:
+    """추천 묶음 — 기준을 그 거래소에 맞춰 푼 결과.
+
+    구성은 시가총액 순위에 따라 바뀌므로 오래 캐시하지 않는다. 묶음을 못 만들면 빈
+    목록과 까닭 한 줄이 온다(503 이 아니다) — 화면이 자리를 비우고 안내만 띄우면 된다.
+    """
+    data = portfolios.view(exchange, "futures" if market == "futures" else "spot")
+    response.headers["Cache-Control"] = (
+        "public, max-age=60, s-maxage=60" if data["items"]
+        else "public, max-age=5, s-maxage=5"
+    )
+    return data
 
 
 @app.get("/api/symbols")

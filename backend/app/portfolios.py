@@ -19,7 +19,7 @@ from engine.exchanges import is_domestic, normalize_exchange
 from engine.schema import Macro
 
 from . import hotcoins
-from .data import coingecko, symbols as symbols_mod
+from .data import coingecko, krw, symbols as symbols_mod
 
 log = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ class _Pool:
     owner_id: dict[str, str]                # 티커 → 그 티커의 주인 코인 id
     tradable: frozenset[str]
     category_ids: dict[str, frozenset[str]] # 범주 slug → 그 범주 코인들의 id
+    by_volume: tuple[str, ...]              # 24시간 거래대금 내림차순 티커
 
     def top(self, count: int, *, skip: tuple[str, ...] = ()) -> list[str]:
         out: list[str] = []
@@ -85,6 +86,16 @@ class _Pool:
         out: list[str] = []
         for base in self.ranked:          # 순위 순서를 그대로 쓴다 — 범주 안에서도 시총 순
             if base in skip or base in out or self.owner_id.get(base) not in ids:
+                continue
+            out.append(base)
+            if len(out) == count:
+                break
+        return out
+
+    def busiest(self, count: int) -> list[str]:
+        out: list[str] = []
+        for base in self.by_volume:
+            if base in out:
                 continue
             out.append(base)
             if len(out) == count:
@@ -124,6 +135,18 @@ def _sector_mix(pool: _Pool) -> list[str]:
 
 
 RULES: tuple[_Rule, ...] = (
+    _Rule(
+        key="cap_top10", name="시가총액 TOP10", size=10,
+        lead="그 거래소에서 살 수 있는 시가총액 상위 10종목으로 넓게 나눠 담아요.",
+        tags=("메이저", "분산투자"),
+        pick=lambda pool: pool.top(10),
+    ),
+    _Rule(
+        key="volume_top5", name="거래대금 TOP5", size=5,
+        lead="어제 하루 돈이 가장 많이 오간 5종목이에요. 사고팔기 쉬운 쪽이에요.",
+        tags=("거래활발",),
+        pick=lambda pool: pool.busiest(5),
+    ),
     _Rule(
         key="cap_top5", name="시가총액 TOP5", size=5,
         lead="그 거래소에서 살 수 있는 시가총액 상위 5종목으로 나눠 담아요.",
@@ -172,6 +195,33 @@ def _tradable_bases(exchange: str, market: str) -> set[str]:
     return out
 
 
+def _volume_bases(exchange: str, keep: set[str]) -> tuple[str, ...]:
+    """24시간 거래대금 내림차순 티커. 우리가 이미 받아 둔 캐시만 쓴다(추가 호출 없음).
+
+    바이낸스 선물 묶음도 **현물 거래대금**으로 줄 세운다. 선물 거래대금은 따로 받아야
+    하는데, 둘의 순서가 크게 다르지 않고 어차피 선물에 상장된 것만 남긴다.
+    """
+    if is_domestic(exchange):
+        rows = krw.get_all_tickers(exchange)
+    else:
+        rows = hotcoins.get_cached_tickers() or []
+    scored: list[tuple[float, str]] = []
+    for row in rows:
+        symbol = str(row.get("symbol") or "")
+        base = symbol[4:] if symbol.startswith("KRW-") else symbol[:-4]
+        if base not in keep:
+            continue
+        try:
+            volume = float(row.get("quoteVolume"))
+        except (TypeError, ValueError):
+            continue
+        if volume <= 0:
+            continue
+        scored.append((volume, base))
+    scored.sort(key=lambda pair: pair[0], reverse=True)
+    return tuple(base for _volume, base in scored)
+
+
 def _pool(exchange: str, market: str) -> Optional[_Pool]:
     """순위를 못 받으면 ``None`` — 그때는 추천 묶음을 아예 내지 않는다."""
     rows = coingecko.ranked()
@@ -198,8 +248,10 @@ def _pool(exchange: str, market: str) -> Optional[_Pool]:
     categories: dict[str, frozenset[str]] = {}
     for slug in (coingecko.CATEGORY_LAYER1, coingecko.CATEGORY_DEFI, coingecko.CATEGORY_MEME):
         categories[slug] = frozenset(coingecko.category_ids(slug) or ())
+    usable = {base for base in ordered}
     return _Pool(exchange=exchange, ranked=tuple(ordered), owner_id=owner_id,
-                 tradable=frozenset(tradable), category_ids=categories)
+                 tradable=frozenset(tradable), category_ids=categories,
+                 by_volume=_volume_bases(exchange, usable))
 
 
 def _equal_weights(count: int) -> list[float]:

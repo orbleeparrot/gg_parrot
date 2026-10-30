@@ -1,6 +1,7 @@
 """질문 그래프 — 순수 데이터. 모든 경로가 유효한 폼을 내는지는 프런트 전수 시험이 본다."""
 import pytest
 
+from app import coach_graph as cg
 from app.coach_graph import (
     FIRST_KEY, GRAPH, PAGE_SIZE, choices_for, defaults_for_remaining, next_key, patch_for, to_json,
 )
@@ -306,7 +307,8 @@ def test_capital_scaling_for_dca_is_a_fraction_of_the_leg_capital():
 
 def test_symbols_are_normalised_and_validated():
     assert patch_for("symbols", " btcusdt ,ETHUSDT, BTCUSDT", {}) == {"symbol": "BTCUSDT, ETHUSDT"}
-    for bad in ("", " , ", "A1,B2,C3,D4,E5,F6", "BTC USDT!", None, 5):
+    too_many = ",".join(f"T{index}USDT" for index in range(cg.MAX_SYMBOLS + 1))
+    for bad in ("", " , ", too_many, "BTC USDT!", None, 5):
         with pytest.raises(ValueError):
             patch_for("symbols", bad, {})
 

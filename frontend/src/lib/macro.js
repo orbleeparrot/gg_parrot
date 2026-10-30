@@ -297,7 +297,7 @@ export function validateDetailed(form) {
   const domestic = isDomestic(exchange);
   const symbols = String(form.symbol || "").split(",").map((value) => value.trim().toUpperCase()).filter(Boolean);
   const symbolPattern = domestic ? /^KRW-[A-Z0-9]{1,20}$/ : /^[A-Z0-9]{1,20}USDT$/;
-  if (!symbols.length || symbols.length > 5 || !symbols.every((symbol) => symbolPattern.test(symbol))) return fail("symbol", domestic ? "선택한 거래소의 KRW 종목을 골라 주세요." : "바이낸스 USDT 종목을 골라 주세요.");
+  if (!symbols.length || symbols.length > MAX_SYMBOLS || !symbols.every((symbol) => symbolPattern.test(symbol))) return fail("symbol", domestic ? "선택한 거래소의 KRW 종목을 골라 주세요." : "바이낸스 USDT 종목을 골라 주세요.");
   if (domestic) {
     if (isShort) return fail("position_side", "업비트·빗썸 원화 현물에서는 숏을 사용할 수 없어요.");
     if (num(form.leverage) !== 1) return fail("leverage", "국내 원화 현물은 레버리지 없이 1배로만 사용해요.");
@@ -571,10 +571,14 @@ export function weightsAfterAdd(raw) {
   return evenWeights(list.length + 1).map(String).join(", ");
 }
 
-// 중복을 뺀 종목 목록(입력 순서 유지, 최대 5개) — buildMacro 의 symbols 와 같은 규칙.
+// 한 묶음에 담을 수 있는 종목 수 — **서버 engine/schema.py 의 Macro.MAX_SYMBOLS 와 같아야 한다.**
+// 화면이 더 받으면 만들 때 거절당하고, 적게 받으면 서버가 되는 조합을 못 만든다.
+export const MAX_SYMBOLS = 10;
+
+// 중복을 뺀 종목 목록(입력 순서 유지, MAX_SYMBOLS 까지) — buildMacro 의 symbols 와 같은 규칙.
 function symbolList(form) {
   const syms = String(form.symbol || "").split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
-  return [...new Set(syms)].slice(0, 5);
+  return [...new Set(syms)].slice(0, MAX_SYMBOLS);
 }
 
 // 레그 목록 — 비중도 레그별 규칙도 손대지 않았으면 null. 그러면 buildMacro 가 옛 `symbols`
@@ -641,7 +645,7 @@ export function buildMacro(form) {
     quote_currency: quoteForExchange(form.exchange),
     symbol: uniq[0] || "BTCUSDT",
     // legs 를 쓰면 symbols 는 null — 서버가 둘을 함께 받지 않는다.
-    symbols: !legs && uniq.length > 1 ? uniq.slice(0, 5) : null,
+    symbols: !legs && uniq.length > 1 ? uniq.slice(0, MAX_SYMBOLS) : null,
     // legs · bundle_risk 는 있을 때만 키를 둔다 — 기존 매크로 모양(서명)을 바꾸지 않는다.
     ...(legs ? { legs } : {}),
     ...(bundleRisk ? { bundle_risk: bundleRisk } : {}),

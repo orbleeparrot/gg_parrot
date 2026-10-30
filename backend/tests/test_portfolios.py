@@ -53,6 +53,19 @@ def _listing(bases, *, warned=(), futures_only_missing=()):
                       for base in bases]}
 
 
+# 24시간 거래대금. 시가총액 순위와 **일부러 다르게** 둔다 — 두 기준이 같은 답을 내면
+# 거래대금 묶음이 정말 거래대금을 보는지 알 수 없다.
+VOLUMES = {"DOGE": 9e9, "XRP": 8e9, "BTC": 7e9, "SOL": 6e9, "ETH": 5e9,
+           "BNB": 4e9, "TRX": 3e9, "LINK": 2e9, "UNI": 1e9, "AAVE": 5e8,
+           "USDT": 99e9, "WBTC": 50e9}   # 걸러져야 할 것들도 큰 값으로 둔다
+
+
+def _tickers(exchange="binance"):
+    domestic = exchange in ("upbit", "bithumb")
+    return [{"symbol": (f"KRW-{base}" if domestic else f"{base}USDT"), "quoteVolume": volume}
+            for base, volume in VOLUMES.items()]
+
+
 @pytest.fixture(autouse=True)
 def _offline(monkeypatch):
     monkeypatch.setattr(coingecko, "ranked", lambda: list(RANKED))
@@ -60,6 +73,8 @@ def _offline(monkeypatch):
     monkeypatch.setattr(coingecko, "derivative_ids", lambda: set(DERIVATIVES))
     monkeypatch.setattr(P.symbols_mod, "list_symbols",
                         lambda *, exchange="binance": _listing(ALL_BASES))
+    monkeypatch.setattr(P.hotcoins, "get_cached_tickers", lambda: _tickers())
+    monkeypatch.setattr(P.krw, "get_all_tickers", lambda exchange: _tickers(exchange))
 
 
 def _by_key(exchange="binance", market="spot"):
@@ -196,3 +211,67 @@ def test_three_way_split_still_sums_to_a_hundred():
     """100/3 은 나누어떨어지지 않는다 — 스키마가 0.01 까지만 봐준다."""
     assert sum(P._equal_weights(3)) == pytest.approx(100.0, abs=1e-9)
     assert sum(P._equal_weights(7)) == pytest.approx(100.0, abs=1e-9)
+
+
+# --- 거래대금 TOP5 -----------------------------------------------------------
+
+def test_volume_top5_follows_turnover_not_market_cap():
+    """시가총액 1위는 BTC 지만 거래대금 1위는 DOGE 다 — 다른 기준이어야 의미가 있다."""
+    assert _bases(_by_key()["volume_top5"]) == ["DOGE", "XRP", "BTC", "SOL", "ETH"]
+
+
+def test_volume_top5_still_drops_stablecoins_and_wrapped():
+    """거래대금만 보면 USDT 가 1등이다. 거르기는 두 기준 모두에 걸려야 한다."""
+    bases = set(_bases(_by_key()["volume_top5"]))
+    assert not (bases & {"USDT", "USDC", "WBTC", "BTCUP"})
+
+
+def test_volume_top5_is_dropped_when_turnover_is_unavailable(monkeypatch):
+    monkeypatch.setattr(P.hotcoins, "get_cached_tickers", lambda: None)
+    assert "volume_top5" not in _by_key()
+    assert "cap_top5" in _by_key(), "시가총액 쪽은 거래대금과 상관없이 나온다"
+
+
+# --- 시가총액 TOP10 ----------------------------------------------------------
+
+def test_cap_top10_now_fits_the_engine():
+    """상한을 5 → 10 으로 올려서 생긴 묶음이다."""
+    assert len(_by_key()["cap_top10"].legs) == 10
+
+
+def test_cap_top10_disappears_if_the_cap_goes_back_down(monkeypatch):
+    monkeypatch.setattr(P, "MAX_LEGS", 5)
+    assert "cap_top10" not in _by_key()
+
+
+# --- 끝점 --------------------------------------------------------------------
+
+def _client():
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+    return TestClient(app)
+
+
+def test_the_endpoint_hands_the_screen_what_it_needs():
+    body = _client().get("/api/portfolios", params={"exchange": "binance"}).json()
+    assert body["max_symbols"] == P.MAX_LEGS
+    first = body["items"][0]
+    assert set(first) == {"key", "name", "lead", "tags", "count", "legs"}
+    assert first["count"] == len(first["legs"])
+    assert set(first["legs"][0]) == {"symbol", "weight"}
+
+
+def test_the_endpoint_says_why_instead_of_failing(monkeypatch):
+    """묶음을 못 만드는 건 서버 오류가 아니다 — 화면이 자리를 비우고 안내만 띄우면 된다."""
+    monkeypatch.setattr(coingecko, "ranked", lambda: None)
+    response = _client().get("/api/portfolios")
+    assert response.status_code == 200
+    assert response.json()["items"] == [] and response.json()["note"]
+
+
+def test_the_endpoint_passes_the_market_through():
+    body = _client().get("/api/portfolios", params={"market": "futures"}).json()
+    assert body["market"] == "futures"
+    # 아무 글자나 선물로 읽지 않는다.
+    assert _client().get("/api/portfolios", params={"market": "뭐지"}).json()["market"] == "spot"

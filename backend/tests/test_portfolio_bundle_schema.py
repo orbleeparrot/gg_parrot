@@ -1,5 +1,7 @@
 """묶음 스키마 — 비중 · 레그 덮어쓰기 · 묶음 한도의 검증과 펼치기."""
 import pytest
+
+from engine.schema import Macro
 from pydantic import ValidationError
 
 from engine.schema import BundleRisk, GATEABLE_TYPES, Macro, PortfolioLeg, RuleType
@@ -56,8 +58,12 @@ def test_duplicate_symbol_refused():
 
 
 def test_more_than_max_symbols_refused():
-    many = [("BTCUSDT", 20), ("ETHUSDT", 20), ("SOLUSDT", 20),
-            ("XRPUSDT", 20), ("ADAUSDT", 10), ("DOGEUSDT", 10)]
+    # 상한보다 딱 하나 많게 만든다 — 숫자를 적어 두면 상한을 올릴 때 이 시험이 조용히
+    # 의미를 잃는다(실제로 5 → 10 으로 올릴 때 그랬다).
+    count = Macro.MAX_SYMBOLS + 1
+    weight = round(100.0 / count, 4)
+    many = [(f"T{index}USDT", weight) for index in range(count - 1)]
+    many.append((f"T{count - 1}USDT", round(100.0 - weight * (count - 1), 4)))
     with pytest.raises(ValidationError, match="최대"):
         macro(legs=legs(*many))
 

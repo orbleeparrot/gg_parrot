@@ -1,5 +1,5 @@
 import { cloneElement, createContext, isValidElement, useContext, useEffect, useId, useRef, useState } from "react";
-import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, FILTERABLE_RULE_TYPES, FILTER_KINDS, withTypeDefaults, evenWeights, splitWeights, weightsAfterAdd, defaultForm } from "../lib/macro.js";
+import { RULE_TYPES, PERIOD_PRESETS, CANDLE_INTERVALS, MAX_LEVERAGE, MAX_SYMBOLS, FILTERABLE_RULE_TYPES, FILTER_KINDS, withTypeDefaults, evenWeights, splitWeights, weightsAfterAdd, defaultForm } from "../lib/macro.js";
 import { EXCHANGES, isDomestic, normalizeExchange, quoteForExchange } from "../lib/exchanges.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { api } from "../api.js";
@@ -144,7 +144,7 @@ const inputCls = "field";
 // 종목 칩 — 쉼표 목록(form.symbol)을 칩으로 보여 주고, 입력칸에서 Enter·쉼표로 더한다. 값은 그대로 "BTCUSDT, ETHUSDT".
 // 종목 고르기 — 위는 검색창, 아래는 고른 종목의 행 목록(로고 · 티커 · 시장 · 비중 · 빼기). 실제 거래 가능한 종목(/api/symbols)만 들어간다.
 // 글자를 치면 관련 종목이 검색창 아래 목록으로 뜨고 Enter·클릭으로 고른다. `CHIP` 처럼 base 만 쳐도 CHIPUSDT 로 맞춘다.
-const MAX_SYMBOLS = 5;
+// 상한은 macro.js 한 곳에서 온다 — 서버 engine/schema.py 와 맞춰 둔 값이다.
 // onWeights 를 주지 않으면 비중은 **읽기 전용 표시**(1/N · NN%)다 — 기본 빌더는 스펙대로 균등이고,
 // 비중 입력은 프로 빌더(variant="pro")에서만 켠다.
 function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchange = "binance", showLegRules = false, legRules = {}, onLegRule = () => {} }) {

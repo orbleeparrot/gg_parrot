@@ -434,6 +434,9 @@ class RunnerHeartbeatRequest(BaseModel):
     unrealized_net_pct: Optional[float] = None
     realized_net: Optional[float] = None
     note: str = ""
+    # v22: 실행기가 지금 들고 있는 설정의 지문. 서버가 "실행기가 반영했다" 를 이걸로 확인해
+    # 증빙(RunnerSettingChange.applied_ms)에 적는다. 옛 실행기는 보내지 않는다.
+    settings_digest: str = ""
     # 실행기 창 로그를 서버에 쌓는다(v7+). [{ts, kind, message}] — 한 번에 100개까지.
     events: list[dict] = []
     # v8: 직전 heartbeat 로 받은 명령의 실행 결과 [{command_id, ok, executed_qty, fill_price, error}]
@@ -459,6 +462,31 @@ class RunnerEventBatchRequest(BaseModel):
 
 class RunnerStopRequest(BaseModel):
     mode: str  # stop_only | close_and_stop
+
+
+class RunnerSettingsRequest(BaseModel):
+    """구동 중 매크로 설정 변경 — 바꾼 칸만 보낸다(부분 수정).
+
+    ``changes`` 는 매크로와 같은 모양이고 ``params`` · ``risk`` 만 받는다. 값이 null 이면
+    그 칸을 **비우는 것**이다(손절 끄기). 무엇을 받고 무엇을 거절하는지는
+    ``app/runner_settings.py`` 한 곳에서 정한다.
+    """
+
+    changes: dict
+    # immediate | next_entry — 포지션을 들고 있을 때만 갈린다.
+    apply_mode: str = "immediate"
+    # web(에이전트 화면) | runner(실행기 화면). 증빙에 남는다.
+    source: str = "web"
+
+
+class RunnerSelfSettingsRequest(RunnerSettingsRequest):
+    """실행기가 자기 세션의 설정을 바꿀 때 — 세션 번호를 **본문**에 담는다.
+
+    주소에 넣지 않는 이유: 주소는 중계 서버 · 접근 기록에 그대로 남는다. 같은 이유로
+    ``start`` · ``heartbeat`` · ``stopped`` 도 전부 본문에 담는다(코드 검사도 이것을 집었다).
+    """
+
+    session_id: int
 
 
 class RunnerLaunchTicketCreateRequest(BaseModel):
@@ -2613,6 +2641,20 @@ def runner_start(req: RunnerStartRequest, user: User = Depends(_runner_user)) ->
     return runner_mod.start_session(user, req.model_dump())
 
 
+@app.post("/api/runner/settings")
+def runner_self_change_settings(
+    req: RunnerSelfSettingsRequest, user: User = Depends(_runner_user)
+) -> dict:
+    """실행기 화면에서 자기 세션의 설정을 바꾼다 — 회원 키로 인증한다.
+
+    실행기는 로그인 토큰이 없어 웹 엔드포인트를 쓸 수 없다. 길은 둘이지만 **하는 일은
+    하나**다(``request_settings_change``) — 실행기가 혼자 바꾸지 않고 서버를 거치게 하는
+    것이 이 설계의 요점이다. 출처는 요청이 뭐라 하든 "runner" 로 못 박는다.
+    """
+    return runner_mod.request_settings_change(
+        user.id, req.session_id, req.changes, source="runner", apply_mode=req.apply_mode)
+
+
 @app.post("/api/runner/heartbeat")
 def runner_heartbeat(
     req: RunnerHeartbeatRequest,
@@ -2779,6 +2821,15 @@ def runner_request_stop(
     session_id: int, req: RunnerStopRequest, user: User = Depends(auth_mod.current_user)
 ) -> dict:
     return runner_mod.request_stop(user.id, session_id, req.mode)
+
+
+@app.post("/api/me/runner/sessions/{session_id}/settings")
+def runner_change_settings(
+    session_id: int, req: RunnerSettingsRequest, user: User = Depends(auth_mod.current_user)
+) -> dict:
+    """구동 중인 매크로의 금액·조건을 바꾼다. 실행기 화면도 웹도 이 길 하나만 쓴다."""
+    return runner_mod.request_settings_change(
+        user.id, session_id, req.changes, source=req.source, apply_mode=req.apply_mode)
 
 
 @app.get("/api/me/runner/sessions/{session_id}/events")

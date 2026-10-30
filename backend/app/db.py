@@ -515,6 +515,13 @@ class RunSession(SQLModel, table=True):
     # 맡기는 실행기는 보내지 않아 빈 문자열이다. 실행기가 스스로 판단하게 되면, "왜 내 봇만
     # 다른 자리에서 샀나" 를 이 값 없이는 답할 수 없다.
     engine_version: str = ""
+    # "이 포지션 정리된 뒤부터" 로 예약한 변경 — 새 매크로 JSON 과 그 증빙 줄의 번호.
+    # 포지션이 비는 첫 heartbeat 에서 적용하고 둘 다 비운다.
+    pending_macro_json: str = ""
+    pending_change_id: int = 0
+    # 구동 중 설정을 바꾼 횟수(2026-10-30). macro_origin 은 **시작 시점**의 출처라
+    # "시작한 뒤에 고쳤다" 를 표현하지 못한다. 기록 전체는 RunnerSettingChange 에 있다.
+    settings_changed_count: int = 0
     # 매크로 출처 — web | file_verified | file_modified | file_unsigned (macro_signing 참고).
     # 옛 실행기가 만든 세션은 빈 문자열.
     macro_origin: str = ""
@@ -601,6 +608,52 @@ class RunnerCommand(SQLModel, table=True):
     # 진입 명령만: 이 신호 직전의 서버 전략 상태(JSON). 주문이 나가지 않으면(실패 · 만료) 이걸로 서버 전략을
     # '사기 전' 으로 되돌린다. 되돌린 뒤에는 ROLLED_BACK 표시로 바뀐다(연속 실패 횟수를 센다).
     rollback_state: str = ""
+
+
+class RunnerSettingChange(SQLModel, table=True):
+    """구동 중 매크로 설정을 바꾼 기록 한 줄 — **증빙**이다 (2026-10-30).
+
+    사용자가 돌고 있는 매크로의 금액·조건을 고쳐서 잘못 돌았을 때, 책임 소재를 가리는
+    근거다. ``macro_signing`` 이 "내려받은 파일을 고쳐 돌렸는가" 를 가리려고 만들어진
+    것과 같은 이유이고, 같은 지문(``macro_signing.digest``)을 쓴다.
+
+    **세션이 지워져도 남는다.** 이것이 이 표의 존재 이유다 — ``_delete_session_rows`` 는
+    세션과 함께 이벤트·명령을 지우고 보존 작업이 끝난 세션을 주기적으로 지운다. 그 자리에
+    끼면 증빙이 같이 사라진다. 그래서 ``session_id`` 는 외래키가 아니라 그냥 숫자이고,
+    지우는 코드 어디에도 이 표를 넣지 않는다(tests/test_runner_settings_record.py 가 고정).
+
+    **추가만 한다.** 나중에 바꾸는 칸은 ``applied_ms`` 하나뿐이다(실행기가 반영을 확인한
+    시각). 나머지는 쓴 그대로 둔다.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    session_id: int = Field(index=True)  # 외래키가 아니다 — 세션이 지워져도 이 줄은 남는다.
+    user_macro_id: Optional[int] = None
+    symbol: str = ""
+    exchange: str = ""
+    # web(에이전트 화면) | runner(실행기 화면)
+    source: str = ""
+    created_at: str = ""
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    # 바꾸기 전 · 후의 매크로 전체. 지문만으로는 "무엇이" 달랐는지 복원할 수 없다.
+    before_json: str = ""
+    after_json: str = ""
+    before_digest: str = ""
+    after_digest: str = ""
+    # 바뀐 칸 이름(params.rsi_period 꼴)을 쉼표로 이은 것 + 사람이 읽는 한 줄.
+    changed_fields: str = ""
+    summary: str = ""
+    # immediate | next_entry — 들고 있는 포지션에 지금 적용했는지.
+    apply_mode: str = ""
+    # 그때 포지션을 들고 있었는가. 책임 소재에서 가장 자주 묻게 될 값이다.
+    in_position: bool = False
+    position_qty: float = 0.0
+    entry_price: float = 0.0
+    unrealized_pct: float = 0.0
+    runner_version: str = ""
+    # 실행기가 반영을 확인한 시각(0 이면 미확인).
+    applied_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class AgentUtterance(SQLModel, table=True):
@@ -1342,6 +1395,9 @@ def _migrate() -> None:
             "user_macro_id": "ALTER TABLE runsession ADD COLUMN user_macro_id INTEGER",
             "macro_origin": "ALTER TABLE runsession ADD COLUMN macro_origin TEXT DEFAULT ''",
             "macro_digest": "ALTER TABLE runsession ADD COLUMN macro_digest TEXT DEFAULT ''",
+            "settings_changed_count": "ALTER TABLE runsession ADD COLUMN settings_changed_count INTEGER NOT NULL DEFAULT 0",
+            "pending_macro_json": "ALTER TABLE runsession ADD COLUMN pending_macro_json TEXT NOT NULL DEFAULT ''",
+            "pending_change_id": "ALTER TABLE runsession ADD COLUMN pending_change_id INTEGER NOT NULL DEFAULT 0",
             "pnl_alert_pct": "ALTER TABLE runsession ADD COLUMN pnl_alert_pct REAL DEFAULT 0",
             "final_entry_price": "ALTER TABLE runsession ADD COLUMN final_entry_price REAL DEFAULT 0",
             "final_position_qty": "ALTER TABLE runsession ADD COLUMN final_position_qty REAL DEFAULT 0",
@@ -1556,6 +1612,9 @@ _PG_ADDED_COLUMNS = {
         "mode": "TEXT DEFAULT ''",
         "macro_origin": "TEXT DEFAULT ''",
         "macro_digest": "TEXT DEFAULT ''",
+        "settings_changed_count": "INTEGER NOT NULL DEFAULT 0",
+        "pending_macro_json": "TEXT NOT NULL DEFAULT ''",
+        "pending_change_id": "INTEGER NOT NULL DEFAULT 0",
         "pnl_alert_pct": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_entry_price": "DOUBLE PRECISION NOT NULL DEFAULT 0",
         "final_position_qty": "DOUBLE PRECISION NOT NULL DEFAULT 0",

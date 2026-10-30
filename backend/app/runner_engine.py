@@ -133,6 +133,31 @@ def schedule_stop(session_id: int) -> None:
     _schedule(lambda: stop_driver(session_id), f"stop_driver({session_id})")
 
 
+async def restart_driver(session_id: int) -> bool:
+    """설정이 바뀐 세션의 전략을 다시 세운다 — 상태를 저장하고, 멈추고, 새 매크로로 시작한다.
+
+    ``_start_driver`` 가 이미 필요한 일을 전부 한다: DB 의 ``macro_json`` 을 읽어 드라이버를
+    만들고 → 과거 봉으로 **웜업**(바뀐 지표 기간으로 다시 쌓인다) → ``driver.restore`` 로
+    포지션·장부를 되돌린다. 재기동·배포 때 타는 길과 같다.
+
+    멈추기 **전에** 상태를 저장한다. 체크포인트는 ``CHECKPOINT_SECONDS`` 마다라, 그냥 멈추면
+    마지막 체크포인트 뒤의 상태(이를테면 서 있던 진입 의도)가 사라진다. 체결은 ``_persist_fill``
+    이 그때그때 저장하므로 포지션 자체는 잃지 않지만, 잃지 않아도 될 것을 잃을 이유가 없다.
+    """
+    live = _drivers.get(session_id)
+    if live is not None:
+        try:
+            await asyncio.to_thread(_persist_state, live, json.dumps(live.driver.state()))
+        except Exception:
+            log.exception("runner engine: session %s could not checkpoint before restart", session_id)
+    await stop_driver(session_id)
+    return await start_driver(session_id)
+
+
+def schedule_restart(session_id: int) -> None:
+    _schedule(lambda: restart_driver(session_id), f"restart_driver({session_id})")
+
+
 # --- 드라이버 ------------------------------------------------------------
 START_FAIL_NOTE = "서버 전략 시작 실패 — 매크로 설정을 확인해 주세요"
 # 실행기는 macro["symbol"] 하나만 읽으므로 여러 종목 매크로를 되살리면 첫 종목에 전액이 들어간다.

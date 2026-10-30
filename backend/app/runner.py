@@ -36,8 +36,9 @@ from sqlmodel import Session, select
 from . import macro_signing
 from . import notifications as notifications_mod
 from . import runner_engine  # runner_engine 은 runner 를 함수 안에서 늦게 import 한다 — 순환 없음
-from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerKey, RunnerLaunchTicket, RunSession,
-                 RunSessionEvent, User, UserMacro, get_session)
+from . import runner_settings
+from .db import (AgentCommentaryState, AgentUtterance, RunnerCommand, RunnerKey, RunnerLaunchTicket,
+                 RunnerSettingChange, RunSession, RunSessionEvent, User, UserMacro, get_session)
 from engine import Macro, RuleType
 from engine.version import ENGINE_VERSION, meets_engine_version, required_engine_version
 from engine.exchanges import is_domestic, normalize_exchange, validate_symbol
@@ -913,14 +914,27 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
             if action != "continue":
                 # 종료 중인 세션엔 매매 명령을 주지 않는다(명령 행은 그대로 — 만료로 정리된다).
                 commands = []
+        # 실행기가 "이 설정으로 돌고 있다" 고 보낸 지문 — 증빙에 반영 시각을 적는다.
+        confirm_settings(db, row, snapshot.get("settings_digest"))
+        # 예약해 둔 설정 변경은 포지션이 빈 뒤에 적용한다 — 위에서 이번 스냅샷의
+        # 포지션을 반영한 **뒤**라, 막 청산된 경우에도 이번 heartbeat 에서 바로 적용된다.
+        restart = apply_pending_settings(db, row)
         db.add(row)
         accepted_event_keys = _confirmed_event_keys(db, row, events)
         wait_args = _entry_wait_args(row) if action == "continue" else None
+        settings = _settings_view(row)
         db.commit()
+    if restart:
+        runner_engine.schedule_restart(session_id)
     notify_sessions_changed(user_id)
     if any(isinstance(event, dict) and str(event.get("kind") or "").lower() in {"fill", "error"} for event in (events or [])):
         _wake_commentary()  # 체결 · 오류는 껄무새 중계가 바로 말하게
     result = {"action": action, "commands": commands}
+    # 실행기가 쓰는 값(투자 금액 · 안전망)만 실어 보낸다. 이 기능을 모르는 옛 실행기는
+    # 무시하므로 **설정 변경 요청 자체를 버전으로 막는다**(SETTINGS_MIN_VERSION) —
+    # 안 막으면 서버 전략만 바뀌고 실행기 안전망은 옛 값으로 남아 둘이 어긋난다.
+    if settings is not None:
+        result["settings"] = settings
     # 진입을 기다리는 매크로가 아직 안 샀으면 '무엇을 · 얼마나 · 언제' 를 함께 보낸다(실행기 화면 · 구버전은 무시).
     # 시세(캐시)는 DB 연결을 붙잡지 않도록 커밋 뒤에 읽는다 — 그래서 필요한 값은 커밋 전에 꺼내 둔다.
     if wait_args is not None:
@@ -1475,6 +1489,44 @@ def _entry_wait(row: RunSession, macro: Optional[dict] = None, levels: Optional[
     return entry_wait.for_session(**args)
 
 
+def _settings_form(row: RunSession, stopping: bool) -> dict:
+    """화면이 '설정 바꾸기' 를 그릴 재료. 바꿀 수 없으면 이유를 함께 준다.
+
+    왜 서버가 칸 목록까지 주나: 무엇을 바꿀 수 있는지는 ``runner_settings`` 가 정한다.
+    화면이 따로 목록을 들면 두 벌이 되어 어긋난다 — 화면에는 보이는데 서버가 거절하는
+    칸이 생기고, 사용자는 그걸 고장으로 읽는다.
+    """
+    pending = bool(getattr(row, "pending_macro_json", ""))
+    out = {"editable": False, "reason": "", "note": "", "fields": [],
+           "changed_count": int(getattr(row, "settings_changed_count", 0) or 0),
+           "pending": pending}
+    if row.status != "running":
+        out["reason"] = "끝난 실행은 설정을 바꿀 수 없어요."
+        return out
+    if stopping:
+        out["reason"] = "종료 중인 실행은 설정을 바꿀 수 없어요."
+        return out
+    if not supports_settings(row.runner_version or ""):
+        out["reason"] = SETTINGS_REQUIRED_DETAIL
+        return out
+    if not row.macro_json:
+        out["reason"] = "이 실행에는 저장된 매크로가 없어 바꿀 수 없어요."
+        return out
+    try:
+        macro = Macro.model_validate_json(row.macro_json)
+    except Exception:
+        out["reason"] = "이 실행의 매크로를 읽지 못했어요."
+        return out
+    out["editable"] = True
+    # 실행기가 직접 판단하는 세션은 조건 값을 실행기 엔진이 들고 있다 — 화면에도 내지 않는다.
+    local = bool(row.decides_locally)
+    out["fields"] = runner_settings.form_view(macro, local_decisions=local)
+    out["local_decisions"] = local
+    if local:
+        out["note"] = runner_settings.LOCAL_ONLY_NOTE
+    return out
+
+
 def _session_view(row: RunSession) -> dict:
     connected = _is_connected(row)
     # 실행기가 종료 명령을 받아 정리 중인 상태(플래그는 섰지만 아직 확정 보고 전).
@@ -1497,6 +1549,8 @@ def _session_view(row: RunSession) -> dict:
         # 연습 세션의 이름은 모드가 가른다(모의 ≠ 테스트넷). 모드를 보내지 않은 옛 세션은 빈 문자열.
         "mode": _run_mode(getattr(row, "mode", "")),
         "human_summary": row.human_summary,
+        # 구동 중 설정 변경(2026-10-30) — 바꿀 수 있는 칸과, 못 바꾸면 그 이유.
+        "settings": _settings_form(row, stopping),
         "macro": macro,
         "status": row.status,
         "stopping": stopping,
@@ -1800,6 +1854,205 @@ def get_owned_session(user_id: int, session_id: int, db=None) -> dict:
         if row is None or row.user_id != user_id:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
         return _session_view(row)
+
+
+SETTINGS_MIN_VERSION = os.environ.get("RUNNER_SETTINGS_MIN_VERSION", "22").strip() or "22"
+SETTINGS_REQUIRED_DETAIL = (
+    "구동 중 설정 변경은 실행기 v22 이상이 필요해요. 실행기를 업데이트해 주세요.")
+_APPLY_MODES = ("immediate", "next_entry")
+SETTINGS_SOURCES = ("web", "runner")
+
+
+def supports_settings(version: str) -> bool:
+    return _version_at_least(version, SETTINGS_MIN_VERSION)
+
+
+def _change_row(row: RunSession, before: Macro, after: Macro, *, source: str,
+                apply_mode: str) -> RunnerSettingChange:
+    """증빙 한 줄. **쓴 뒤로는 ``applied_ms`` 말고 아무것도 바꾸지 않는다.**
+
+    세션이 지워져도 남아야 하므로 세션에서 읽어 올 수 있는 값(종목 · 거래소 · 그때의
+    포지션)을 전부 베껴 둔다 — 나중에 세션 행을 조인해서 알아낼 수는 없다.
+    """
+    now, now_ms = _now_iso(), runner_engine._now_ms()
+    fields = runner_settings.changed_fields(before, after)
+    return RunnerSettingChange(
+        user_id=row.user_id, session_id=row.id, user_macro_id=row.user_macro_id,
+        symbol=row.symbol, exchange=getattr(before, "exchange", "") or "",
+        source=source, created_at=now, created_ms=now_ms,
+        before_json=before.model_dump_json(), after_json=after.model_dump_json(),
+        before_digest=macro_signing.digest(before), after_digest=macro_signing.digest(after),
+        changed_fields=",".join(fields), summary=runner_settings.summary(before, after),
+        apply_mode=apply_mode, in_position=bool(row.in_position),
+        position_qty=float(row.position_qty or 0.0), entry_price=float(row.entry_price or 0.0),
+        unrealized_pct=float(row.unrealized_pct or 0.0),
+        runner_version=row.runner_version or "",
+    )
+
+
+def _activate_macro(row: RunSession, after: Macro) -> None:
+    """이 세션이 지금부터 쓰는 매크로를 바꾼다 — 서버 전략이 다음 재시작에서 읽는 값이다.
+
+    ``macro_origin`` 은 **시작 시점**의 출처라 건드리지 않는다(그 사실도 증빙이다).
+    대신 지문을 새 것으로 바꾸고 수정 횟수를 올려, 화면이 "구동 중 N번 수정됨" 을 말한다.
+    """
+    row.macro_json = after.model_dump_json()
+    row.macro_digest = macro_signing.digest(after)
+    row.settings_changed_count = int(row.settings_changed_count or 0) + 1
+
+
+def request_settings_change(user_id: int, session_id: int, changes: dict, *,
+                            source: str = "web", apply_mode: str = "immediate") -> dict:
+    """구동 중인 매크로의 금액·조건을 바꾼다. 실행기 화면도 웹도 이 길 하나만 쓴다.
+
+    실행기가 혼자 바꾸면 서버 전략과 실행기 설정이 갈라지고, 그러면 어느 쪽이 진짜인지
+    아무도 모른다. 그래서 **변경은 언제나 서버를 거친다.**
+
+    포지션을 들고 있을 때 ``apply_mode`` 로 갈린다.
+    - ``immediate``  — 지금 적용한다. 들고 있는 포지션의 청산 조건도 새 값으로 바뀐다.
+    - ``next_entry`` — 예약해 두고, 포지션이 비는 첫 heartbeat 에서 적용한다.
+    포지션이 없으면 둘 다 같다(바로 적용).
+    """
+    if source not in SETTINGS_SOURCES:
+        raise HTTPException(status_code=400, detail="변경 요청 출처가 올바르지 않아요.")
+    if apply_mode not in _APPLY_MODES:
+        raise HTTPException(status_code=400, detail="적용 방식이 올바르지 않아요.")
+    with get_session() as db:
+        row = db.get(RunSession, session_id)
+        if row is None or row.user_id != user_id:
+            raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        if row.status != "running":
+            raise HTTPException(status_code=409, detail="끝난 실행은 설정을 바꿀 수 없어요.")
+        if row.stop_mode in _STOP_MODES:
+            raise HTTPException(status_code=409, detail="종료 중인 실행은 설정을 바꿀 수 없어요.")
+        if not supports_settings(row.runner_version or ""):
+            raise _ticket_error(426, SETTINGS_REQUIRED_DETAIL)
+        if not row.macro_json:
+            raise HTTPException(status_code=409, detail="이 실행에는 저장된 매크로가 없어 바꿀 수 없어요.")
+        try:
+            before = Macro.model_validate_json(row.macro_json)
+        except Exception:
+            raise HTTPException(status_code=409, detail="이 실행의 매크로를 읽지 못했어요.")
+
+        after = runner_settings.apply_changes(
+            before, changes, local_decisions=bool(row.decides_locally))
+        # 포지션이 없으면 예약할 이유가 없다 — 예약은 '들고 있는 포지션을 지키려고' 있다.
+        mode = "immediate" if not row.in_position else apply_mode
+        record = _change_row(row, before, after, source=source, apply_mode=mode)
+        db.add(record)
+        db.flush()  # 예약이면 세션이 이 줄의 번호를 들고 있어야 한다.
+        if mode == "immediate":
+            _activate_macro(row, after)
+            row.pending_macro_json, row.pending_change_id = "", 0
+        else:
+            row.pending_macro_json = after.model_dump_json()
+            row.pending_change_id = int(record.id or 0)
+        db.add(row)
+        _append_events(db, row, [{
+            "ts": record.created_at, "kind": "info", "severity": "WARN",
+            "event_name": "settings.changed",
+            "event_key": f"session:{row.id}:settings:{record.id}",
+            "operation_id": f"session:{row.id}",
+            "details": {"source": source, "apply_mode": mode,
+                        "changed_fields": record.changed_fields},
+            "message": ("설정 변경 · " + record.summary
+                        + (" · 이 포지션 정리된 뒤부터" if mode == "next_entry" else "")),
+        }], component="server")
+        db.commit()
+        change_id, applied = int(record.id or 0), mode == "immediate"
+    if applied:
+        # 드라이버는 매크로를 메모리에 들고 있다 — 다시 세워야 새 값으로 돈다.
+        runner_engine.schedule_restart(session_id)
+    notify_sessions_changed(user_id)
+    return {"ok": True, "change_id": change_id, "apply_mode": mode, "applied": applied,
+            "summary": record.summary,
+            "note": ("실행기가 곧 반영해요(최대 몇 초 지연)." if applied
+                     else "지금 포지션이 정리되면 적용해요.")}
+
+
+def confirm_settings(db, row: RunSession, echoed: object) -> None:
+    """실행기가 "이 설정으로 돌고 있다" 고 보낸 지문을 받아 기록에 반영 시각을 적는다.
+
+    왜 필요한가: 증빙은 "사용자가 바꿨다" 뿐 아니라 **"실행기가 그걸 받아 돌았다"** 까지
+    말할 수 있어야 한다. 바꿨는데 실행기가 못 받은 채 사고가 나면 이야기가 달라진다.
+
+    지금 매크로의 지문과 같을 때만 적는다 — 옛 지문을 늦게 보내온 heartbeat 로 엉뚱한
+    줄에 시각이 찍히지 않게.
+    """
+    digest = str(echoed or "").strip()
+    if not digest or digest != (row.macro_digest or ""):
+        return
+    record = db.exec(
+        select(RunnerSettingChange)
+        .where(RunnerSettingChange.session_id == row.id,
+               RunnerSettingChange.after_digest == digest,
+               RunnerSettingChange.applied_ms == 0)
+        .order_by(RunnerSettingChange.id.desc())
+    ).first()
+    if record is None:
+        return
+    record.applied_ms = runner_engine._now_ms()
+    db.add(record)
+
+
+def _settings_view(row: RunSession) -> Optional[dict]:
+    """heartbeat 응답에 실을 설정 — **실행기가 실제로 쓰는 값만**.
+
+    판단은 서버가 하므로 조건 값(지표 기간 · 문턱)은 실행기에 보낼 이유가 없다. 실행기가
+    쓰는 것은 주문 크기의 밑이 되는 투자 금액 · 비율과, 로컬 안전망(손절 · 일일 손실 ·
+    최대 보유시간)뿐이다(runner-core/src/bot.rs).
+
+    ``digest`` 를 함께 보낸다 — 실행기가 "이미 이 설정이다" 를 알아보고 같은 값을 거듭
+    반영하지 않게 한다. 설정을 못 읽으면 None(옛 동작 그대로).
+    """
+    # 이 기능을 모르는 실행기에는 **보내지 않는다.** 쓰지도 못할 키를 실으면 옛 응답
+    # 계약이 달라지고, 설정 변경 요청 자체는 어차피 버전 관문이 막는다.
+    if not supports_settings(row.runner_version or "") or not row.macro_json:
+        return None
+    try:
+        macro = Macro.model_validate_json(row.macro_json)
+    except Exception:
+        return None
+    risk = macro.risk
+    return {
+        "digest": macro_signing.digest(macro),
+        "changed_count": int(row.settings_changed_count or 0),
+        # 실행기 화면도 같은 칸을 그린다 — 목록을 실행기가 따로 들면 두 벌이 되어
+        # 화면에는 보이는데 서버가 거절하는 칸이 생긴다.
+        "fields": runner_settings.form_view(macro, local_decisions=bool(row.decides_locally)),
+        "initial_capital": float(macro.params.get("initial_capital") or 0.0),
+        "invest_ratio": float(risk.invest_ratio),
+        "stop_loss_pct": risk.stop_loss_pct,
+        "daily_max_loss_pct": risk.daily_max_loss_pct,
+        "max_holding_hours": risk.max_holding_hours,
+        "cooldown_minutes": risk.cooldown_minutes,
+    }
+
+
+def apply_pending_settings(db, row: RunSession) -> bool:
+    """예약된 변경을 적용한다 — 포지션이 비었을 때만. 적용했으면 True.
+
+    heartbeat 가 포지션 상태를 갱신한 **뒤에** 부른다. 그래야 이번 heartbeat 에서 막
+    청산된 경우에도 곧바로 적용된다.
+    """
+    if not row.pending_macro_json or row.in_position:
+        return False
+    try:
+        after = Macro.model_validate_json(row.pending_macro_json)
+    except Exception:
+        log.exception("runner: session %s pending settings unreadable — dropped", row.id)
+        row.pending_macro_json, row.pending_change_id = "", 0
+        return False
+    _activate_macro(row, after)
+    change_id, row.pending_change_id = int(row.pending_change_id or 0), 0
+    row.pending_macro_json = ""
+    if change_id:
+        record = db.get(RunnerSettingChange, change_id)
+        if record is not None:
+            record.applied_ms = runner_engine._now_ms()
+            db.add(record)
+    db.add(row)
+    return True
 
 
 def request_stop(user_id: int, session_id: int, mode: str) -> dict:

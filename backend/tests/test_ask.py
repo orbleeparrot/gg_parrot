@@ -9,6 +9,8 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
+
+from engine.schema import Macro
 from sqlmodel import select
 
 from app import ask
@@ -85,39 +87,35 @@ def test_templates_follow_profile_rules():
     assert all(c.macro.leverage == 2 and c.macro.market == "futures" for c in aggressive)
 
 
-def test_templates_cover_every_symbol_first_and_add_a_portfolio():
+def test_several_symbols_make_only_bundles():
+    """묶음으로 물어보면 묶음만 나온다 (2026-10-30).
+
+    섞어 내면 단일 종목 후보가 상한을 다 먹고 묶음은 한 장도 안 나온다 — 실제로 그랬다
+    (8유형 × 3종목 = 24 가 곧 MAX_CANDIDATES 였다). 묶음을 보려고 고른 사람에게
+    "BTC 혼자" 카드를 내미는 것도 묻지 않은 답이다.
+    """
     req = _mkplan(risk_profile="balanced", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
     cands = ask.build_templates(req)
-    assert len(cands) <= ask.MAX_CANDIDATES
-    first_preset = cands[: 3 * 6]  # 3 종목 × 6 유형의 첫 프리셋이 먼저
-    assert {c.macro.symbol for c in first_preset} == {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
-    portfolios = [c for c in cands if c.macro.symbols]
-    assert portfolios and portfolios[0].macro.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    assert cands and len(cands) <= ask.MAX_CANDIDATES
+    assert all(c.macro.symbols == ["BTCUSDT", "ETHUSDT", "SOLUSDT"] for c in cands)
     assert all("추천" not in c.label for c in cands)
 
 
-def test_templates_cover_every_type_before_portfolios():
-    # 2026-10-08: 프리셋이 유형당 4~5개가 되고 상한이 90 으로 올라가, 3종목 공격형에서도
-    # 첫 프리셋 24개 뒤에 포트폴리오 8개가 들어간다(예전에는 24에서 잘려 못 들어갔다).
-    # 순서는 그대로다 — 모든 유형의 단일 후보가 먼저, 포트폴리오가 그다음, 뒤 프리셋이 마지막.
-    req3 = _mkplan(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
-    cands3 = ask.build_templates(req3)
-    assert len(cands3) == ask.MAX_CANDIDATES
-    types3 = {c.macro.rule_type.value for c in cands3}
-    assert {"I", "H"} <= types3
-    singles3 = [c for c in cands3 if not c.macro.symbols]
-    first_portfolio = next(i for i, c in enumerate(cands3) if c.macro.symbols)
-    assert first_portfolio == 24, "유형 8개 × 종목 3개의 첫 프리셋이 먼저 와야 한다"
-    assert all(not c.macro.symbols for c in cands3[:24])
-    assert len(singles3) > 24, "뒤 프리셋의 단일 후보도 들어와야 한다 — 넓힌 보람"
+def test_bundles_cover_every_type_before_deeper_presets():
+    """상한에 걸려도 방식은 다 재어 본다 — 한 방식의 프리셋만 잔뜩 나오면 안 된다."""
+    req = _mkplan(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT", "SOLUSDT"])
+    cands = ask.build_templates(req)
+    types = [c.macro.rule_type.value for c in cands]
+    first_round = types[: len(set(types))]
+    assert len(set(first_round)) == len(first_round), "첫 바퀴에 같은 방식이 두 번 나왔다"
+    assert {"I", "H"} <= set(types)
 
-    # 공격형 × 종목 2개: 유형 8개 × 종목 2개(16) + 포트폴리오 8개 — 포트폴리오가 남고 모든 유형이 단일에 있다.
-    req2 = _mkplan(risk_profile="aggressive", symbols=["BTCUSDT", "ETHUSDT"])
-    cands2 = ask.build_templates(req2)
-    portfolios2 = [c for c in cands2 if c.macro.symbols]
-    singles2 = [c for c in cands2 if not c.macro.symbols]
-    assert portfolios2
-    assert set(ask._allowed_types(req2)) <= {c.macro.rule_type.value for c in singles2}
+
+def test_one_symbol_still_makes_single_cards():
+    """갈림길의 다른 쪽 — 종목 하나면 묶음이 아니다."""
+    req = _mkplan(risk_profile="balanced", symbols=["BTCUSDT"])
+    cands = ask.build_templates(req)
+    assert cands and all(not c.macro.symbols for c in cands)
 
 
 def _result(ret, mdd, trades=10, win=50.0, bh=None):
@@ -1305,3 +1303,64 @@ def test_a_rising_market_keeps_short_cards_out(monkeypatch):
                        headers=_auth(token)).json()
     assert data["results"]
     assert all(r["macro"]["position_side"] == "long" for r in data["results"])
+
+
+# --- 묶음으로 물어보기 -------------------------------------------------------
+
+def test_asking_with_several_symbols_makes_portfolio_cards(monkeypatch):
+    """거래소 다음에 '포트폴리오' 로 갈라졌을 때 — 묶음 매크로가 실제로 나와야 한다.
+
+    `build_templates` 의 포트폴리오 가지는 예전부터 있었지만 흐름이 늘 종목 **하나**만
+    넘겨서 한 번도 안 탔다. 이 시험이 그 길을 연다.
+    """
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    monkeypatch.setattr(ask, "_candidate_ai", lambda: None)
+    monkeypatch.setattr(ask, "ai_available", lambda: False)
+    monkeypatch.setattr("app.main._run_any",
+                        lambda macro: (_result(30, 6, trades=12, bh=5), [], "test", macro.period.preset))
+    token, _user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token)).json()
+    res = client.post("/api/ask/macros",
+                      json={"session_id": flow["session_id"], "symbol": "BTCUSDT",
+                            "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"]},
+                      headers=_auth(token))
+    assert res.status_code == 200, res.text
+    results = res.json()["results"]
+    assert results
+    bundles = [r for r in results if (r["macro"].get("symbols") or [])]
+    assert bundles, "묶음 카드가 하나도 없다"
+    for card in bundles:
+        assert card["macro"]["symbols"] == ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+        assert "포트폴리오" in card["label"]
+
+
+def test_every_symbol_in_the_bundle_goes_through_the_same_gate(monkeypatch):
+    """하나만 보고 통과시키면 나머지는 검사 없이 들어온다."""
+    monkeypatch.setattr(ask.hotcoins, "get_cached_tickers", lambda: _fake_tickers())
+    token, _user_id = _signup()
+    client.post("/api/ask/consent", headers=_auth(token))
+    flow = client.post("/api/ask/candidates", json=_candidates_body(), headers=_auth(token)).json()
+    res = client.post("/api/ask/macros",
+                      json={"session_id": flow["session_id"], "symbol": "BTCUSDT",
+                            "symbols": ["BTCUSDT", "NOTAREALCOINUSDT"]},
+                      headers=_auth(token))
+    assert res.status_code == 422
+
+
+def test_a_bundle_bigger_than_the_engine_cap_is_refused():
+    with pytest.raises(ValidationError):
+        ask.AskRequest(session_id=1, symbol="BTCUSDT",
+                       symbols=[f"T{index}USDT" for index in range(Macro.MAX_SYMBOLS + 1)])
+
+
+def test_the_same_symbol_twice_collapses_to_one():
+    """스키마가 '같은 종목을 두 번' 을 거절한다 — 그 전에 접어 둔다."""
+    req = ask.AskRequest(session_id=1, symbol="BTCUSDT", symbols=["BTCUSDT", "btcusdt", "ETHUSDT"])
+    assert req.picked() == ["BTCUSDT", "ETHUSDT"]
+
+
+def test_without_symbols_it_still_asks_about_one(monkeypatch):
+    """옛 클라이언트가 그대로 돌아야 한다."""
+    req = ask.AskRequest(session_id=1, symbol=" btcusdt ")
+    assert req.picked() == ["BTCUSDT"]

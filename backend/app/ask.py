@@ -172,10 +172,37 @@ _SYMBOL_RE = re.compile(r"^(?:[A-Z0-9]{1,20}USDT|KRW-[A-Z0-9]{1,20})$")
 
 
 class AskRequest(BaseModel):
-    """v2 — 흐름 세션에서 답변을 꺼내 쓰므로 종목만 받는다(클라이언트 위변조 차단)."""
+    """v2 — 흐름 세션에서 답변을 꺼내 쓰므로 종목만 받는다(클라이언트 위변조 차단).
+
+    ``symbols`` 는 **묶음으로 물어볼 때** 쓴다(추천 묶음 · 직접 조합). 안 주면 ``symbol``
+    하나짜리 묶음으로 읽는다 — 옛 클라이언트가 그대로 돈다.
+    """
 
     session_id: int
     symbol: str
+    symbols: Optional[list[str]] = None
+
+    @field_validator("symbols")
+    @classmethod
+    def _normalize_symbols(cls, value):
+        if value is None:
+            return None
+        out: list[str] = []
+        for item in value:
+            sym = str(item or "").strip().upper()
+            if not _SYMBOL_RE.match(sym):
+                raise ValueError("종목 이름이 올바르지 않아요.")
+            if sym not in out:          # 같은 종목을 두 번 담으면 스키마가 거절한다
+                out.append(sym)
+        if not out:
+            raise ValueError("종목을 하나 이상 골라 주세요.")
+        if len(out) > Macro.MAX_SYMBOLS:
+            raise ValueError(f"묶음은 종목 최대 {Macro.MAX_SYMBOLS}개까지예요.")
+        return out
+
+    def picked(self) -> list[str]:
+        """이번에 살펴볼 종목들. ``symbols`` 를 줬으면 그걸, 아니면 ``symbol`` 하나."""
+        return list(self.symbols) if self.symbols else [self.symbol]
 
     @field_validator("symbol")
     @classmethod
@@ -359,11 +386,13 @@ class _Plan:
     account_balance: float = CAPITAL
 
 
-def _plan(answers: CandidatesRequest, symbol: str) -> _Plan:
+def _plan(answers: CandidatesRequest, symbol: "str | list[str]") -> _Plan:
+    """종목 하나도, 묶음도 받는다 — 묶음이면 ``build_templates`` 의 포트폴리오 가지가 산다."""
+    picked = [symbol] if isinstance(symbol, str) else list(symbol)
     period = to_period(answers.invest_horizon)
     return _Plan(
         risk_profile=answers.risk_profile, market=answers.market, leverage=answers.leverage,
-        symbols=[symbol], period_preset=period,
+        symbols=picked, period_preset=period,
         interval=to_interval(answers.watch_frequency, period),
         exchange=answers.exchange, account_balance=answers.account_balance,
     )
@@ -546,49 +575,53 @@ def build_templates(req: _Plan) -> list[Candidate]:
 
     1) 모든 유형 × 모든 종목의 첫 프리셋 — 롱
     2) 숏을 할 수 있는 유형 × 모든 종목의 첫 프리셋 — 숏(선물에서만)
-    3) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋, 롱)
-    4) 두 번째 이상 프리셋 — 롱, 그다음 숏
+    3) 두 번째 이상 프리셋 — 롱, 그다음 숏
 
     숏이 2) 에 오는 이유: 맨 뒤에 붙이면 예산이 끝난 뒤라 한 장도 평가되지 않는다 —
     기능이 조용히 꺼진다. 롱 한 바퀴 뒤에 두면 두 방향의 '대표 설정' 이 늘 함께 재어진다.
+
+    **종목을 여러 개 고른 경우(묶음으로 물어보기)는 묶음만 만든다.** 섞으면 단일 종목
+    후보가 상한(24)을 다 먹고 묶음은 한 장도 안 나온다 — 실제로 그랬다. 묶음을 보려고
+    고른 사람에게 "BTC 혼자" 카드를 내미는 것도 묻지 않은 답이다.
     """
     out: list[Candidate] = []
     types = _allowed_types(req)
     shorts = _short_types(req)
     presets = _presets_for(req)
+    bundle = len(req.symbols) > 1
+    # 묶음은 한 묶음이 한 후보다. 단일 종목은 종목마다 한 후보씩.
+    groups: list[list[str]] = [list(req.symbols)] if bundle else [[sym] for sym in req.symbols]
 
     def add(rule_type: str, preset: dict, symbols: list[str], side: str = "long") -> None:
         macro = _make_macro(req, rule_type, preset, symbols, side=side)
         if macro is not None:
             out.append(Candidate(_label(rule_type, req, symbols, side=side), macro, "template"))
 
-    # 1) 모든 유형 × 모든 종목의 첫 프리셋(단일 종목, 롱)
+    # 1) 모든 유형의 첫 프리셋(롱)
     for rule_type in types:
-        for sym in req.symbols:
-            add(rule_type, presets[rule_type][0], [sym])
+        for group in groups:
+            add(rule_type, presets[rule_type][0], group)
 
     # 2) 숏 가능 유형의 첫 프리셋 — 선물에서만 비어 있지 않다.
-    for rule_type in shorts:
-        for sym in req.symbols:
-            add(rule_type, presets[rule_type][0], [sym], side="short")
+    #    묶음은 롱만 만든다: 레그별 규칙의 숏 지원을 서버가 보지 않아(frontend/src/lib/macro.js
+    #    주석) 묶음 숏은 빌더로 불러올 때 막힐 수 있다.
+    if not bundle:
+        for rule_type in shorts:
+            for group in groups:
+                add(rule_type, presets[rule_type][0], group, side="short")
 
-    # 3) 종목이 2개 이상이면 유형별 포트폴리오(첫 프리셋). 묶음은 롱만 만든다 —
-    #    레그별 규칙의 숏 지원을 서버가 보지 않으므로(frontend/src/lib/macro.js 주석)
-    #    묶음 숏은 빌더로 불러올 때 막힐 수 있다. 물어볼까는 종목을 하나만 쓴다(_plan).
-    if len(req.symbols) > 1:
-        for rule_type in types:
-            add(rule_type, presets[rule_type][0], req.symbols)
-
-    # 4) 두 번째 이상 프리셋 — 종목별·유형별로 추가. 같은 깊이 안에서 롱이 먼저다.
+    # 3) 두 번째 이상 프리셋. 같은 깊이 안에서 롱이 먼저다.
     depth = max(len(presets[t]) for t in types)
     for preset_idx in range(1, depth):
-        for sym in req.symbols:
+        for group in groups:
             for rule_type in types:
                 if preset_idx < len(presets[rule_type]):
-                    add(rule_type, presets[rule_type][preset_idx], [sym])
+                    add(rule_type, presets[rule_type][preset_idx], group)
+            if bundle:
+                continue
             for rule_type in shorts:
                 if preset_idx < len(presets[rule_type]):
-                    add(rule_type, presets[rule_type][preset_idx], [sym], side="short")
+                    add(rule_type, presets[rule_type][preset_idx], group, side="short")
 
     return out[:MAX_CANDIDATES]
 
@@ -1298,9 +1331,14 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         raise AskError(403, "먼저 안내에 동의해 주세요.")
     row, answers = _load_flow(db, user, req.session_id)
     release_read_session(db, user, row)
-    native = req.symbol.startswith("KRW-") if is_domestic(answers.exchange) else req.symbol.endswith("USDT")
-    if not native or req.symbol not in _allowed_symbols(row, answers.market, answers.exchange):
-        raise AskError(422, "이번 질문에서 살펴볼 수 있는 종목이 아니에요.")
+    # 묶음이면 **고른 종목 전부**를 같은 관문에 건다. 하나만 보고 통과시키면 나머지는
+    # 검사 없이 들어온다 — 추천 묶음이든 직접 조합이든 사람이 고른 것만 통과해야 한다.
+    picked = req.picked()
+    allowed = _allowed_symbols(row, answers.market, answers.exchange)
+    for symbol in picked:
+        native = symbol.startswith("KRW-") if is_domestic(answers.exchange) else symbol.endswith("USDT")
+        if not native or symbol not in allowed:
+            raise AskError(422, "이번 질문에서 살펴볼 수 있는 종목이 아니에요.")
 
     with _IN_FLIGHT_LOCK:
         if user.id in _IN_FLIGHT:
@@ -1309,7 +1347,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
 
     try:
         started = time.monotonic()
-        plan = _plan(answers, req.symbol)
+        plan = _plan(answers, picked)
         failures: list[Exception] = []
 
         def guarded(macro: Macro) -> BacktestResult:
@@ -1342,7 +1380,8 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         user = resume_external_user(db, user)
         row, _answers = _load_flow(db, user, req.session_id)
         row.ask_count += 1
-        row.chosen_symbol = req.symbol
+        # 묶음이면 고른 종목을 다 남긴다 — 기록이니 대표 하나만 남기면 무엇을 물었는지 모른다.
+        row.chosen_symbol = ", ".join(picked)
         row.candidate_count = len(evaluated)
         row.results_json = json.dumps(
             [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"],

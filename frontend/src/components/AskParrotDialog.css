@@ -134,6 +134,31 @@ body:has(.ask-scrim) .site-header { z-index: calc(var(--z-sheet) + 1); }
 .ask-stat.is-rank { grid-area: rank; } .ask-stat.is-range { grid-area: range; }
 .ask-stat-v { font-size: 14px; font-weight: 700; color: rgb(var(--c-slate-900)); white-space: nowrap; }
 .ask-stat-v b { font-weight: 800; color: rgb(var(--c-amber-700)); }
+/* 묶음 고르기 (2026-10-30) — 같은 줄을 누를 때마다 넣고 뺀다. 지금 담겼는지 눈에 보여야 한다. */
+.ask-cand.is-picked { border-color: rgb(var(--c-brand-line)); background: rgb(var(--c-brand-50)); }
+.ask-pick { grid-area: go; justify-self: end; width: 18px; height: 18px; border-radius: 6px;
+  background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-500));
+  font-size: 12px; font-weight: 800; line-height: 18px; text-align: center; }
+.ask-cand.is-picked .ask-pick { background: rgb(var(--c-brand-600)); color: rgb(var(--c-on-brand)); }
+
+/* 추천 묶음 줄 — 빌더의 것과 같은 모양. 서버가 못 주면 줄 자체가 안 그려진다. */
+.ask-presets { display: grid; gap: 6px; margin: 10px 0 2px; }
+.ask-presets-label { color: rgb(var(--c-slate-500)); font-size: 12px; font-weight: 600; }
+.ask-presets-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-preset { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px;
+  border: 1px solid rgb(var(--c-slate-300)); border-radius: 999px; background: rgb(var(--c-surface));
+  color: rgb(var(--c-slate-900)); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+.ask-preset:hover:not(:disabled) { background: rgb(var(--c-slate-100)); }
+.ask-preset small { color: rgb(var(--c-slate-500)); font-size: 11px; font-weight: 600; }
+
+/* 고른 묶음 요약 + 물어보기 단추 */
+.ask-bundle { display: grid; gap: 6px; margin-top: 12px; }
+.ask-bundle-sum { font-size: 13px; font-weight: 700; color: rgb(var(--c-slate-900)); }
+.ask-bundle-note { font-size: 12px; line-height: 1.5; color: rgb(var(--c-slate-500)); }
+.ask-bundle-go { height: 44px; margin-top: 2px; border-radius: 12px;
+  background: rgb(var(--c-brand-600)); color: rgb(var(--c-on-brand)); font-size: 14px; font-weight: 700; }
+.ask-bundle-go:disabled { background: rgb(var(--c-slate-200)); color: rgb(var(--c-slate-500)); }
+
 .ask-chev { grid-area: go; justify-self: end; width: 7px; height: 7px; border-right: 2px solid rgb(var(--c-slate-400)); border-top: 2px solid rgb(var(--c-slate-400)); transform: rotate(45deg); }
 @container (max-width: 620px) {
   .ask-cand { grid-template-columns: 32px minmax(0, 1fr) auto auto; grid-template-areas: "logo name rank range" ". why why why"; row-gap: 8px; column-gap: 12px; padding: 12px 14px; }

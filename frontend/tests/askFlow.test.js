@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { STEPS, initialState, reduce, toCandidatesRequest, toAskRequest, canChooseFutures } from "../src/lib/askFlow.js";
+import { MAX_BUNDLE_SYMBOLS, STEPS, initialState, isBundle, readyToAsk, reduce, toCandidatesRequest, toAskRequest, canChooseFutures } from "../src/lib/askFlow.js";
 
 const CANDS = [
   { symbol: "AAAUSDT", base: "AAA", reason: "거래가 활발해요", volume_rank: 1, range_pct: 1, change_pct: 1 },
@@ -8,9 +8,10 @@ const CANDS = [
   { symbol: "CCCUSDT", base: "CCC", reason: "변동이 커요", volume_rank: 3, range_pct: 20, change_pct: 1 },
 ];
 
-function cards(profile = "balanced") {
+function cards(profile = "balanced", mode = "single") {
   let s = initialState();
   s = reduce(s, { type: "choose", step: "exchange", value: "binance" });
+  s = reduce(s, { type: "choose", step: "mode", value: mode });
   s = reduce(s, { type: "choose", step: "balance", value: 250 });
   s = reduce(s, { type: "choose", step: "profile", value: profile });
   s = reduce(s, { type: "choose", step: "market", value: { market: "spot", leverage: 1 } });
@@ -30,7 +31,7 @@ function withCandidates() {
 
 test("exchange and manual balance precede profile cards and end ready", () => {
   assert.equal(initialState().step, "exchange");
-  assert.deepEqual(STEPS, ["exchange", "balance", "profile", "market", "horizon", "watch"]);
+  assert.deepEqual(STEPS, ["exchange", "mode", "balance", "profile", "market", "horizon", "watch"]);
   const s = cards();
   assert.equal(s.phase, "ready");
   assert.deepEqual(toCandidatesRequest(s.answers), {
@@ -41,7 +42,9 @@ test("exchange and manual balance precede profile cards and end ready", () => {
 });
 
 test("manual balance must be positive and finite before progressing", () => {
-  const s = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
+  let s = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
+  assert.equal(s.step, "mode", "거래소 다음은 갈림길이다");
+  s = reduce(s, { type: "choose", step: "mode", value: "single" });
   assert.equal(s.step, "balance");
   for (const value of [0, -1, "", "Infinity", NaN, true]) {
     assert.equal(reduce(s, { type: "choose", step: "balance", value }).answers.balance, null);
@@ -53,6 +56,7 @@ test("manual balance must be positive and finite before progressing", () => {
 
 test("domestic exchange cannot choose futures or a USDT pair", () => {
   let s = reduce(initialState(), { type: "choose", step: "exchange", value: "bithumb" });
+  s = reduce(s, { type: "choose", step: "mode", value: "single" });
   s = reduce(s, { type: "choose", step: "balance", value: 100000 });
   s = reduce(s, { type: "choose", step: "profile", value: "aggressive" });
   assert.equal(canChooseFutures(s.answers), false);
@@ -188,7 +192,8 @@ test("Binance pair shape requires a 1-to-20 character base and excludes native K
     assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol, resolved: true }).answers.symbol, null);
   }
   assert.equal(reduce(withCandidates(), { type: "chooseSymbol", symbol: "TUSDT" }).answers.symbol, null);
-  const domestic = reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" });
+  const domestic = reduce(reduce(initialState(), { type: "choose", step: "exchange", value: "upbit" }),
+                          { type: "choose", step: "mode", value: "single" });
   assert.equal(reduce(domestic, { type: "chooseSymbol", symbol: "KRW-T", resolved: true }).answers.symbol, "KRW-T");
 });
 
@@ -206,4 +211,78 @@ test("금액 입력칸은 세 자리마다 쉼표 — KRW 는 정수, USDT 는 �
   assert.equal(parseAmountInput("1,234,567"), "1234567");
   assert.ok(validBalance(parseAmountInput("100,000")));
   assert.ok(!validBalance(parseAmountInput("0")));
+});
+
+
+// --- 묶음으로 물어보기 (2026-10-30) ------------------------------------------
+//
+// 거래소 다음의 갈림길. 묶음 쪽은 종목을 **여럿** 고르고 한 번에 물어본다.
+
+function bundleCards() {
+  return reduce(cards("balanced", "bundle"), {
+    type: "candidates",
+    session: { id: 7, remaining: 4 },
+    candidates: CANDS,
+    manualSymbols: ["BTCUSDT"],
+  });
+}
+
+test("묶음 갈림길을 고르면 종목을 여럿 담는다", () => {
+  let s = bundleCards();
+  assert.equal(isBundle(s.answers), true);
+  s = reduce(s, { type: "toggleSymbol", symbol: "AAAUSDT" });
+  s = reduce(s, { type: "toggleSymbol", symbol: "BBBUSDT" });
+  assert.deepEqual(s.answers.symbols, ["AAAUSDT", "BBBUSDT"]);
+  assert.deepEqual(toAskRequest(s), { session_id: 7, symbol: "AAAUSDT", symbols: ["AAAUSDT", "BBBUSDT"] });
+});
+
+test("같은 종목을 다시 누르면 빠진다", () => {
+  let s = reduce(bundleCards(), { type: "toggleSymbol", symbol: "AAAUSDT" });
+  s = reduce(s, { type: "toggleSymbol", symbol: "AAAUSDT" });
+  assert.deepEqual(s.answers.symbols, []);
+});
+
+test("한 종목만으로는 묶음이 아니다 — 물어볼 수 없다", () => {
+  const s = reduce(bundleCards(), { type: "toggleSymbol", symbol: "AAAUSDT" });
+  assert.equal(readyToAsk(s), false);
+  assert.equal(readyToAsk(reduce(s, { type: "toggleSymbol", symbol: "BBBUSDT" })), true);
+});
+
+test("고를 수 있는 목록 밖의 종목은 안 담긴다", () => {
+  const s = reduce(bundleCards(), { type: "toggleSymbol", symbol: "NOPEUSDT" });
+  assert.deepEqual(s.answers.symbols, []);
+  // 검색으로 실제 목록에서 찾아낸 것(resolved)은 담긴다.
+  assert.deepEqual(reduce(s, { type: "toggleSymbol", symbol: "NOPEUSDT", resolved: true }).answers.symbols, ["NOPEUSDT"]);
+});
+
+test("상한을 넘기면 담지 않고 까닭을 말한다", () => {
+  let s = bundleCards();
+  for (let n = 0; n < MAX_BUNDLE_SYMBOLS; n += 1) {
+    s = reduce(s, { type: "toggleSymbol", symbol: `S${n}USDT`, resolved: true });
+  }
+  assert.equal(s.answers.symbols.length, MAX_BUNDLE_SYMBOLS);
+  const over = reduce(s, { type: "toggleSymbol", symbol: "ONEMOREUSDT", resolved: true });
+  assert.equal(over.answers.symbols.length, MAX_BUNDLE_SYMBOLS);
+  assert.match(over.error, /10개/);
+});
+
+test("추천 묶음은 고르던 것을 지우고 바꾼다", () => {
+  let s = reduce(bundleCards(), { type: "toggleSymbol", symbol: "AAAUSDT" });
+  s = reduce(s, { type: "setBundle", symbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT"] });
+  assert.deepEqual(s.answers.symbols, ["BTCUSDT", "ETHUSDT", "SOLUSDT"], "섞이면 묶음 크기가 이름과 어긋난다");
+});
+
+test("종목 하나 쪽에서는 묶음 동작이 아무 일도 안 한다", () => {
+  const single = withCandidates();
+  assert.deepEqual(reduce(single, { type: "toggleSymbol", symbol: "AAAUSDT" }).answers.symbols, []);
+  assert.deepEqual(reduce(single, { type: "setBundle", symbols: ["AAAUSDT", "BBBUSDT"] }).answers.symbols, []);
+  assert.deepEqual(toAskRequest(reduce(single, { type: "chooseSymbol", symbol: "AAAUSDT" })),
+                   { session_id: 7, symbol: "AAAUSDT" });
+});
+
+test("갈림길을 바꾸면 담아 둔 종목이 사라진다", () => {
+  const s = reduce(bundleCards(), { type: "toggleSymbol", symbol: "AAAUSDT" });
+  const back = reduce(s, { type: "choose", step: "mode", value: "single" });
+  assert.deepEqual(back.answers.symbols, []);
+  assert.equal(back.session, null, "답을 바꾸면 세션도 버린다");
 });

@@ -9,7 +9,8 @@ import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
 import CheckIcon from "./CheckIcon.jsx";
 import {
-  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
+  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, BUNDLE_PRESET_LABEL, BUNDLE_PROMPT, BUNDLE_RUN_NOTE,
+  CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
   NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SHORT_BAR_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
@@ -19,7 +20,8 @@ import {
 import { useSymbolList } from "../hooks/useSymbolList.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import {
-  PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer, initialState, reduce, toAskRequest,
+  MAX_BUNDLE_SYMBOLS, MODES, PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer,
+  initialState, isBundle, readyToAsk, reduce, toAskRequest,
   toCandidatesRequest, validBalance, formatAmountInput, parseAmountInput,
 } from "../lib/askFlow.js";
 import {
@@ -29,6 +31,7 @@ import {
 } from "../lib/askView.js";
 import { coinName } from "../lib/macroSource.js";
 import { baseOf, quoteOf } from "../lib/format.js";
+import { usePortfolioPresets } from "../hooks/usePortfolioPresets.js";
 import { macroSymbols } from "../lib/portfolio.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "../lib/exchanges.js";
@@ -69,6 +72,7 @@ function Dots() {
 // 질문 한 장의 선택지.
 function stepOptions(step, answers) {
   if (step === "exchange") return EXCHANGES.map((item) => ({ key: item.value, label: item.label, hint: item.quote, value: item.value }));
+  if (step === "mode") return MODES.map((m) => ({ key: m.value, label: m.label, hint: m.hint, value: m.value }));
   if (step === "profile") return PROFILES.map((p) => ({ key: p.value, label: p.label, hint: p.hint, value: p.value }));
   if (step === "market") {
     const ok = canChooseFutures(answers);
@@ -234,10 +238,16 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
 // 한 달 범위에서 어디쯤인지는 서버가 만든 문장(range_note)으로만 말한다. 사용자가
 // 아쉬워한 "이미 고점에 올라간 코인" 에 답하는 줄이고, 위치 퍼센트는 그 자체로는
 // 설명이 필요한 값이라 숫자로 띄우지 않는다.
-function CandidateRow({ c, marketText, onPick, disabled, i }) {
+// `picked` 가 null 이면 종목 하나 고르기(누르면 바로 넘어간다), boolean 이면 묶음 고르기
+// (누를 때마다 넣고 빼므로 지금 담겼는지 눈에 보여야 한다).
+function CandidateRow({ c, marketText, onPick, disabled, i, picked = null }) {
   const kr = coinName(c.symbol);
+  const multi = picked !== null;
   return (
-    <button type="button" className="ask-cand ask-in" style={{ "--i": i, "--coin": coinTint(c.base) || "transparent" }} onClick={() => onPick(c.symbol)} disabled={disabled}>
+    <button type="button" className={"ask-cand ask-in" + (picked ? " is-picked" : "")}
+      style={{ "--i": i, "--coin": coinTint(c.base) || "transparent" }}
+      aria-pressed={multi ? !!picked : undefined}
+      onClick={() => onPick(c.symbol)} disabled={disabled}>
       <CoinIcon symbol={c.symbol} size={32} alt="" className="ask-logo" />
       <span className="ask-cand-name">
         <span className="ask-tk num"><strong>{c.base}</strong><small>{quoteOf(c.symbol)}</small></span>
@@ -249,8 +259,30 @@ function CandidateRow({ c, marketText, onPick, disabled, i }) {
       </span>
       <span className="ask-stat is-rank"><span className="ask-lbl">거래대금</span><span className="ask-stat-v"><b className="num">{c.volume_rank}</b>위</span></span>
       <span className="ask-stat is-range"><span className="ask-lbl">하루 변동</span><span className="ask-stat-v"><b className="num">{c.range_pct}</b>%</span></span>
-      <span className="ask-chev" aria-hidden="true" />
+      {multi ? <span className="ask-pick" aria-hidden="true">{picked ? "✓" : "+"}</span>
+             : <span className="ask-chev" aria-hidden="true" />}
     </button>
+  );
+}
+
+// 추천 묶음 줄 — 빌더와 같은 끝점(/api/portfolios)을 쓴다. 못 받으면 줄을 안 그린다.
+function BundlePresets({ exchange, market, disabled, onPick, i }) {
+  const presets = usePortfolioPresets(exchange, market || "spot");
+  if (!presets.length) return null;
+  return (
+    <div className="ask-presets ask-in" style={{ "--i": i }}>
+      <span className="ask-presets-label">{BUNDLE_PRESET_LABEL}</span>
+      <div className="ask-presets-row">
+        {presets.map((preset) => (
+          <button key={preset.key} type="button" className="ask-preset" disabled={disabled}
+            title={preset.lead}
+            aria-label={`${preset.name} · ${preset.count}종목 · ${preset.lead}`}
+            onClick={() => onPick(preset.legs.map((leg) => leg.symbol))}>
+            {preset.name}<small>{preset.count}종목</small>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -530,6 +562,21 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     }
   };
 
+  // 묶음은 여러 개를 다 고른 뒤 한 번에 물어본다 — 종목 하나 고르기처럼 누르자마자
+  // 보내면 두 번째 종목을 넣을 틈이 없다.
+  const askBundle = async () => {
+    if (!readyToAsk(state)) return;
+    dispatch({ type: "loadingResults" });
+    try {
+      const data = await api.askMacros(toAskRequest(state));
+      dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
+                 noEdgeBest: data.no_edge_best,
+                 refunded: data.refunded, remaining: data.remaining_today });
+    } catch (e) {
+      dispatch({ type: "error", message: e.message });
+    }
+  };
+
   const offer = extraOffer(status);
   const extraBlock = (i) => (offer.show ? (
     <div className="ask-extra ask-in" style={{ "--i": i }} role="group" aria-label="포인트로 횟수 추가">
@@ -633,16 +680,39 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     );
   } else if (state.phase === "candidates") {
     const n = state.candidates.length;
+    const bundle = isBundle(state.answers);
+    const picked = state.answers.symbols || [];
+    const toggle = (sym, resolved = false) => dispatch({ type: "toggleSymbol", symbol: sym, resolved });
     stage = (
       <>
-        <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{CANDIDATES_PROMPT}</span></p>
+        <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{bundle ? BUNDLE_PROMPT : CANDIDATES_PROMPT}</span></p>
+        {bundle ? <BundlePresets i={0.5} exchange={state.answers.exchange} market={state.answers.market}
+                                 disabled={lock} onPick={(symbols) => dispatch({ type: "setBundle", symbols })} /> : null}
         {n ? (
           <div className="ask-cands">
-            {state.candidates.map((c, idx) => <CandidateRow key={c.symbol} c={c} i={idx + 1} marketText={marketText} disabled={lock} onPick={(sym) => leaveThen(() => pickSymbol(sym))} />)}
+            {state.candidates.map((c, idx) => (
+              <CandidateRow key={c.symbol} c={c} i={idx + 1} marketText={marketText} disabled={lock}
+                picked={bundle ? picked.includes(c.symbol) : null}
+                onPick={(sym) => (bundle ? toggle(sym) : leaveThen(() => pickSymbol(sym)))} />
+            ))}
           </div>
         ) : null}
-        <ManualPick chips={state.manualSymbols} i={n + 1} exchange={state.answers.exchange} disabled={lock} onPick={(sym, resolved) => leaveThen(() => pickSymbol(sym, resolved))} />
-        <p className="ask-disc ask-in" style={{ "--i": n + 2 }} role="note">{DISCLAIMER}</p>
+        <ManualPick chips={state.manualSymbols} i={n + 1} exchange={state.answers.exchange} disabled={lock}
+          onPick={(sym, resolved) => (bundle ? toggle(sym, resolved) : leaveThen(() => pickSymbol(sym, resolved)))} />
+        {bundle ? (
+          <div className="ask-bundle ask-in" style={{ "--i": n + 2 }}>
+            <p className="ask-bundle-sum" aria-live="polite">
+              {picked.length ? `${picked.map(baseOf).join(" · ")} · ${picked.length}종목` : `둘부터 ${MAX_BUNDLE_SYMBOLS}종목까지 고를 수 있어요`}
+            </p>
+            {/* 아직 실행기로 못 돌린다는 사실을 카드를 보여 주기 **전에** 말한다. */}
+            <p className="ask-bundle-note" role="note">{BUNDLE_RUN_NOTE}</p>
+            <button type="button" className="ask-bundle-go" disabled={lock || !readyToAsk(state)}
+              onClick={() => leaveThen(askBundle)}>
+              {picked.length >= 2 ? "이 묶음으로 물어보기" : "두 종목부터 물어볼 수 있어요"}
+            </button>
+          </div>
+        ) : null}
+        <p className="ask-disc ask-in" style={{ "--i": n + 3 }} role="note">{DISCLAIMER}</p>
       </>
     );
   } else if (state.phase === "results") {

@@ -5,6 +5,7 @@ export const CONSENT_TEXT = "과거 데이터로 조합을 찾아 주는 도구�
 
 export const STEP_PROMPTS = {
   exchange: "어느 거래소를 사용할 거예요?",
+  mode: "한 종목만 볼까요, 여러 종목을 묶어 볼까요?",
   balance: "현재 그 거래소에서 사용할 수 있는 금액은 얼마예요?",
   profile: "손실은 어디까지 견딜 수 있어요?",
   market: "어느 시장에서요?",
@@ -47,6 +48,11 @@ export const WATCH_LEVELS = [
 ];
 
 export const CANDIDATES_PROMPT = "성향에 맞는 종목을 골라 봤어요. 하나를 고르면 매크로 후보를 보여 드릴게요.";
+// 묶음 쪽은 여러 개를 고른다 — 같은 자리에 다른 말을 쓴다.
+export const BUNDLE_PROMPT = "묶을 종목을 골라 주세요. 둘부터 열까지 담을 수 있고, 자금은 똑같이 나눠요.";
+export const BUNDLE_PRESET_LABEL = "추천 묶음";
+// 묶음 매크로는 아직 실행기로 돌릴 수 없다 — 카드를 보여 주기 전에 먼저 말한다.
+export const BUNDLE_RUN_NOTE = "묶음은 지금 백테스트와 모의 실행까지만 돼요. 실제 매매는 준비 중이에요.";
 export const MANUAL_PICK_LABEL = "직접 고를래요";
 
 export const FOLLOW_UPS = [

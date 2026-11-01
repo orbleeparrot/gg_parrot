@@ -20,9 +20,12 @@ from typing import Callable, Literal, Optional
 # exchanges.py 는 re · typing 만 쓰는 순수 파일이다 — DB · HTTP · 설정을 끌어오지 않으므로
 # 이 파일의 '순수함' 을 깨지 않는다(import 가 무거워지면 전수 시험이 비싸진다).
 from engine.exchanges import is_domestic
+from engine.schema import Macro
 
 PAGE_SIZE = 5          # 한 번에 보여 주는 선택지 수. 더 있으면 "다른 선택지 보기".
-MAX_SYMBOLS = 5        # buildMacro 의 symbols 상한과 같다.
+# 엔진이 정한 상한을 그대로 쓴다 — 여기 숫자를 또 적으면 한쪽만 올라가서, 코치는
+# 받아 주는데 매크로를 만들 때 거절당하는 조합이 생긴다.
+MAX_SYMBOLS = Macro.MAX_SYMBOLS
 
 # 진입 조건 · 묶음 한도를 쓸 수 있는 규칙 — engine/schema.py FILTERABLE_TYPES 와 같다.
 FILTERABLE = frozenset("EFGHIJK")
@@ -322,7 +325,7 @@ GRAPH: dict[str, Question] = {
     # 정적 choices 는 앞 답을 안 물었을 때의 기본 조합(각 노드의 첫 선택지)의 후보다.
     "rule": Question("rule", "이 중에서 마음이 가는 방식은요?", "choice",
                      _narrow_rule({}), narrow=_narrow_rule),
-    "symbols": Question("symbols", "어떤 종목으로 해 볼까요? 쉼표로 최대 5개까지 적어 주세요.",
+    "symbols": Question("symbols", f"어떤 종목으로 해 볼까요? 쉼표로 최대 {MAX_SYMBOLS}개까지 적어 주세요.",
                         "symbols", field="symbol"),
     "weights": Question("weights", "종목마다 자금을 어떻게 나눌까요?", "choice",
                         _weights_choices(2), narrow=_narrow_weights),

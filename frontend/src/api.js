@@ -299,6 +299,10 @@ export const api = {
   // 거래 가능한 종목 목록(현물 + USDT-M 선물) — 조건 판의 종목 검색은 이 안에서만 고른다.
   symbols: ({ exchange = "binance", ...options } = {}) =>
     req(`/api/symbols?exchange=${encodeURIComponent(exchange)}`, { timeoutMs: 25_000, cache: exchange === "binance" ? "default" : "no-cache", ...options }),
+  // 추천 묶음 — 거래소마다 기준을 그때 푼 결과(시가총액 TOP10 · 거래대금 TOP5 …).
+  portfolios: ({ exchange = "binance", market = "spot", ...options } = {}) =>
+    req(`/api/portfolios?exchange=${encodeURIComponent(exchange)}&market=${encodeURIComponent(market)}`,
+        { timeoutMs: 25_000, ...options }),
   coinLogoUrl: (base) => `/api/coin-logo/${encodeURIComponent(base)}.png`,
 
   // kimchi premium (reference indicator; upbit vs binance×USDKRW)

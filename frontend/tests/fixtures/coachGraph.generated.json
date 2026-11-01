@@ -8682,7 +8682,7 @@
       "kind": "choice"
     },
     "symbols": {
-      "ask": "어떤 종목으로 해 볼까요? 쉼표로 최대 5개까지 적어 주세요.",
+      "ask": "어떤 종목으로 해 볼까요? 쉼표로 최대 10개까지 적어 주세요.",
       "choices": [],
       "field": "symbol",
       "kind": "symbols"

@@ -1932,6 +1932,8 @@
           "studio-budget-actions",
           "studio-chart",
           "studio-chart-body",
+          "studio-chart-jump",
+          "studio-chart-jumps",
           "studio-cond",
           "studio-cond-alert",
           "studio-cond-alert-actions",

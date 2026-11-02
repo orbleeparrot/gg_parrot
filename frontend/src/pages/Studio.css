@@ -400,3 +400,15 @@
 }
 @keyframes studio-fab-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .studio-fab .studio-src-menu { animation: none; } }
+
+/* 여러 종목 차트 — 맨 위에 붙는 종목 줄. 누르면 그 차트까지 내려간다(탭이 아니다). */
+.studio-chart-jumps { position: sticky; top: 0; z-index: 3; flex: none;
+  display: flex; flex-wrap: wrap; gap: 4px; padding: 7px 16px;
+  background: rgb(var(--c-surface)); border-bottom: 1px solid rgb(var(--c-slate-200)); }
+.studio-chart-jump { height: 26px; padding: 0 10px; border-radius: 999px;
+  font-size: 12px; font-weight: 700; color: rgb(var(--c-slate-500)); white-space: nowrap; }
+.studio-chart-jump:hover { background: rgb(var(--c-slate-100)); }
+.studio-chart-jump.is-on { background: rgb(var(--c-brand-50)); color: rgb(var(--c-brand-600)); }
+/* 줄이 붙박이라 자리를 옮기면 차트 머리(종목·시세·봉 간격)가 그 밑에 깔린다 — 줄 높이(41px)
+   보다 넉넉히 띄운다. 실측: 안 띄우면 31px 가 가려져 봉 간격 단추가 안 보였다. */
+.studio-chart-body.is-multi .candle-chart.is-studio { scroll-margin-top: 48px; }

@@ -5,6 +5,7 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 import Builder from "../components/Builder.jsx";
 import SimBadge from "../components/SimBadge.jsx";
 import { StudioTabs, StudioBacktest, StudioExplain, StudioOptimize, StudioPaper, StudioOutcomes } from "../components/StudioDock.jsx";
+import { ChartJumpTabs } from "../components/ChartJumpTabs.jsx";
 import MacroCard from "../components/MacroCard.jsx";
 import usePaperSession from "../hooks/usePaperSession.js";
 import useStudioSplit from "../hooks/useStudioSplit.js";
@@ -326,6 +327,43 @@ function AccountStudio({ scope, allowRouterMacro }) {
     }
     return out;
   }, [form.symbol]);
+
+  // 차트가 세로로 쌓이면(종목 둘 이상) 맨 위 종목 줄로 자리를 옮긴다. 차트에는 ref 를
+  // 못 단다(CandleChart 는 forwardRef 가 아니다) — 쌓인 순서가 chartSymbols 순서라
+  // 판에서 번호로 찾는다.
+  const chartBodyRef = useRef(null);
+  const [activeChart, setActiveChart] = useState("");
+
+  const chartNodes = () => [...(chartBodyRef.current?.querySelectorAll(".candle-chart") || [])];
+
+  const jumpToChart = (symbol) => {
+    const node = chartNodes()[chartSymbols.indexOf(symbol)];
+    if (!node) return;
+    node.scrollIntoView({ behavior: "smooth", block: "start" });
+    setActiveChart(symbol);
+  };
+
+  // 손으로 스크롤해도 줄의 불이 따라온다. 위에서 20%~아래 30% 띠에 걸친 첫 차트를 켠다 —
+  // 띠를 안 주면 경계에서 두 차트가 번갈아 켜진다.
+  useEffect(() => {
+    const body = chartBodyRef.current;
+    if (!body || chartSymbols.length < 2 || typeof IntersectionObserver === "undefined") {
+      setActiveChart("");
+      return undefined;
+    }
+    const nodes = [...body.querySelectorAll(".candle-chart")];
+    if (!nodes.length) return undefined;
+    const observer = new IntersectionObserver((entries) => {
+      const first = entries
+        .filter((entry) => entry.isIntersecting)
+        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+      if (!first) return;
+      const index = nodes.indexOf(first.target);
+      if (index >= 0) setActiveChart(chartSymbols[index]);
+    }, { root: body, rootMargin: "-20% 0px -30% 0px" });
+    nodes.forEach((node) => observer.observe(node));
+    return () => observer.disconnect();
+  }, [chartSymbols]);
 
   const paper = usePaperSession({ macro: currentMacro, valErr, resumeKey: slug ? "" : studioPaperKey(scope), accountGuard: isCurrentAccount });
 
@@ -829,7 +867,8 @@ function AccountStudio({ scope, allowRouterMacro }) {
         {/* ── 차트 — 주인공. 조건을 바꾸면 보조지표·익절/손절선이 바로 따라온다.
             판 머리는 따로 두지 않는다 — CandleChart(studio) 의 도구줄(종목·시세·봉 간격·범례)이 곧 머리다. ── */}
         <section className="studio-chart" aria-label="실시간 차트 · 보조지표" data-tour="chart">
-          <div className={"studio-chart-body" + (chartSymbols.length > 1 ? " is-multi" : "")}>
+          <div ref={chartBodyRef} className={"studio-chart-body" + (chartSymbols.length > 1 ? " is-multi" : "")}>
+            <ChartJumpTabs symbols={chartSymbols} active={activeChart} onJump={jumpToChart} />
             {chartSymbols.length > 0 ? (
               // Native exchange candles keep KRW prices distinct from Binance USDT.
               chartSymbols.map((symbol) => (

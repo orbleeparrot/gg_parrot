@@ -37,6 +37,7 @@ CATEGORIES = {
     coingecko.CATEGORY_LAYER1: {"bitcoin", "ethereum", "binancecoin", "ripple", "solana", "tron"},
     coingecko.CATEGORY_DEFI: {"chainlink", "uniswap", "aave"},
     coingecko.CATEGORY_MEME: {"dogecoin"},
+    # 레이어2 · 게임 · AI 는 일부러 비워 둔다 — 못 채우는 분야를 **안 내는지** 보는 자리다.
 }
 # 포장 자산 · 스테이킹 파생. **티커가 "BTC" 인 포장 토큰이 여기 들어 있다** — 실제
 # 코인게코 응답이 그렇다.
@@ -60,10 +61,21 @@ VOLUMES = {"DOGE": 9e9, "XRP": 8e9, "BTC": 7e9, "SOL": 6e9, "ETH": 5e9,
            "USDT": 99e9, "WBTC": 50e9}   # 걸러져야 할 것들도 큰 값으로 둔다
 
 
+# 하루 변동폭(%). 거래대금과 **다른 순서**로 둔다 — 두 숫자가 섞이면 알아채야 한다.
+RANGES = {"BTC": 2.0, "ETH": 4.0, "BNB": 6.0, "XRP": 8.0, "SOL": 10.0, "TRX": 3.0,
+          "LINK": 5.0, "UNI": 7.0, "AAVE": 9.0, "DOGE": 12.0, "USDT": 0.1, "WBTC": 2.0}
+
+
 def _tickers(exchange="binance"):
     domestic = exchange in ("upbit", "bithumb")
-    return [{"symbol": (f"KRW-{base}" if domestic else f"{base}USDT"), "quoteVolume": volume}
-            for base, volume in VOLUMES.items()]
+    out = []
+    for base, volume in VOLUMES.items():
+        low = 100.0
+        row = {"symbol": (f"KRW-{base}" if domestic else f"{base}USDT"), "quoteVolume": volume}
+        if base in RANGES:
+            row["lowPrice"], row["highPrice"] = low, low * (1 + RANGES[base] / 100)
+        out.append(row)
+    return out
 
 
 @pytest.fixture(autouse=True)
@@ -145,18 +157,18 @@ def test_futures_only_asks_for_symbols_that_trade_on_futures(monkeypatch):
 # --- 분야별 ------------------------------------------------------------------
 
 def test_sector_mix_takes_one_layer1_two_defi_and_one_meme():
-    assert _bases(_by_key()["sector_top4"]) == ["BTC", "LINK", "UNI", "DOGE"]
+    assert _bases(_by_key()["mixed_top4"]) == ["BTC", "LINK", "UNI", "DOGE"]
 
 
-def test_defi_top3_stays_inside_its_category():
-    assert _bases(_by_key()["defi_top3"]) == ["LINK", "UNI", "AAVE"]
+def test_the_defi_sector_stays_inside_its_category():
+    assert _bases(_by_key()["sector_defi"]) == ["LINK", "UNI", "AAVE"]
 
 
 def test_a_category_is_matched_by_id_not_by_ticker(monkeypatch):
     """범주 판정을 티커로 하면 같은 티커를 쓰는 다른 코인이 끌려 들어온다."""
     monkeypatch.setattr(coingecko, "category_ids",
                         lambda slug: {"some-wrapped-btc"} if slug == coingecko.CATEGORY_DEFI else set())
-    assert "defi_top3" not in _by_key(), "id 가 안 맞으면 한 종목도 안 잡혀야 한다"
+    assert "sector_defi" not in _by_key(), "id 가 안 맞으면 한 종목도 안 잡혀야 한다"
 
 
 # --- 이름이 약속한 것을 못 지키면 안 낸다 ------------------------------------
@@ -166,7 +178,7 @@ def test_a_portfolio_that_cannot_be_filled_is_dropped_whole(monkeypatch):
     monkeypatch.setattr(P.symbols_mod, "list_symbols",
                         lambda *, exchange="binance": _listing(["BTC", "ETH", "LINK"]))
     keys = set(_by_key())
-    assert "cap_top5" not in keys and "sector_top4" not in keys
+    assert "cap_top5" not in keys and "mixed_top4" not in keys
     assert "btc_eth_duo" in keys, "둘로 충분한 묶음은 그대로 나온다"
 
 
@@ -174,7 +186,7 @@ def test_a_rule_bigger_than_the_engine_cap_is_left_out(monkeypatch):
     """엔진이 받아 주지 않는 크기를 화면에 내면 사용자가 고장으로 읽는다."""
     monkeypatch.setattr(P, "MAX_LEGS", 3)
     assert "cap_top5" not in _by_key()
-    assert "defi_top3" in _by_key()
+    assert "sector_defi" in _by_key()
 
 
 def test_nothing_is_shown_when_the_ranking_cannot_be_fetched(monkeypatch):
@@ -257,7 +269,7 @@ def test_the_endpoint_hands_the_screen_what_it_needs():
     body = _client().get("/api/portfolios", params={"exchange": "binance"}).json()
     assert body["max_symbols"] == P.MAX_LEGS
     first = body["items"][0]
-    assert set(first) == {"key", "name", "lead", "tags", "count", "legs"}
+    assert set(first) == {"key", "name", "lead", "tags", "count", "legs", "kind", "stats"}
     assert first["count"] == len(first["legs"])
     assert set(first["legs"][0]) == {"symbol", "weight"}
 
@@ -275,3 +287,81 @@ def test_the_endpoint_passes_the_market_through():
     assert body["market"] == "futures"
     # 아무 글자나 선물로 읽지 않는다.
     assert _client().get("/api/portfolios", params={"market": "뭐지"}).json()["market"] == "spot"
+
+
+# --- 분야 묶음 (2026-11-02) ---------------------------------------------------
+#
+# 설계: docs/superpowers/specs/2026-11-02-sector-bundles-design.md
+
+def test_a_sector_bundle_holds_only_coins_from_that_category():
+    assert _bases(_by_key()["sector_layer1"]) == ["BTC", "ETH", "BNB", "XRP", "SOL"]
+
+
+def test_a_sector_takes_the_biggest_five_and_stops():
+    """레이어1 에는 여섯이 있다(TRX 까지). 다섯에서 끊어야 한다."""
+    assert "TRX" not in _bases(_by_key()["sector_layer1"])
+
+
+def test_a_sector_that_cannot_find_three_is_not_shown():
+    """밈은 하나뿐이다. 하나짜리는 분야가 아니라 그냥 한 종목이다."""
+    keys = set(_by_key())
+    assert "sector_meme" not in keys
+    assert "sector_layer2" not in keys and "sector_gaming" not in keys and "sector_ai" not in keys
+
+
+def test_a_sector_of_exactly_three_is_shown():
+    """이름이 종목 수를 약속하지 않으므로 셋이어도 참말이다."""
+    assert len(_by_key()["sector_defi"].legs) == 3
+
+
+def test_the_screen_can_tell_a_sector_from_a_size_rule():
+    """빌더는 두 줄로 나눠 그린다 — 어느 줄에 놓을지 서버가 말해 줘야 한다."""
+    by_key = _by_key()
+    assert by_key["sector_defi"].kind == "sector"
+    assert by_key["cap_top5"].kind == "size"
+    assert by_key["mixed_top4"].kind == "size", "여러 분야를 섞은 것은 분야 묶음이 아니다"
+
+
+def test_the_old_defi_top3_is_gone():
+    """분야 묶음의 디파이 칸과 같은 것이었다 — 두 줄에 같은 묶음이 앉으면 안 된다."""
+    assert "defi_top3" not in _by_key()
+
+
+def test_a_coin_may_sit_in_two_sectors(monkeypatch):
+    """IMX 는 레이어2이면서 게임이다. 한쪽을 임의로 지우면 그 분야가 거짓이 된다."""
+    both = dict(CATEGORIES)
+    both[coingecko.CATEGORY_LAYER2] = {"chainlink", "uniswap", "aave"}
+    monkeypatch.setattr(coingecko, "category_ids", lambda slug: set(both.get(slug, ())))
+    by_key = _by_key()
+    assert _bases(by_key["sector_layer2"]) == ["LINK", "UNI", "AAVE"]
+    assert _bases(by_key["sector_defi"]) == ["LINK", "UNI", "AAVE"]
+
+
+# --- 묶음에 붙는 숫자 두 칸 ---------------------------------------------------
+
+def test_the_stats_come_from_tickers_we_already_hold():
+    """거래대금 순위의 폭과 하루 변동폭의 평균. 둘 다 받아 둔 티커로만 구한다."""
+    stats = _by_key()["sector_layer1"].stats
+    # BTC 3위 · ETH 5위 · BNB 6위 · XRP 2위 · SOL 4위
+    assert (stats.rank_min, stats.rank_max) == (2, 6)
+    # 2 · 4 · 6 · 8 · 10 의 평균
+    assert stats.range_avg_pct == 6.0
+
+
+def test_the_stats_follow_the_legs_not_the_whole_pool():
+    stats = _by_key()["sector_defi"].stats
+    assert (stats.rank_min, stats.rank_max) == (8, 10)
+    assert stats.range_avg_pct == 7.0
+
+
+def test_no_stats_rather_than_made_up_ones(monkeypatch):
+    """한 레그라도 숫자를 모르면 칸을 안 그린다 — 0 을 적거나 나머지로 평균 내지 않는다."""
+    thin = [row for row in _tickers() if not row["symbol"].startswith("AAVE")]
+    monkeypatch.setattr(P.hotcoins, "get_cached_tickers", lambda: thin)
+    assert _by_key()["sector_defi"].stats is None
+
+
+def test_the_stats_reach_the_screen():
+    item = next(i for i in P.view()["items"] if i["key"] == "sector_layer1")
+    assert item["stats"] == {"rank_min": 2, "rank_max": 6, "range_avg_pct": 6.0}
+    assert item["kind"] == "sector"

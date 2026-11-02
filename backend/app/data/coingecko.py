@@ -39,10 +39,15 @@ TIMEOUT_S = 15.0
 # 넉넉히 받아 둔다 — 한 번 부를 때 250개가 최대다.
 TOP_N = 250
 
-# 분야별 묶음이 쓰는 범주. 코인게코의 범주 이름(slug)이다.
+# 분야 묶음이 쓰는 범주. 코인게코의 범주 이름(slug)이고, 2026-11-02 에
+# ``coins/categories/list`` 로 하나하나 확인했다 — 철자가 틀리면 빈 집합이 와서
+# 그 분야가 조용히 사라진다(오류가 안 난다).
 CATEGORY_DEFI = "decentralized-finance-defi"
 CATEGORY_LAYER1 = "layer-1"
+CATEGORY_LAYER2 = "layer-2"
 CATEGORY_MEME = "meme-token"
+CATEGORY_GAMING = "gaming"
+CATEGORY_AI = "artificial-intelligence"
 # 거르기용 범주 — 포장 자산과 스테이킹 파생은 **같은 자산을 한 번 더 담는 것**이라
 # 분산이 아니다. WBTC 를 BTC 옆에 놓으면 BTC 를 두 번 사는 셈이다.
 CATEGORY_WRAPPED = "wrapped-tokens"

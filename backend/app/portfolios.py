@@ -1,6 +1,11 @@
-"""추천 묶음 — **구성이 아니라 기준**을 들고 있다가 거래소마다 그때 푼다.
+"""묶음 — **구성이 아니라 기준**을 들고 있다가 거래소마다 그때 푼다.
 
 설계: docs/superpowers/specs/2026-10-30-portfolio-presets-design.md
+      docs/superpowers/specs/2026-11-02-sector-bundles-design.md (분야 묶음)
+
+묶음은 두 가지다. **분야 묶음**(``kind="sector"``)은 레이어1끼리, 디파이끼리처럼 한
+분야로 묶은 것이고, **기준 묶음**(``kind="size"``)은 시가총액·거래대금처럼 분야가 아닌
+기준으로 묶은 것이다. 물어볼까는 분야 쪽만 쓰고, 빌더는 둘을 두 줄로 나눠 그린다.
 
 왜 구성을 적어 두지 않는가: "시가총액 TOP10" 을 종목으로 박아 두면 순위가 바뀌는 순간
 틀린 이름이 되고, 거래소마다 상장 종목이 달라 그대로 쓸 수도 없다(BNB 는 업비트에 없다).
@@ -43,16 +48,38 @@ class Leg:
 
 
 @dataclass(frozen=True)
+class Stats:
+    """묶음 전체를 한눈에 보는 숫자 둘. **받아 둔 티커로만 구한다** — 호출이 늘지 않는다.
+
+    한 레그라도 숫자를 모르면 아예 안 만든다(``None``). 아는 것만으로 평균을 내면
+    다섯 종목 묶음에 셋의 평균이 적히고, 화면은 그걸 다섯의 평균으로 읽는다.
+    """
+
+    rank_min: int           # 거래대금 순위가 가장 높은 레그
+    rank_max: int           # 가장 낮은 레그
+    range_avg_pct: float    # 레그마다 (고가-저가)/저가, 그 평균
+
+    def as_dict(self) -> dict:
+        return {"rank_min": self.rank_min, "rank_max": self.rank_max,
+                "range_avg_pct": self.range_avg_pct}
+
+
+@dataclass(frozen=True)
 class Portfolio:
     key: str
     name: str
     lead: str
     tags: tuple[str, ...]
     legs: tuple[Leg, ...]
+    # "sector" 는 한 분야로 묶은 것, "size" 는 크기·거래대금처럼 분야가 아닌 기준.
+    # 빌더가 두 줄로 나눠 그리고, 물어볼까는 분야 쪽만 쓴다.
+    kind: str = "size"
+    stats: Optional[Stats] = None
 
     def as_dict(self) -> dict:
         return {"key": self.key, "name": self.name, "lead": self.lead,
-                "tags": list(self.tags), "count": len(self.legs),
+                "tags": list(self.tags), "count": len(self.legs), "kind": self.kind,
+                "stats": self.stats.as_dict() if self.stats else None,
                 "legs": [{"symbol": leg.symbol, "weight": leg.weight} for leg in self.legs]}
 
 
@@ -70,6 +97,8 @@ class _Pool:
     tradable: frozenset[str]
     category_ids: dict[str, frozenset[str]] # 범주 slug → 그 범주 코인들의 id
     by_volume: tuple[str, ...]              # 24시간 거래대금 내림차순 티커
+    rank_of: dict[str, int]                 # 티커 → 거래대금 순위(1부터)
+    range_of: dict[str, float]              # 티커 → 하루 변동폭(%)
 
     def top(self, count: int, *, skip: tuple[str, ...] = ()) -> list[str]:
         out: list[str] = []
@@ -118,8 +147,12 @@ class _Rule:
     name: str
     lead: str
     tags: tuple[str, ...]
-    size: int
     pick: Callable[[_Pool], list[str]]
+    # 이름이 종목 수를 약속하면 ``size``, 아니면 0. "TOP5" 는 다섯이 아니면 거짓말이지만
+    # "디파이" 는 셋이든 다섯이든 참말이다. 약속이 없는 쪽은 ``least`` 만 지킨다.
+    size: int = 0
+    least: int = 0
+    kind: str = "size"
 
 
 def _sector_mix(pool: _Pool) -> list[str]:
@@ -134,7 +167,34 @@ def _sector_mix(pool: _Pool) -> list[str]:
     return layer1 + defi + meme
 
 
-RULES: tuple[_Rule, ...] = (
+# 한 분야에서 몇 개까지 담고, 몇 개 아래면 안 내는가.
+# 둘짜리는 분야가 아니라 그냥 두 종목이다 — 이름이 분야를 말하는데 내용은 아니게 된다.
+SECTOR_TAKE = 5
+SECTOR_LEAST = 3
+
+# 분야 묶음. 설명은 **그 분야가 무엇인지**만 말한다 — 어떻게 움직일지는 말하지 않는다.
+_SECTORS: tuple[tuple[str, str, str, str], ...] = (
+    ("layer1", coingecko.CATEGORY_LAYER1, "레이어1", "자체 블록체인을 가진 코인들이에요."),
+    ("layer2", coingecko.CATEGORY_LAYER2, "레이어2", "이더리움 위에서 수수료와 속도를 맡는 코인들이에요."),
+    ("defi", coingecko.CATEGORY_DEFI, "디파이", "거래소·대출 같은 금융을 코드로 돌리는 코인들이에요."),
+    ("meme", coingecko.CATEGORY_MEME, "밈", "쓰임새보다 유행에서 시작한 코인들이에요."),
+    ("gaming", coingecko.CATEGORY_GAMING, "게임", "게임과 그 안의 아이템에 쓰이는 코인들이에요."),
+    ("ai", coingecko.CATEGORY_AI, "AI", "인공지능 연산과 데이터에 쓰이는 코인들이에요."),
+)
+
+
+def _sector_rules() -> tuple[_Rule, ...]:
+    # 기본값 인자로 slug 를 묶는다 — 람다가 반복 변수를 들여다보면 여섯이 전부 마지막
+    # 분야를 가리킨다.
+    return tuple(
+        _Rule(key=f"sector_{key}", name=name, lead=lead, tags=("분야",),
+              least=SECTOR_LEAST, kind="sector",
+              pick=lambda pool, slug=slug: pool.in_category(slug, SECTOR_TAKE))
+        for key, slug, name, lead in _SECTORS
+    )
+
+
+RULES: tuple[_Rule, ...] = _sector_rules() + (
     _Rule(
         key="cap_top10", name="시가총액 TOP10", size=10,
         lead="그 거래소에서 살 수 있는 시가총액 상위 10종목으로 넓게 나눠 담아요.",
@@ -159,18 +219,16 @@ RULES: tuple[_Rule, ...] = (
         tags=("메이저",),
         pick=lambda pool: pool.keep(("BTC", "ETH")),
     ),
+    # 분야 하나가 아니라 **여럿을 섞은** 것이다. 분야 줄이 옆에 생기고 나면 예전 이름
+    # ("분야별로 골라담은 TOP4")은 분야 하나를 고른 것처럼 읽힌다.
     _Rule(
-        key="sector_top4", name="분야별로 골라담은 TOP4", size=4,
+        key="mixed_top4", name="여러 분야 섞어담기", size=4,
         lead="레이어1 · 디파이 · 밈에서 각 분야의 시가총액 상위를 골라 섞어요.",
         tags=("섹터대표", "분산투자"),
         pick=_sector_mix,
     ),
-    _Rule(
-        key="defi_top3", name="디파이 대표 TOP3", size=3,
-        lead="디파이 분야에서 시가총액 상위 3종목만 담아요.",
-        tags=("섹터대표",),
-        pick=lambda pool: pool.in_category(coingecko.CATEGORY_DEFI, 3),
-    ),
+    # "디파이 대표 TOP3" 는 2026-11-02 에 뺐다 — 분야 묶음의 디파이 칸과 같은 것이라
+    # 두 줄에 같은 묶음이 앉았다.
 )
 
 
@@ -195,17 +253,22 @@ def _tradable_bases(exchange: str, market: str) -> set[str]:
     return out
 
 
-def _volume_bases(exchange: str, keep: set[str]) -> tuple[str, ...]:
-    """24시간 거래대금 내림차순 티커. 우리가 이미 받아 둔 캐시만 쓴다(추가 호출 없음).
+def _ticker_facts(exchange: str, keep: set[str]) -> tuple[tuple[str, ...], dict[str, int], dict[str, float]]:
+    """거래대금 내림차순 티커와, 티커마다의 순위·하루 변동폭.
 
-    바이낸스 선물 묶음도 **현물 거래대금**으로 줄 세운다. 선물 거래대금은 따로 받아야
-    하는데, 둘의 순서가 크게 다르지 않고 어차피 선물에 상장된 것만 남긴다.
+    우리가 이미 받아 둔 캐시만 쓴다(추가 호출 없음). 바이낸스 선물 묶음도 **현물
+    거래대금**으로 줄 세운다 — 선물 거래대금은 따로 받아야 하는데, 둘의 순서가 크게
+    다르지 않고 어차피 선물에 상장된 것만 남긴다.
+
+    변동폭은 고가·저가가 다 있는 종목만 담는다. 없는 자리를 0 으로 메우면 묶음 평균이
+    조용히 내려간다.
     """
     if is_domestic(exchange):
         rows = krw.get_all_tickers(exchange)
     else:
         rows = hotcoins.get_cached_tickers() or []
     scored: list[tuple[float, str]] = []
+    range_of: dict[str, float] = {}
     for row in rows:
         symbol = str(row.get("symbol") or "")
         base = symbol[4:] if symbol.startswith("KRW-") else symbol[:-4]
@@ -218,8 +281,28 @@ def _volume_bases(exchange: str, keep: set[str]) -> tuple[str, ...]:
         if volume <= 0:
             continue
         scored.append((volume, base))
+        try:
+            low, high = float(row["lowPrice"]), float(row["highPrice"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if low > 0 and high >= low:
+            range_of[base] = round((high - low) / low * 100, 2)
     scored.sort(key=lambda pair: pair[0], reverse=True)
-    return tuple(base for _volume, base in scored)
+    by_volume: list[str] = []
+    for _volume, base in scored:
+        if base not in by_volume:       # 같은 티커가 두 줄로 오면 앞의 것이 참이다
+            by_volume.append(base)
+    return tuple(by_volume), {base: rank for rank, base in enumerate(by_volume, start=1)}, range_of
+
+
+def _stats(pool: _Pool, bases: list[str]) -> Optional[Stats]:
+    """그 묶음의 숫자 두 칸. 한 레그라도 모르면 ``None``."""
+    ranks = [pool.rank_of[base] for base in bases if base in pool.rank_of]
+    ranges = [pool.range_of[base] for base in bases if base in pool.range_of]
+    if len(ranks) != len(bases) or len(ranges) != len(bases):
+        return None
+    return Stats(rank_min=min(ranks), rank_max=max(ranks),
+                 range_avg_pct=round(sum(ranges) / len(ranges), 2))
 
 
 def _pool(exchange: str, market: str) -> Optional[_Pool]:
@@ -246,12 +329,13 @@ def _pool(exchange: str, market: str) -> Optional[_Pool]:
         if base in tradable and coin_id not in derivatives:
             ordered.append(base)
     categories: dict[str, frozenset[str]] = {}
-    for slug in (coingecko.CATEGORY_LAYER1, coingecko.CATEGORY_DEFI, coingecko.CATEGORY_MEME):
+    for _key, slug, _name, _lead in _SECTORS:
         categories[slug] = frozenset(coingecko.category_ids(slug) or ())
     usable = {base for base in ordered}
+    by_volume, rank_of, range_of = _ticker_facts(exchange, usable)
     return _Pool(exchange=exchange, ranked=tuple(ordered), owner_id=owner_id,
                  tradable=frozenset(tradable), category_ids=categories,
-                 by_volume=_volume_bases(exchange, usable))
+                 by_volume=by_volume, rank_of=rank_of, range_of=range_of)
 
 
 def _equal_weights(count: int) -> list[float]:
@@ -281,18 +365,25 @@ def build(exchange: str = "binance", market: str = "spot") -> list[Portfolio]:
         return []
     out: list[Portfolio] = []
     for rule in RULES:
-        if rule.size > MAX_LEGS:
-            continue  # 엔진이 받아 주지 않는 크기 — 상한이 오르면 저절로 살아난다
+        # 엔진이 받아 주지 않는 크기 — 상한이 오르면 저절로 살아난다
+        if (rule.size or rule.least) > MAX_LEGS:
+            continue
         try:
             bases = rule.pick(pool)
         except Exception:
             log.warning("portfolios: %s 를 풀지 못했다", rule.key, exc_info=True)
             continue
-        if len(bases) != rule.size:
-            continue
+        if rule.size:
+            if len(bases) != rule.size:
+                continue
+        else:
+            bases = bases[:MAX_LEGS]
+            if len(bases) < rule.least:
+                continue
         weights = _equal_weights(len(bases))
         out.append(Portfolio(
             key=rule.key, name=rule.name, lead=rule.lead, tags=rule.tags,
+            kind=rule.kind, stats=_stats(pool, bases),
             legs=tuple(Leg(symbol=_symbol(exchange, base), weight=weight)
                        for base, weight in zip(bases, weights)),
         ))

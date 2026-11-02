@@ -52,13 +52,17 @@ def test_domestic_cannot_download_the_standalone_bot_bundle():
         assert ok.json()["exchange"] == "upbit"
 
 
-def test_portfolio_cannot_download_the_macro_file():
-    """여러 종목 매크로는 내려받기에서 거절한다 — 받아서 실행기에 넣은 뒤 시작할 때 알면 늦다."""
+def test_portfolio_downloads_the_macro_file_with_every_leg():
+    """여러 종목 매크로도 내려받는다(2026-11-02).
+
+    예전에는 "어느 실행기 버전으로도 못 돌린다" 며 막았다. 연동 레벨 23부터 레그마다
+    한 줄로 갈라 돌리므로 그 말이 더는 참이 아니다 — 파일로 넣든 빠른 실행으로 넣든
+    실행기의 같은 자리(launch)가 묶음을 가른다.
+    """
     with TestClient(app) as client:
         res = client.post("/api/realtrade/macro-file", json={"macro": PORTFOLIO})
-        assert res.status_code == 422, res.text
-        assert res.json()["detail"] == runner.PORTFOLIO_UNSUPPORTED_DETAIL
-        # 같은 매크로의 단일 종목은 그대로 내려받는다 — 관문이 전부를 막는 게 아니다.
+        assert res.status_code == 200, res.text
+        assert res.json()["symbols"] == ["BTCUSDT", "ETHUSDT"]
         ok = client.post("/api/realtrade/macro-file", json={"macro": SINGLE})
         assert ok.status_code == 200 and ok.json()["symbol"] == "BTCUSDT"
 

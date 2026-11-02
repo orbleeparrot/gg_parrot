@@ -32,12 +32,19 @@ def test_domestic_macro_file_downloads_and_is_signed(payload, exchange):
         assert macro_signing.verify(Macro.model_validate(body), signature) is True
 
 
-def test_domestic_portfolio_macro_file_is_still_refused():
-    """실행기는 여러 종목을 못 돌린다 — 국내가 열렸어도 묶음 거절은 그대로다."""
+def test_domestic_portfolio_macro_file_downloads_with_every_leg():
+    """묶음 매크로 파일도 내준다 — 실행기가 레그마다 한 줄로 갈라 돌린다(연동 레벨 23).
+
+    종목이 **다 들어 있어야** 한다. 첫 종목만 적힌 파일을 받으면 분산이 조용히 사라진다.
+    """
     with TestClient(app) as client:
         res = client.post("/api/realtrade/macro-file", json={"macro": UPBIT_PORTFOLIO})
-        assert res.status_code == 422, res.text
-        assert res.json()["detail"] == runner.PORTFOLIO_UNSUPPORTED_DETAIL
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["symbols"] == ["KRW-BTC", "KRW-ETH"]
+        signature = body.pop("_sig")
+        body.pop("human_summary")
+        assert macro_signing.verify(Macro.model_validate(body), signature) is True
 
 
 def test_domestic_bundle_is_refused_without_calling_the_macro_file_forbidden():

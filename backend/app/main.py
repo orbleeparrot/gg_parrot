@@ -2571,12 +2571,13 @@ def realtrade_macro_file(req: BundleRequest) -> Response:
     알 수 없으므로 버전을 묻지 않는다. v9 이하에 넣으면 세션 시작이 426 으로 거절한다
     (runner._require_supported_exchange — 버전을 아는 유일한 자리다). 화면은 내려받기 옆에서
     'v10 이상이 필요하다' 를 미리 말해 준다.
+
+    여러 종목 묶음도 **같은 규칙으로** 내준다(2026-11-02). 예전에는 "어느 실행기 버전으로도
+    못 돌린다" 며 여기서 막았는데, 연동 레벨 23부터 레그마다 한 줄로 갈라 돌리므로 그 말이
+    더는 참이 아니다 — 파일로 넣든 빠른 실행으로 넣든 실행기의 같은 자리(launch)가 묶음을
+    가른다. 옛 실행기에 넣으면 세션 시작이 거절한다(runner.supports_portfolio).
     """
     macro = req.macro
-    if macro.is_portfolio():
-        # 여러 종목은 어느 실행기 버전으로도 못 돌린다(runner.PORTFOLIO_UNSUPPORTED_DETAIL 주석 참고).
-        # 세션 시작이 어차피 거절하지만, 그때는 사용자가 파일을 받아 실행기에 넣은 뒤다 — 내려받기에서 말해 준다.
-        raise HTTPException(422, runner_mod.PORTFOLIO_UNSUPPORTED_DETAIL)
     payload = macro.model_dump(mode="json")
     payload["human_summary"] = human_summary(macro)
     # 서명 동봉 — 실행기가 시작할 때 같이 올리면 서버가 "원본 그대로인지" 판별한다.

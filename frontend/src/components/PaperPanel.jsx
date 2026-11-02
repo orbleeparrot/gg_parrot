@@ -5,8 +5,7 @@ import { isLoggedIn } from "../lib/auth.js";
 import { rememberQuickRunCard } from "../lib/quickRunCard.js";
 import InfoTooltip from "./InfoTooltip.jsx";
 import { baseOf, fmtMoney, fmtMoneyCompact, fmtKrw, fmtPrice, fmtQty, quoteOf } from "../lib/format.js";
-import { isEvenWeights } from "../lib/portfolio.js";
-import { macroSymbols } from "../lib/portfolio.js";
+import { isEvenWeights, macroSymbols } from "../lib/portfolio.js";
 import { useUsdKrw } from "../lib/usdkrw.js";
 import usePaperSession from "../hooks/usePaperSession.js";
 import { exchangeLabel, isDomestic } from "../lib/exchanges.js";
@@ -140,6 +139,14 @@ export function PaperNextSteps({ macro, valErr, primary = "quickRun", onRegister
           </ul>
         </div></>}
         {error && <div className="t-small text-red-600" role="alert">오류: {error}</div>}
+        {/* 서버는 묶음 내려받기를 막지 않는다 — 실행기가 레그마다 한 줄로 갈라 돌린다. 다만
+            옛 실행기에 넣으면 세션 시작이 거절하므로 파일을 받기 **전에** 말해 준다. 버전
+            숫자는 안 적는다 — 실행기가 스스로 갱신해서 숫자가 먼저 낡는다. */}
+        {macroSymbols(macro).length > 1 && (
+          <p className="t-small text-amber-700">
+            여러 종목 묶음은 실행기가 종목마다 한 줄로 나눠 돌려요. 실행기가 오래됐으면 업데이트한 뒤에 돼요.
+          </p>
+        )}
         <div className="flex items-center gap-3 flex-wrap">
           <button onClick={quickRun} disabled={!!valErr || launching} className={"btn btn-l " + (registerFirst ? "btn-secondary" : "btn-primary")}>
             {launching ? "실행 준비 중…" : "빠른 실행"}

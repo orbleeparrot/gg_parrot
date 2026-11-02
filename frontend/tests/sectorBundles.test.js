@@ -202,3 +202,24 @@ test("묶음에서 거래소를 바꾸면 기본 자금도 따라 바뀐다", ()
   s = answer(s, "mode", "bundle");
   assert.equal(s.answers.balance, 1000);
 });
+
+// --- 묶음을 실행기로 넘길 때의 안내 (2026-11-02) --------------------------------
+
+test("묶음 매크로에는 실행기 버전 안내가 붙는다", async () => {
+  // 서버는 내려받기에서 묶음을 안 막는다(실행기가 레그로 가른다). 다만 옛 실행기에 넣으면
+  // 시작이 거절하므로, 파일을 받기 **전에** 말해 줘야 한다.
+  const macro = { exchange: "upbit", symbol: "KRW-BTC", rule_type: "A",
+                  legs: [{ symbol: "KRW-BTC", weight: 50 }, { symbol: "KRW-ETH", weight: 50 }],
+                  params: { initial_capital: 1000000 } };
+  const html = await renderComponent("src/components/PaperPanel.jsx",
+    { macro, valErr: "" }, { router: true, exportName: "PaperNextSteps" });
+  assert.match(textOf(html), /실행기가 오래됐으면/);
+});
+
+test("종목 하나짜리에는 그 안내가 안 붙는다", async () => {
+  const macro = { exchange: "upbit", symbol: "KRW-BTC", rule_type: "A",
+                  params: { initial_capital: 1000000 } };
+  const html = await renderComponent("src/components/PaperPanel.jsx",
+    { macro, valErr: "" }, { router: true, exportName: "PaperNextSteps" });
+  assert.doesNotMatch(textOf(html), /실행기가 오래됐으면/);
+});

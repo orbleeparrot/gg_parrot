@@ -3,7 +3,10 @@
 왜 외부 자료인가: 우리가 가진 건 24시간 거래대금뿐이다. 시가총액은 유통량이 있어야
 나오므로 거래소 API 로는 만들 수 없다.
 
-**무료 등급은 분당 호출이 빡빡하다.** 연속으로 부르면 429 가 온다. 그래서 오래 캐시하고,
+**무료 등급은 분당 호출이 빡빡하다.** 연속으로 부르면 429 가 온다. 게다가 공개 호출은
+데이터센터 IP 를 자주 막는다 — 운영(Render)에서 추천 묶음이 계속 비어 돌아온 까닭이다.
+``COINGECKO_API_KEY`` 에 무료 Demo 열쇠(분당 30회)를 넣으면 풀린다. Pro 열쇠를 쓸 때는
+``COINGECKO_PLAN=pro`` 를 함께 준다 — 주소와 머리말 이름이 다르다. 그래서 오래 캐시하고,
 실패하면 묵은 값을 그대로 내준다 — 시가총액 순위는 분 단위로 바뀌는 값이 아니라 하루
 묵어도 틀리지 않는다. 끝내 못 받으면 ``None`` 을 돌려주고, 부르는 쪽이 추천 묶음을 아예
 안 보여 준다. 틀린 구성을 보여 주느니 없는 게 낫다.
@@ -22,7 +25,7 @@ from ..http_runtime import get_http_client
 log = logging.getLogger(__name__)
 
 BASE = "https://api.coingecko.com/api/v3"
-MARKETS = f"{BASE}/coins/markets"
+PRO_BASE = "https://pro-api.coingecko.com/api/v3"
 
 # 순위는 하루 묵어도 쓸 만하다. 짧게 잡으면 429 만 더 받는다.
 CACHE_TTL_S = int(os.environ.get("COINGECKO_TTL_S", 6 * 3600))
@@ -53,10 +56,26 @@ class CoinGeckoUnavailable(RuntimeError):
     """한 번도 못 받았다 — 묵은 값조차 없다."""
 
 
+def _plan() -> tuple[str, str, str]:
+    """``(주소, 머리말 이름, 열쇠)``. 열쇠가 없으면 열쇠 칸이 빈 글자다.
+
+    **부를 때마다 읽는다.** 들여올 때 한 번만 읽으면 운영에서 열쇠를 넣어도 다시 띄우기
+    전까지 안 먹는다. 빈 환경변수는 없는 것으로 친다 — 빈 열쇠를 보내면 400 이 온다.
+    """
+    key = os.environ.get("COINGECKO_API_KEY", "").strip()
+    if os.environ.get("COINGECKO_PLAN", "").strip().lower() == "pro":
+        return PRO_BASE, "x-cg-pro-api-key", key
+    return BASE, "x-cg-demo-api-key", key
+
+
 def _fetch(params: dict) -> list[dict]:
+    base, header, key = _plan()
+    headers = {"accept": "application/json"}
+    if key:
+        headers[header] = key
     client = get_http_client()
-    response = client.get(MARKETS, params=params, timeout=TIMEOUT_S,
-                          headers={"accept": "application/json"})
+    response = client.get(f"{base}/coins/markets", params=params, timeout=TIMEOUT_S,
+                          headers=headers)
     response.raise_for_status()
     body = response.json()
     if not isinstance(body, list):

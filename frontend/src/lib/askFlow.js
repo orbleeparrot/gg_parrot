@@ -1,6 +1,6 @@
 // 껄무새에게 물어볼까? v2 — 카드 상태 머신(순수 리듀서). UI 는 이 상태만 그린다.
 // 규칙: 안정형은 선물을 못 고른다 · 종목은 후보/직접 고르기 목록에서 하나만 · 뒤로 가면 세션을 버린다 · 자유 입력 없음.
-import { HORIZONS, LEVERAGES, MARKETS, PROFILES, WATCH_LEVELS } from "./askCopy.js";
+import { BUNDLE_HORIZONS, HORIZONS, LEVERAGES, MARKETS, PROFILES, WATCH_LEVELS } from "./askCopy.js";
 import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "./exchanges.js";
 
 // 거래소 바로 다음에 갈림길을 둔다 — 종목 하나로 볼지, 여러 종목을 묶어서 볼지.
@@ -11,6 +11,8 @@ export const MODES = [
   { value: "bundle", label: "여러 종목 묶음", hint: "자금을 나눠 담아 볼래요" },
 ];
 export const isBundle = (answers) => answers?.mode === "bundle";
+// 묶음에서 고를 수 있는 운용기간. 1주는 묶음에 없다 — 서버도 같은 것을 막는다(ask.BUNDLE_BANNED_HORIZONS).
+export const horizonsFor = (answers) => (isBundle(answers) ? BUNDLE_HORIZONS : HORIZONS);
 export const PROFILE_ORDER = ["stable", "balanced", "aggressive"];
 // 바이낸스 USDT 짝 모양 — 서버의 _SYMBOL_RE 와 같은 규칙.
 const SYMBOL_RE = /^[A-Z0-9]{1,20}USDT$/;
@@ -111,7 +113,7 @@ export function reduce(state, action) {
         return settle(dropFlow(state), { ...clearFrom(answers, "market"), market, leverage });
       }
       if (step === "horizon") {
-        if (!HORIZONS.some((h) => h.value === value)) return state;
+        if (!horizonsFor(answers).some((h) => h.value === value)) return state;
         return settle(dropFlow(state), { ...clearFrom(answers, "horizon"), horizon: value });
       }
       if (step === "watch") {
@@ -244,7 +246,7 @@ export function answerLabel(step, answers) {
     if (answers.market === "futures") return `선물 ${answers.leverage}x`;
     return MARKETS.find((m) => m.value === answers.market)?.label ?? "";
   }
-  if (step === "horizon") return HORIZONS.find((h) => h.value === answers.horizon)?.label ?? "";
+  if (step === "horizon") return horizonsFor(answers).find((h) => h.value === answers.horizon)?.label ?? "";
   if (step === "watch") return WATCH_LEVELS.find((w) => w.value === answers.watch)?.label ?? "";
   return "";
 }

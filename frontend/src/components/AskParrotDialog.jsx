@@ -9,9 +9,9 @@ import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
 import CheckIcon from "./CheckIcon.jsx";
 import {
-  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, BUNDLE_PRESET_LABEL, BUNDLE_PROMPT, BUNDLE_RUN_NOTE,
+  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, BUNDLE_PROMPT, BUNDLE_RUN_NOTE,
   CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
-  FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, HORIZONS, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
+  FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
   NO_QUOTA_TEXT, OPENING_TEXT, REFUNDED_TEXT, SHORT_BAR_WARN, PREV_LABEL, PROFILES, READY_BUTTON, READY_TEXT, RESTART_LABEL, RETURN_LABEL,
   RUNNING_TEXT, SPOT_HINT, STABLE_NO_FUTURES, STEP_PROMPTS, UNAVAILABLE_TEXT, VS_HOLD_LABEL,
@@ -21,7 +21,7 @@ import { useSymbolList } from "../hooks/useSymbolList.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import {
   MAX_BUNDLE_SYMBOLS, MODES, PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer,
-  initialState, isBundle, readyToAsk, reduce, toAskRequest,
+  horizonsFor, initialState, isBundle, readyToAsk, reduce, toAskRequest,
   toCandidatesRequest, validBalance, formatAmountInput, parseAmountInput,
 } from "../lib/askFlow.js";
 import {
@@ -32,7 +32,8 @@ import {
 import { coinName } from "../lib/macroSource.js";
 import { baseOf, quoteOf } from "../lib/format.js";
 import { usePortfolioPresets } from "../hooks/usePortfolioPresets.js";
-import { macroSymbols } from "../lib/portfolio.js";
+import { macroSymbols, splitBundles } from "../lib/portfolio.js";
+import { BundleCards } from "./BundleCards.jsx";
 import { RULE_TYPES } from "../lib/macro.js";
 import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "../lib/exchanges.js";
 import "./AskParrotDialog.css";
@@ -81,7 +82,8 @@ function stepOptions(step, answers) {
       ...LEVERAGES.map((lev) => ({ key: `futures-${lev}`, label: `${MARKETS[1].label} ${lev}x`, hint: "", value: { market: "futures", leverage: lev }, disabled: !ok, title: ok ? undefined : isDomestic(answers.exchange) ? DOMESTIC_SPOT_ONLY : STABLE_NO_FUTURES })),
     ];
   }
-  if (step === "horizon") return HORIZONS.map((h) => ({ key: h.value, label: h.label, hint: h.hint, value: h.value }));
+  // 묶음은 1주를 못 고른다 — 자금을 쪼갠 다음 이레면 레그마다 거래가 거의 안 나온다.
+  if (step === "horizon") return horizonsFor(answers).map((h) => ({ key: h.value, label: h.label, hint: h.hint, value: h.value }));
   if (step === "watch") return WATCH_LEVELS.map((w) => ({ key: w.value, label: w.label, hint: w.hint, value: w.value }));
   return [];
 }
@@ -238,15 +240,13 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
 // 한 달 범위에서 어디쯤인지는 서버가 만든 문장(range_note)으로만 말한다. 사용자가
 // 아쉬워한 "이미 고점에 올라간 코인" 에 답하는 줄이고, 위치 퍼센트는 그 자체로는
 // 설명이 필요한 값이라 숫자로 띄우지 않는다.
-// `picked` 가 null 이면 종목 하나 고르기(누르면 바로 넘어간다), boolean 이면 묶음 고르기
-// (누를 때마다 넣고 빼므로 지금 담겼는지 눈에 보여야 한다).
-function CandidateRow({ c, marketText, onPick, disabled, i, picked = null }) {
+// 종목 하나 고르기 전용이다 — 누르면 바로 넘어간다. 묶음 쪽은 분야 카드(BundleCards)로
+// 묻는다(2026-11-02).
+function CandidateRow({ c, marketText, onPick, disabled, i }) {
   const kr = coinName(c.symbol);
-  const multi = picked !== null;
   return (
-    <button type="button" className={"ask-cand ask-in" + (picked ? " is-picked" : "")}
+    <button type="button" className="ask-cand ask-in"
       style={{ "--i": i, "--coin": coinTint(c.base) || "transparent" }}
-      aria-pressed={multi ? !!picked : undefined}
       onClick={() => onPick(c.symbol)} disabled={disabled}>
       <CoinIcon symbol={c.symbol} size={32} alt="" className="ask-logo" />
       <span className="ask-cand-name">
@@ -259,31 +259,21 @@ function CandidateRow({ c, marketText, onPick, disabled, i, picked = null }) {
       </span>
       <span className="ask-stat is-rank"><span className="ask-lbl">거래대금</span><span className="ask-stat-v"><b className="num">{c.volume_rank}</b>위</span></span>
       <span className="ask-stat is-range"><span className="ask-lbl">하루 변동</span><span className="ask-stat-v"><b className="num">{c.range_pct}</b>%</span></span>
-      {multi ? <span className="ask-pick" aria-hidden="true">{picked ? "✓" : "+"}</span>
-             : <span className="ask-chev" aria-hidden="true" />}
+      <span className="ask-chev" aria-hidden="true" />
     </button>
   );
 }
 
-// 추천 묶음 줄 — 빌더와 같은 끝점(/api/portfolios)을 쓴다. 못 받으면 줄을 안 그린다.
-function BundlePresets({ exchange, market, disabled, onPick, i }) {
-  const presets = usePortfolioPresets(exchange, market || "spot");
-  if (!presets.length) return null;
-  return (
-    <div className="ask-presets ask-in" style={{ "--i": i }}>
-      <span className="ask-presets-label">{BUNDLE_PRESET_LABEL}</span>
-      <div className="ask-presets-row">
-        {presets.map((preset) => (
-          <button key={preset.key} type="button" className="ask-preset" disabled={disabled}
-            title={preset.lead}
-            aria-label={`${preset.name} · ${preset.count}종목 · ${preset.lead}`}
-            onClick={() => onPick(preset.legs.map((leg) => leg.symbol))}>
-            {preset.name}<small>{preset.count}종목</small>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
+// 묶음 후보 — 빌더와 같은 끝점(/api/portfolios)을 쓰되 **분야 묶음만** 쓴다.
+// "시가총액 TOP10" 같은 기준 묶음은 분야가 아니라 큰 것들의 목록이라 빌더에만 둔다.
+//
+// 아직 못 받았으면 아무것도 안 그린다 — 빈 목록을 바로 그리면 "불러오지 못했어요" 가
+// 한 번 번쩍이고 사라진다.
+function AskBundles({ exchange, market, marketText, picked, disabled, onPick, i }) {
+  const { items, ready } = usePortfolioPresets(exchange, market || "spot");
+  if (!ready) return null;
+  return <BundleCards items={splitBundles(items).sectors} marketText={marketText}
+                      picked={picked} disabled={disabled} onPick={onPick} i={i} />;
 }
 
 // 직접 고를래요 — 빠른 선택 칩 + 거래 가능 종목 검색(빌더 검색창과 같은 목록).
@@ -686,14 +676,17 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     stage = (
       <>
         <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{bundle ? BUNDLE_PROMPT : CANDIDATES_PROMPT}</span></p>
-        {bundle ? <BundlePresets i={0.5} exchange={state.answers.exchange} market={state.answers.market}
-                                 disabled={lock} onPick={(symbols) => dispatch({ type: "setBundle", symbols })} /> : null}
-        {n ? (
+        {/* 묶음 쪽은 종목을 따로따로 늘어놓지 않는다 — 서로 아무 사이도 아닌 종목을
+            체크해 담으면 나눠 담는 까닭이 "그냥 여러 개" 가 된다. 분야로 묻는다. */}
+        {bundle ? (
+          <AskBundles i={0.5} exchange={state.answers.exchange} market={state.answers.market}
+            marketText={marketText} picked={picked} disabled={lock}
+            onPick={(symbols) => dispatch({ type: "setBundle", symbols })} />
+        ) : n ? (
           <div className="ask-cands">
             {state.candidates.map((c, idx) => (
               <CandidateRow key={c.symbol} c={c} i={idx + 1} marketText={marketText} disabled={lock}
-                picked={bundle ? picked.includes(c.symbol) : null}
-                onPick={(sym) => (bundle ? toggle(sym) : leaveThen(() => pickSymbol(sym)))} />
+                onPick={(sym) => leaveThen(() => pickSymbol(sym))} />
             ))}
           </div>
         ) : null}

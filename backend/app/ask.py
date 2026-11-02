@@ -128,6 +128,13 @@ SHORT_PERIODS = ("1w", "1m")
 
 # v2(2026-09-23) — 카드가 사람 말을 받고 서버가 기술 값으로 바꾼다.
 HORIZONS = ("days", "weeks", "months", "long")
+# 묶음에는 쓸 수 없는 기간. 자금을 여럿으로 쪼갠 다음 이레(1주)를 보면 레그마다 거래가
+# 한두 번 나오거나 아예 안 나와, 카드가 종목의 성질이 아니라 운을 보여 준다.
+BUNDLE_BANNED_HORIZONS = ("days",)
+# 묶음에는 쓸 수 없는 기간. 자금을 여럿으로 쪼갠 다음 이레(1주)를 보면 레그마다 거래가
+# 한두 번 나오거나 아예 안 나와, 카드가 종목의 성질이 아니라 운을 보여 준다.
+BUNDLE_MIN_HORIZON = "weeks"
+BUNDLE_BANNED_HORIZONS = ("days",)
 WATCH_LEVELS = ("rarely", "sometimes", "often", "constantly")
 
 _HORIZON_PERIOD = {"days": "1w", "weeks": "3m", "months": "6m", "long": "1y"}
@@ -1339,6 +1346,14 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         native = symbol.startswith("KRW-") if is_domestic(answers.exchange) else symbol.endswith("USDT")
         if not native or symbol not in allowed:
             raise AskError(422, "이번 질문에서 살펴볼 수 있는 종목이 아니에요.")
+    # 화면에서도 1주 칸을 빼지만 여기서 다시 막는다 — 예전 화면을 띄워 둔 탭이 그대로
+    # 통과하면 안 된다.
+    if len(picked) > 1 and answers.invest_horizon in BUNDLE_BANNED_HORIZONS:
+        raise AskError(422, "여러 종목 묶음은 3개월부터 살펴봐요. 기간을 다시 골라 주세요.")
+    # 화면에서도 1주 칸을 빼지만 여기서 다시 막는다 — 예전 화면을 띄워 둔 탭이 그대로
+    # 통과하면 안 된다.
+    if len(picked) > 1 and answers.invest_horizon in BUNDLE_BANNED_HORIZONS:
+        raise AskError(422, "여러 종목 묶음은 3개월부터 살펴봐요. 기간을 다시 골라 주세요.")
 
     with _IN_FLIGHT_LOCK:
         if user.id in _IN_FLIGHT:

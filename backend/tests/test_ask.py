@@ -1364,3 +1364,43 @@ def test_without_symbols_it_still_asks_about_one(monkeypatch):
     """옛 클라이언트가 그대로 돌아야 한다."""
     req = ask.AskRequest(session_id=1, symbol=" btcusdt ")
     assert req.picked() == ["BTCUSDT"]
+
+
+# --- 묶음의 운용기간 (2026-11-02) ---------------------------------------------
+#
+# 설계: docs/superpowers/specs/2026-11-02-sector-bundles-design.md
+
+def test_a_bundle_cannot_be_asked_on_the_one_week_window(monkeypatch):
+    """묶음에 '며칠'(1주)은 쓸 수 없는 칸이다.
+
+    자금을 여럿으로 쪼갠 다음 이레를 보면 레그마다 거래가 한두 번 나오거나 아예 안
+    나온다. 그 카드는 종목의 성질이 아니라 운을 보여 준다. 화면에서도 뺐지만, 예전
+    화면을 띄워 둔 탭이 그대로 통과하면 안 되므로 서버가 다시 막는다.
+    """
+    tok, _ = _signup()
+    flow = _start_flow(tok, monkeypatch, invest_horizon="days")
+    r = client.post("/api/ask/macros",
+                    json={"session_id": flow["session_id"], "symbol": "BTCUSDT",
+                          "symbols": ["BTCUSDT", "ETHUSDT"]}, headers=_auth(tok))
+    assert r.status_code == 422
+    assert "3개월" in r.text
+
+
+def test_a_bundle_on_a_longer_window_is_not_blocked(monkeypatch):
+    """3개월부터는 막지 않는다 — 막는 것은 1주 하나뿐이다."""
+    tok, _ = _signup()
+    flow = _start_flow(tok, monkeypatch, invest_horizon="weeks")
+    r = client.post("/api/ask/macros",
+                    json={"session_id": flow["session_id"], "symbol": "BTCUSDT",
+                          "symbols": ["BTCUSDT", "ETHUSDT"]}, headers=_auth(tok))
+    assert "3개월부터" not in r.text
+
+
+def test_one_symbol_still_asks_on_the_one_week_window(monkeypatch):
+    """종목 하나 쪽 흐름은 한 글자도 안 바뀐다."""
+    tok, _ = _signup()
+    flow = _start_flow(tok, monkeypatch, invest_horizon="days")
+    r = client.post("/api/ask/macros",
+                    json={"session_id": flow["session_id"], "symbol": "BTCUSDT"},
+                    headers=_auth(tok))
+    assert "3개월부터" not in r.text

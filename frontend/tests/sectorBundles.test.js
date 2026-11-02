@@ -146,18 +146,22 @@ function askUpbitBundle() {
   return s;
 }
 
-test("묶음을 고르면 다음 질문은 성향이다 — 자금을 안 묻는다", () => {
-  assert.equal(askUpbitBundle().step, "profile");
+test("묶음도 쓸 수 있는 금액을 묻는다", () => {
+  // 종목마다 나눠 담을 돈이라 금액이 곧 '종목당 얼마' 다 — 기본값으로 때우면
+  // 사용자가 자기 금액으로 본 결과가 아니게 된다.
+  assert.equal(askUpbitBundle().step, "balance");
+  assert.equal(askUpbitBundle().answers.balance, null);
 });
 
-test("자금은 기본값이 들어간다 — 원화는 100만, 달러는 1,000", () => {
-  assert.equal(askUpbitBundle().answers.balance, 1_000_000);
-  let s = answer(answer(initialState(), "exchange", "binance"), "mode", "bundle");
-  assert.equal(s.answers.balance, 1000);
+test("금액 다음은 성향이다", () => {
+  const s = answer(askUpbitBundle(), "balance", 500_000);
+  assert.equal(s.answers.balance, 500_000);
+  assert.equal(s.step, "profile");
 });
 
-test("국내 거래소 묶음은 시장도 안 묻는다 — 현물 말고 없다", () => {
-  const s = answer(askUpbitBundle(), "profile", "balanced");
+test("국내 거래소 묶음은 시장을 안 묻는다 — 현물 말고 없다", () => {
+  let s = answer(askUpbitBundle(), "balance", 500_000);
+  s = answer(s, "profile", "balanced");
   assert.equal(s.step, "horizon");
   assert.equal(s.answers.market, "spot");
   assert.equal(s.answers.leverage, 1);
@@ -165,12 +169,14 @@ test("국내 거래소 묶음은 시장도 안 묻는다 — 현물 말고 없�
 
 test("바이낸스 묶음은 시장을 묻는다 — 선물이 있다", () => {
   let s = answer(answer(initialState(), "exchange", "binance"), "mode", "bundle");
+  s = answer(s, "balance", 1000);
   s = answer(s, "profile", "balanced");
   assert.equal(s.step, "market");
 });
 
-test("거래소 · 묶음 · 성향 · 기간이면 바로 물어볼 준비가 된다", () => {
-  let s = answer(askUpbitBundle(), "profile", "balanced");
+test("거래소 · 금액 · 성향 · 기간이면 물어볼 준비가 된다", () => {
+  let s = answer(askUpbitBundle(), "balance", 500_000);
+  s = answer(s, "profile", "balanced");
   s = answer(s, "horizon", "weeks");
   assert.equal(s.phase, "ready", "보는 빈도를 더 묻지 않는다");
 });
@@ -187,20 +193,13 @@ test("종목 하나 쪽 질문은 일곱 그대로다", () => {
 });
 
 test("서버로 보내는 모양에는 보는 빈도가 없다", () => {
-  let s = answer(askUpbitBundle(), "profile", "balanced");
+  let s = answer(askUpbitBundle(), "balance", 500_000);
+  s = answer(s, "profile", "balanced");
   s = answer(s, "horizon", "months");
-  const body = toBundlesRequest(s.answers);
-  assert.deepEqual(body, {
-    exchange: "upbit", account_balance: 1_000_000, risk_profile: "balanced",
+  assert.deepEqual(toBundlesRequest(s.answers), {
+    exchange: "upbit", account_balance: 500_000, risk_profile: "balanced",
     market: "spot", leverage: 1, invest_horizon: "months",
   });
-});
-
-test("묶음에서 거래소를 바꾸면 기본 자금도 따라 바뀐다", () => {
-  let s = answer(askUpbitBundle(), "profile", "balanced");
-  s = answer(s, "exchange", "binance");
-  s = answer(s, "mode", "bundle");
-  assert.equal(s.answers.balance, 1000);
 });
 
 // --- 묶음을 실행기로 넘길 때의 안내 (2026-11-02) --------------------------------

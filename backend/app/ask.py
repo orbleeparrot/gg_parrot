@@ -29,7 +29,7 @@ from .ai_runtime import ai_available, ai_cache_key, default_model, get_ai_client
 from .data import NoSpotDataError
 from .data import symbols as symbols_mod
 from .data.binance import MAX_BACKTEST_BARS, PERIOD_PRESET_DAYS
-from . import ask_candidates, ask_daily, hotcoins
+from . import ask_candidates, ask_daily, hotcoins, portfolios
 from .ask_candidates import MAX_PICKS, MIN_PICKS
 from . import points as points_mod
 from .db import AskExtraCredit, AskMacroSession, User
@@ -131,6 +131,13 @@ HORIZONS = ("days", "weeks", "months", "long")
 # 묶음에는 쓸 수 없는 기간. 자금을 여럿으로 쪼갠 다음 이레(1주)를 보면 레그마다 거래가
 # 한두 번 나오거나 아예 안 나와, 카드가 종목의 성질이 아니라 운을 보여 준다.
 BUNDLE_BANNED_HORIZONS = ("days",)
+BUNDLE_HORIZON_REFUSED = "여러 종목 묶음은 3개월부터 살펴봐요. 기간을 다시 골라 주세요."
+
+# 분야 묶음은 **일봉으로만** 돈다. 보는 빈도를 안 묻기로 했으니 봉은 서버가 정하는데,
+# 짧은 봉을 고르면 캔들 받는 데만 예산이 날아간다 — 실측(2026-11-02 · 업비트 여섯 분야):
+# 4시간봉 1년은 받는 데만 29.4초, 일봉 1년은 4.8초다. 일봉이면 여섯 분야를 다 돌려도
+# 2.3~6.6초라 예산(40초) 안에 넉넉히 들어간다.
+BUNDLE_INTERVAL = "1d"
 # 묶음에는 쓸 수 없는 기간. 자금을 여럿으로 쪼갠 다음 이레(1주)를 보면 레그마다 거래가
 # 한두 번 나오거나 아예 안 나와, 카드가 종목의 성질이 아니라 운을 보여 준다.
 BUNDLE_MIN_HORIZON = "weeks"
@@ -1349,11 +1356,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
     # 화면에서도 1주 칸을 빼지만 여기서 다시 막는다 — 예전 화면을 띄워 둔 탭이 그대로
     # 통과하면 안 된다.
     if len(picked) > 1 and answers.invest_horizon in BUNDLE_BANNED_HORIZONS:
-        raise AskError(422, "여러 종목 묶음은 3개월부터 살펴봐요. 기간을 다시 골라 주세요.")
-    # 화면에서도 1주 칸을 빼지만 여기서 다시 막는다 — 예전 화면을 띄워 둔 탭이 그대로
-    # 통과하면 안 된다.
-    if len(picked) > 1 and answers.invest_horizon in BUNDLE_BANNED_HORIZONS:
-        raise AskError(422, "여러 종목 묶음은 3개월부터 살펴봐요. 기간을 다시 골라 주세요.")
+        raise AskError(422, BUNDLE_HORIZON_REFUSED)
 
     with _IN_FLIGHT_LOCK:
         if user.id in _IN_FLIGHT:
@@ -1408,26 +1411,7 @@ def run_ask(db: Session, user: User, req: AskRequest, run_backtest: Callable[[Ma
         # "한 번 돌려주면 끝" 이 아니라 **마지막 시도 기준**이다. 그러지 않으면 구멍이 생긴다:
         # 안 나올 종목으로 한 번 받아 환불시키고 '다른 종목으로' 눌러 결과를 받으면 그 세션이
         # 공짜가 된다(세션당 6회까지 되므로 작지 않다). 결과가 나오면 다시 차감한다.
-        want_refund = not results
-        if want_refund != bool(row.refunded):
-            row.refunded = want_refund
-            if row.paid:
-                # 추가권 세션이면 추가권도 같이 풀고 되묶는다. 추가권은 그날 안에서 서로
-                # 바꿔 쓸 수 있으므로(같은 값·같은 날) 아무 미사용 추가권이나 되묶어도 된다.
-                mine = [c for c in _credits_today(db, user) if c.used_session_id == row.id]
-                if want_refund:
-                    for credit in mine:
-                        credit.used_session_id = None
-                        db.add(credit)
-                elif not mine:
-                    spare = _unused_credit(db, user)
-                    if spare is not None:
-                        spare.used_session_id = row.id
-                        db.add(spare)
-                    else:
-                        # 되묶을 추가권이 없다(다른 세션이 썼다). 횟수를 두 번 받아 가는 것보다
-                        # 한 번 못 받는 쪽이 낫다 — 무료 한도로 센다.
-                        row.paid = False
+        _settle_use(db, user, row, bool(results))
         db.add(row)
         db.commit()
     finally:
@@ -1472,15 +1456,163 @@ def run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
             _IN_FLIGHT.discard(user.id)
 
 
-def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
-    """run_candidates 의 알맹이 — 락을 잡은 채로 한도 검사·차감·후보 생성을 한다."""
-    identity = (user.id, user.auth_version)
+# --- 분야 묶음으로 물어보기 (2026-11-02) --------------------------------------
+#
+# 설계: docs/superpowers/specs/2026-11-02-sector-bundles-design.md
+#
+# **분야를 고르게 하지 않는다.** 여섯을 다 돌려서 카드가 나온 분야만 내놓는다.
+#
+# 고르는 자리를 두면 "눌렀는데 아무것도 안 나오는" 분야를 누르게 된다. 미리 돌려 두고
+# 캐시에서 꺼내는 길도 생각했지만, 그러면 '나온다' 가 몇 시간 전 기준이라 같은 일이 생긴다.
+# 그 자리에서 다 돌리는 쪽이 늘 참말이고, 실측(2026-11-02 · 업비트 여섯 분야 · 일봉)으로
+# 성향 3 × 기간 3 어느 조합이든 2.3~6.6초라 예산(40초) 안에 들어간다.
+
+
+class BundlesRequest(CandidatesRequest):
+    """묶음은 보는 빈도를 안 묻는다 — 봉은 서버가 일봉으로 정한다(BUNDLE_INTERVAL).
+
+    ``watch_frequency`` 를 지우지 않고 기본값만 둔다. 지우면 부모가 들고 있는 검사(국내
+    거래소 잔액 · 성향별 선물 · 현물 레버리지)를 쓰려고 같은 모델을 한 벌 더 만들어야 한다.
+    """
+
+    watch_frequency: Literal["rarely", "sometimes", "often", "constantly"] = "sometimes"
+
+    @model_validator(mode="after")
+    def _bundle_rules(self) -> "BundlesRequest":
+        if self.invest_horizon in BUNDLE_BANNED_HORIZONS:
+            raise ValueError(BUNDLE_HORIZON_REFUSED)
+        return self
+
+
+def _sector_bundles(req: BundlesRequest) -> list[portfolios.Portfolio]:
+    """그 거래소에서 지금 쓸 수 있는 **분야** 묶음. 기준 묶음(크기 · 거래대금)은 뺀다."""
+    market = "futures" if req.market == "futures" else "spot"
+    return [item for item in portfolios.build(req.exchange, market) if item.kind == "sector"]
+
+
+def run_sector_bundles(db: Session, user: User, req: BundlesRequest,
+                       run_backtest: Callable[[Macro], BacktestResult]) -> dict:
+    if not consented(user):
+        raise AskError(403, "먼저 안내에 동의해 주세요.")
+    with _IN_FLIGHT_LOCK:
+        if user.id in _IN_FLIGHT:
+            raise AskError(429, "아직 지난 질문을 돌리는 중이에요. 잠시만요.")
+        _IN_FLIGHT.add(user.id)
+    try:
+        return _run_sector_bundles(db, user, req, run_backtest)
+    finally:
+        with _IN_FLIGHT_LOCK:
+            _IN_FLIGHT.discard(user.id)
+
+
+def _run_sector_bundles(db: Session, user: User, req: BundlesRequest,
+                        run_backtest: Callable[[Macro], BacktestResult]) -> dict:
     if remaining_today(db, user) <= 0:
         raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
 
+    # 분야를 못 받는 것은 사용자 잘못이 아니다 — **횟수를 잡기 전에** 막는다.
+    bundles = _sector_bundles(req)
+    if not bundles:
+        raise AskError(503, "지금 분야 묶음을 불러오지 못했어요. 잠시 뒤 다시 물어봐 주세요.")
+
+    row, credit = _open_session(db, user, req)
+    release_read_session(db, user, row, credit)
+    period = to_period(req.invest_horizon)
+    # 예산을 분야 수로 나눈다 — 앞의 분야가 다 쓰면 뒤는 한 장도 못 낸다.
+    budget = time_budget_sec() / len(bundles)
+    started = time.monotonic()
+
+    results: list[dict] = []
+    empty: list[str] = []
+    evaluated_any = False
+    for bundle in bundles:
+        symbols = [leg.symbol for leg in bundle.legs]
+        plan = _Plan(risk_profile=req.risk_profile, market=req.market, leverage=req.leverage,
+                     symbols=symbols, period_preset=period, interval=BUNDLE_INTERVAL,
+                     exchange=req.exchange, account_balance=req.account_balance)
+        try:
+            evaluated = evaluate(build_templates(plan)[:MAX_CANDIDATES], run_backtest, budget)
+        except Exception:
+            log.warning("ask: %s 분야를 돌리지 못했다", bundle.name, exc_info=True)
+            evaluated = []
+        evaluated_any = evaluated_any or bool(evaluated)
+        # 분야마다 **한 장**이다. 여섯 분야가 세 장씩 내면 화면에 열여덟 장이 쌓인다.
+        top = select_top(evaluated, req.risk_profile, n=1, period=period, interval=BUNDLE_INTERVAL)
+        if not top:
+            empty.append(bundle.name)
+            continue
+        view = _result_view(top[0])
+        view["sector"] = bundle.name
+        view["sector_lead"] = bundle.lead
+        view["symbols"] = symbols
+        results.append(view)
+
+    row.chosen_symbol = ", ".join(r["sector"] for r in results)
+    row.candidate_count = len(results)
+    row.results_json = json.dumps(
+        [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"],
+          "metrics": r["metrics"]} for r in results], ensure_ascii=False)
+    row.ask_count += 1
+    row.elapsed_ms = int((time.monotonic() - started) * 1000)
+    _settle_use(db, user, row, bool(results))
+    db.add(row)
+    db.commit()
+
+    return {
+        "session_id": row.id,
+        "results": results,
+        # 돌리기는 했는데 어느 분야도 홀딩 문턱을 못 넘었다 — 화면이 추천 대신 그렇게 말한다.
+        "no_edge": evaluated_any and not results,
+        # 안 나온 분야를 말없이 숨기지 않는다. 화면이 한 줄로 말할 수 있어야 한다.
+        "empty_sectors": empty,
+        "refunded": bool(row.refunded),
+        "min_excess_pct": min_excess_pct(period),
+        "interval": BUNDLE_INTERVAL,
+        "period_preset": period,
+        "remaining_today": remaining_today(db, user),
+        "disclaimer": DISCLAIMER,
+        "disclaimer_version": DISCLAIMER_VERSION,
+    }
+
+
+def _settle_use(db: Session, user: User, row: AskMacroSession, has_results: bool) -> None:
+    """보여 줄 게 하나도 없으면 횟수를 돌려준다(2026-10-08 사용자 결정).
+
+    "한 번 돌려주면 끝" 이 아니라 **마지막 시도 기준**이다. 그러지 않으면 구멍이 생긴다:
+    안 나올 종목으로 한 번 받아 환불시키고 '다른 종목으로' 눌러 결과를 받으면 그 세션이
+    공짜가 된다(세션당 6회까지 되므로 작지 않다). 결과가 나오면 다시 차감한다.
+    """
+    want_refund = not has_results
+    if want_refund == bool(row.refunded):
+        return
+    row.refunded = want_refund
+    if not row.paid:
+        return
+    # 추가권 세션이면 추가권도 같이 풀고 되묶는다. 추가권은 그날 안에서 서로 바꿔 쓸 수
+    # 있으므로(같은 값·같은 날) 아무 미사용 추가권이나 되묶어도 된다.
+    mine = [c for c in _credits_today(db, user) if c.used_session_id == row.id]
+    if want_refund:
+        for credit in mine:
+            credit.used_session_id = None
+            db.add(credit)
+    elif not mine:
+        spare = _unused_credit(db, user)
+        if spare is not None:
+            spare.used_session_id = row.id
+            db.add(spare)
+        else:
+            # 되묶을 추가권이 없다(다른 세션이 썼다). 횟수를 두 번 받아 가는 것보다
+            # 한 번 못 받는 쪽이 낫다 — 무료 한도로 센다.
+            row.paid = False
+
+
+def _open_session(db: Session, user: User, req: BaseModel):
+    """하루 횟수 한 번을 잡고 세션 행을 만든다. ``(행, 쓴 추가권 또는 None)``.
+
+    한도 검사와 저장 사이의 창을 닫으려고 행을 **먼저 커밋한다**(v1 과 같은 이유).
+    """
     created_at, created_ms = _now()
     credit = None if free_remaining_today(db, user) > 0 else _unused_credit(db, user)
-    # 한도 검사와 저장 사이의 창을 닫으려고 행을 먼저 커밋한다(v1 과 같은 이유).
     row = AskMacroSession(
         user_id=user.id, day_kst=today_kst(),
         request_json=json.dumps(req.model_dump(), ensure_ascii=False),
@@ -1497,7 +1629,16 @@ def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
         credit.used_session_id = row.id
         db.add(credit)
         db.commit()
+    return row, credit
 
+
+def _run_candidates(db: Session, user: User, req: CandidatesRequest) -> dict:
+    """run_candidates 의 알맹이 — 락을 잡은 채로 한도 검사·차감·후보 생성을 한다."""
+    identity = (user.id, user.auth_version)
+    if remaining_today(db, user) <= 0:
+        raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
+
+    row, credit = _open_session(db, user, req)
     release_read_session(db, user, row, credit)
     reservation_id = row.id
     credit_id = credit.id if credit is not None else None

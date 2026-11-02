@@ -782,6 +782,27 @@ def ask_macros(
         raise HTTPException(status_code=exc.status, detail=exc.message)
 
 
+@app.post("/api/ask/bundles")
+def ask_bundles_route(
+    body: dict,
+    account: User = Depends(auth_mod.current_user_in_session),
+    db: Session = Depends(request_session),
+) -> dict:
+    """분야 묶음으로 물어본다 — 분야를 고르게 하지 않고 다 돌려서 나온 것만 준다.
+
+    하루 횟수를 한 번 쓴다(후보 단계가 따로 없다). 본문은 dict 로 받아 직접 검증한다 —
+    FastAPI 기본 422 는 영문 pydantic 오류 목록이라 프런트가 그대로 한국어 말풍선에 찍는다.
+    """
+    try:
+        req = ask_mod.BundlesRequest(**body)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=_ask_validation_message(exc))
+    try:
+        return ask_mod.run_sector_bundles(db, account, req, lambda macro: _run_any(macro)[0])
+    except ask_mod.AskError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.message)
+
+
 @app.post("/api/ask/candidates")
 def ask_candidates_route(
     body: dict,

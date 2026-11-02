@@ -60,8 +60,10 @@ export const WATCH_LEVELS = [
 export const CANDIDATES_PROMPT = "성향에 맞는 종목을 골라 봤어요. 하나를 고르면 매크로 후보를 보여 드릴게요.";
 // 묶음 쪽은 여러 개를 고른다 — 같은 자리에 다른 말을 쓴다.
 export const BUNDLE_PROMPT = "어느 분야에 나눠 담을까요? 자금은 똑같이 나눠요. 분야 대신 종목을 직접 골라 담아도 돼요.";
-// 묶음 매크로는 아직 실행기로 돌릴 수 없다 — 카드를 보여 주기 전에 먼저 말한다.
-export const BUNDLE_RUN_NOTE = "묶음은 지금 백테스트와 모의 실행까지만 돼요. 실제 매매는 준비 중이에요.";
+// 2026-11-02: 묶음 실거래가 열렸다(서버 연동 레벨 23 · runner_legs.py). 그 전까지 쓰던
+// "실제 매매는 준비 중" 은 이제 거짓말이라 고쳤다. 버전 숫자는 적지 않는다 — 실행기가
+// 스스로 갱신하므로 숫자를 박으면 그게 먼저 낡는다.
+export const BUNDLE_RUN_NOTE = "묶음도 실제 매매로 돌릴 수 있어요. 실행기가 오래됐으면 업데이트한 뒤에 돼요.";
 export const MANUAL_PICK_LABEL = "직접 고를래요";
 
 export const FOLLOW_UPS = [

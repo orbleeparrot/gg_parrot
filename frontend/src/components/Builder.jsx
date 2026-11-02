@@ -10,6 +10,7 @@ import CoinIcon from "./CoinIcon.jsx";
 import "./Builder.css";
 import { useSymbolList } from "../hooks/useSymbolList.js";
 import { usePortfolioPresets } from "../hooks/usePortfolioPresets.js";
+import { BundleChips } from "./BundleChips.jsx";
 import { useExchangeSwitch } from "../hooks/useExchangeSwitch.js";
 import { searchSymbols, resolveSymbol, marketTags } from "../lib/symbolSearch.js";
 import { Icon } from "./icons.jsx";
@@ -159,7 +160,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
   // 버튼이 하던 일이고, 없으면 막 상장된 종목을 찾을 길이 없다. 잘못된 종목은 고를 때 canChoose 가 막는다.
   const { items, loading, error, reload, stale, canChoose } = useSymbolList(exchange);
   // 추천 묶음 — 없으면 줄을 안 그린다. 종목 검색은 이것과 상관없이 그대로 쓸 수 있어야 한다.
-  const presets = usePortfolioPresets(exchange, market);
+  const { items: presets } = usePortfolioPresets(exchange, market);
   const rootRef = useRef(null);
   const blurTimer = useRef(null);
   const listId = useId().replace(/:/g, "");
@@ -248,27 +249,7 @@ function SymbolPicker({ value, onChange, weights = "", onWeights = null, exchang
 
   return (
     <div className="bd-symbols" ref={rootRef}>
-      {presets.length > 0 && (
-        <div className="bd-presets">
-          <span className="bd-presets-label">추천 묶음</span>
-          <div className="bd-presets-row">
-            {presets.map((preset) => (
-              <button
-                key={preset.key}
-                type="button"
-                className="bd-preset"
-                title={preset.lead}
-                /* 보이는 글자만으로는 이름이 안 읽힌다 — title 이 이름 자리를 가져간다. */
-                aria-label={`${preset.name} · ${preset.count}종목 · ${preset.lead}`}
-                onClick={() => applyPreset(preset)}
-              >
-                {preset.name}
-                <small>{preset.count}종목</small>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <BundleChips items={presets} onPick={applyPreset} />
       <div className={"bd-search" + (full ? " is-full" : "")}>
         <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="9" cy="9" r="5.5" /><path d="M13.5 13.5 17 17" /></svg>
         <input

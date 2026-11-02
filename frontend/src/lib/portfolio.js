@@ -51,3 +51,26 @@ export function isEvenWeights(legs) {
   if (w.some((n) => !Number.isFinite(n))) return false;
   return Math.max(...w) - Math.min(...w) < 0.02;
 }
+
+// 묶음을 두 줄로 가른다 — 분야 묶음(kind="sector")과 기준 묶음(크기 · 거래대금).
+// kind 를 모르는 옛 응답은 **기준 쪽**에 둔다. 분야 줄에 올리면 분야가 아닌 것이
+// 분야 자리에 앉는다 — 모를 때는 원래 자리가 맞다.
+export function splitBundles(items) {
+  const rows = Array.isArray(items) ? items : [];
+  return {
+    sectors: rows.filter((item) => item?.kind === "sector"),
+    sizes: rows.filter((item) => item?.kind !== "sector"),
+  };
+}
+
+// 묶음에 붙는 숫자 두 칸. 서버가 한 레그라도 못 구했으면 `null` 이고, 화면은 칸을 안 그린다.
+// 0 을 적으면 화면이 그걸 '거래가 없다' 로 읽는다.
+export function bundleStatPhrases(stats) {
+  if (!stats) return null;
+  const raw = [stats.rank_min, stats.rank_max, stats.range_avg_pct];
+  // `Number(null)` 과 `Number("")` 은 0 이다 — 빈 칸을 숫자로 읽으면 '1위' 가 지어진다.
+  if (raw.some((v) => v === null || v === undefined || v === "")) return null;
+  const [low, high, avg] = raw.map(Number);
+  if (![low, high, avg].every((n) => Number.isFinite(n))) return null;
+  return { rank: low === high ? `${low}위` : `${low}~${high}위`, range: `${avg.toFixed(1)}%` };
+}

@@ -38,6 +38,16 @@ export const HORIZONS = [
   { value: "long", label: "길게", hint: "오래 들고" },
 ];
 
+// 묶음은 '며칠'(1주)을 뺀다 — 자금을 여럿으로 쪼갠 다음 이레를 보면 레그마다 거래가
+// 한두 번 나오거나 아예 안 나와, 카드가 종목의 성질이 아니라 운을 보여 준다.
+// 넘기는 값은 그대로라 서버는 안 바뀐다. 두루뭉술한 말 대신 실제 구간을 적는다 —
+// 뒤에서 이미 3개월 · 6개월 · 1년을 쓰고 있었다.
+export const BUNDLE_HORIZONS = [
+  { value: "weeks", label: "3개월", hint: "짧게 굴려 보기" },
+  { value: "months", label: "6개월", hint: "적당히" },
+  { value: "long", label: "1년", hint: "오래 들고" },
+];
+
 export const WATCH_LEVELS = [
   { value: "rarely", label: "거의 못 봐요", hint: "하루 한 번쯤" },
   { value: "sometimes", label: "가끔 봐요", hint: "몇 시간에 한 번" },
@@ -49,8 +59,7 @@ export const WATCH_LEVELS = [
 
 export const CANDIDATES_PROMPT = "성향에 맞는 종목을 골라 봤어요. 하나를 고르면 매크로 후보를 보여 드릴게요.";
 // 묶음 쪽은 여러 개를 고른다 — 같은 자리에 다른 말을 쓴다.
-export const BUNDLE_PROMPT = "묶을 종목을 골라 주세요. 둘부터 열까지 담을 수 있고, 자금은 똑같이 나눠요.";
-export const BUNDLE_PRESET_LABEL = "추천 묶음";
+export const BUNDLE_PROMPT = "어느 분야에 나눠 담을까요? 자금은 똑같이 나눠요. 분야 대신 종목을 직접 골라 담아도 돼요.";
 // 묶음 매크로는 아직 실행기로 돌릴 수 없다 — 카드를 보여 주기 전에 먼저 말한다.
 export const BUNDLE_RUN_NOTE = "묶음은 지금 백테스트와 모의 실행까지만 돼요. 실제 매매는 준비 중이에요.";
 export const MANUAL_PICK_LABEL = "직접 고를래요";

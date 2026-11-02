@@ -32,17 +32,19 @@ function load(exchange, market) {
   return promise;
 }
 
+// ``ready`` 는 **한 번이라도 답을 받았는지**다. 이걸 안 주면 받는 동안의 빈 목록과 정말
+// 못 받은 빈 목록이 같아 보여서, 화면에 "불러오지 못했어요" 가 한 번 번쩍이고 사라진다.
 export function usePortfolioPresets(exchange = "binance", market = "spot") {
   const key = keyOf(exchange, market);
-  const [items, setItems] = useState(() => cache.get(key) || []);
+  const [state, setState] = useState(() => ({ items: cache.get(key) || [], ready: cache.has(key) }));
   useEffect(() => {
     let alive = true;
     // 이미 받아 둔 것이 있으면 그걸로 먼저 그린다 — 거래소를 바꿀 때 줄이 깜빡이지 않게.
-    setItems(cache.get(key) || []);
-    load(exchange, market).then((rows) => { if (alive) setItems(rows); });
+    setState({ items: cache.get(key) || [], ready: cache.has(key) });
+    load(exchange, market).then((rows) => { if (alive) setState({ items: rows, ready: true }); });
     return () => { alive = false; };
   }, [exchange, key, market]);
-  return items;
+  return state;
 }
 
 export const resetPortfolioPresets = () => { cache.clear(); inflight.clear(); };

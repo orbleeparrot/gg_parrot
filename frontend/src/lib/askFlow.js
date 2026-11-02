@@ -13,6 +13,20 @@ export const MODES = [
 export const isBundle = (answers) => answers?.mode === "bundle";
 // 묶음에서 고를 수 있는 운용기간. 1주는 묶음에 없다 — 서버도 같은 것을 막는다(ask.BUNDLE_BANNED_HORIZONS).
 export const horizonsFor = (answers) => (isBundle(answers) ? BUNDLE_HORIZONS : HORIZONS);
+
+// 묶음은 **셋만 묻는다** — 거래소 · 성향 · 기간(2026-11-02).
+//
+// 보는 빈도는 봉 간격을 정하는 질문인데 사용자가 감 잡을 수 있는 값이 아니다. 서버가
+// 일봉으로 정한다(ask.BUNDLE_INTERVAL). 자금은 기본값을 넣는다 — 카드의 숫자가 전부
+// 비율이라 금액이 모양을 거의 안 바꾼다. 국내 거래소는 현물 말고 없으니 시장도 안 묻는다.
+const BUNDLE_STEPS = ["exchange", "mode", "profile", "market", "horizon"];
+export function stepsFor(answers) {
+  if (!isBundle(answers)) return STEPS;
+  return BUNDLE_STEPS.filter((step) => step !== "market" || !isDomestic(answers?.exchange));
+}
+
+// 묶음의 기본 자금. 사람이 쓰는 단위로 둔다 — 화면은 이 금액을 '기준' 으로 적는다.
+export const defaultBalance = (exchange) => (isDomestic(exchange) ? 1_000_000 : 1000);
 export const PROFILE_ORDER = ["stable", "balanced", "aggressive"];
 // 바이낸스 USDT 짝 모양 — 서버의 _SYMBOL_RE 와 같은 규칙.
 const SYMBOL_RE = /^[A-Z0-9]{1,20}USDT$/;
@@ -47,7 +61,7 @@ export function initialState() {
   return {
     step: "exchange", answers: emptyAnswers(), phase: "cards",
     session: null, candidates: [], manualSymbols: [],
-    results: null, noEdge: false, noEdgeBest: null, refunded: false, remaining: null, error: "",
+    results: null, noEdge: false, noEdgeBest: null, emptySectors: [], refunded: false, remaining: null, error: "",
   };
 }
 
@@ -56,10 +70,21 @@ function answered(step, answers) {
 }
 
 export function nextStep(answers) {
-  return STEPS.find((step) => !answered(step, answers)) ?? null;
+  return stepsFor(answers).find((step) => !answered(step, answers)) ?? null;
 }
 
-function settle(state, answers) {
+// 묶음에서 **안 묻는 칸**을 채운다. 답을 하나 고칠 때마다 clearFrom 이 뒤 칸을 지우므로
+// 모드를 고를 때 한 번 채우면 안 되고, 답할 때마다 다시 채워야 한다.
+function fillBundleBlanks(answers) {
+  if (!isBundle(answers)) return answers;
+  const next = { ...answers };
+  if (next.balance == null) next.balance = defaultBalance(next.exchange);
+  if (isDomestic(next.exchange) && next.market == null) { next.market = "spot"; next.leverage = 1; }
+  return next;
+}
+
+function settle(state, raw) {
+  const answers = fillBundleBlanks(raw);
   const step = nextStep(answers);
   if (step === null) return { ...state, answers, step: "watch", phase: "ready", error: "" };
   return { ...state, answers, step, phase: "cards", error: "" };
@@ -173,6 +198,8 @@ export function reduce(state, action) {
     case "results":
       return { ...state, phase: "results", results: action.results || [],
                noEdge: !!action.noEdge, noEdgeBest: action.noEdgeBest || null,
+               // 분야 묶음에서 카드가 안 나온 분야 — 없는 것을 말없이 숨기지 않는다.
+               emptySectors: action.emptySectors || [],
                refunded: !!action.refunded,
                remaining: action.remaining ?? state.remaining, error: "" };
     case "error":
@@ -217,6 +244,18 @@ export function toCandidatesRequest(answers) {
     leverage: answers.market === "futures" ? answers.leverage : 1,
     invest_horizon: answers.horizon,
     watch_frequency: answers.watch,
+  };
+}
+
+// 묶음으로 물어보기 — 보는 빈도가 없다(서버가 일봉으로 정한다).
+export function toBundlesRequest(answers) {
+  return {
+    exchange: answers.exchange,
+    account_balance: answers.balance,
+    risk_profile: answers.profile,
+    market: answers.market,
+    leverage: answers.market === "futures" ? answers.leverage : 1,
+    invest_horizon: answers.horizon,
   };
 }
 

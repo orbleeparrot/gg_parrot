@@ -213,3 +213,9 @@ const COIN_TINTS = {
 export function coinTint(base = "") {
   return COIN_TINTS[String(base).toUpperCase().replace(/^1000/, "")] || "";
 }
+
+
+// 분야 묶음에서 카드가 안 나온 분야. 값이 오를지 내릴지는 말하지 않는다 — 지난 구간에
+// '그냥 들고 있기' 를 못 넘었다는 **과거 사실**만 적는다.
+export const emptySectorsNote = (names) =>
+  `${names.join(" · ")} 는 이 기간에 그냥 들고 있는 것보다 나은 조합이 없었어요.`;

@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { renderComponent, textOf } from "./renderHelper.js";
 import { bundleStatPhrases, splitBundles } from "../src/lib/portfolio.js";
 import { BUNDLE_HORIZONS, HORIZONS } from "../src/lib/askCopy.js";
-import { answerLabel, horizonsFor, initialState, reduce } from "../src/lib/askFlow.js";
+import { STEPS, answerLabel, horizonsFor, initialState, reduce, stepsFor, toBundlesRequest } from "../src/lib/askFlow.js";
 
 const leg = (symbol) => ({ symbol, weight: 25 });
 const SECTOR = {
@@ -110,43 +110,6 @@ test("되돌아본 답에도 묶음은 3개월이라 적힌다", () => {
   assert.equal(answerLabel("horizon", single.answers), "몇 주");
 });
 
-// --- 물어볼까의 묶음 카드 -----------------------------------------------------
-
-const renderCards = (props) => renderComponent("src/components/BundleCards.jsx",
-  { items: [SECTOR], marketText: "업비트 · 현물", picked: [], onPick: () => {}, ...props });
-
-test("묶음 카드가 담길 종목을 다 보여 준다", async () => {
-  // 누르기 전에 무엇이 담기는지 보여야 한다 — 값이 오를지 내릴지는 말하지 않는 제품이라
-  // 고르기 전에 쥘 수 있는 정보가 그것뿐이다.
-  const text = textOf(await renderCards());
-  for (const base of ["BTC", "ETH", "SOL", "ADA"]) assert.match(text, new RegExp(base));
-  assert.match(text, /레이어1/);
-  assert.match(text, /4\s*종목/);
-});
-
-test("묶음 카드에 숫자 두 칸이 붙는다", async () => {
-  const text = textOf(await renderCards());
-  assert.match(text, /2~14위/);
-  assert.match(text, /6\.2%/);
-});
-
-test("숫자를 못 구한 묶음은 그 칸을 안 그린다", async () => {
-  const text = textOf(await renderCards({ items: [{ ...SECTOR, stats: null }] }));
-  assert.match(text, /레이어1/);
-  assert.doesNotMatch(text, /거래대금 순위/);
-});
-
-test("분야를 못 받으면 까닭을 한 줄 적는다", async () => {
-  const text = textOf(await renderCards({ items: [] }));
-  assert.match(text, /분야/);
-  assert.ok(text.length > 0, "빈 자리를 말없이 두지 않는다");
-});
-
-test("묶음 카드는 '추천' 이라 쓰지 않는다", async () => {
-  // 설계 그대로다 — 어디에도 '추천' 이라 쓰지 않는다(ask_candidates 머리글).
-  assert.doesNotMatch(textOf(await renderCards()), /추천/);
-});
-
 // --- 빌더의 두 줄 -------------------------------------------------------------
 
 const renderChips = (items) => renderComponent("src/components/BundleChips.jsx",
@@ -168,4 +131,74 @@ test("한쪽이 비면 그 줄은 아예 안 그린다", async () => {
 
 test("묶음을 하나도 못 받으면 줄이 없다", async () => {
   assert.equal(textOf(await renderChips([])), "");
+});
+
+// --- 묶음은 셋만 묻는다 (2026-11-02) ------------------------------------------
+
+function answer(state, step, value) {
+  return reduce(state, { type: "choose", step, value });
+}
+
+function askUpbitBundle() {
+  let s = initialState();
+  s = answer(s, "exchange", "upbit");
+  s = answer(s, "mode", "bundle");
+  return s;
+}
+
+test("묶음을 고르면 다음 질문은 성향이다 — 자금을 안 묻는다", () => {
+  assert.equal(askUpbitBundle().step, "profile");
+});
+
+test("자금은 기본값이 들어간다 — 원화는 100만, 달러는 1,000", () => {
+  assert.equal(askUpbitBundle().answers.balance, 1_000_000);
+  let s = answer(answer(initialState(), "exchange", "binance"), "mode", "bundle");
+  assert.equal(s.answers.balance, 1000);
+});
+
+test("국내 거래소 묶음은 시장도 안 묻는다 — 현물 말고 없다", () => {
+  const s = answer(askUpbitBundle(), "profile", "balanced");
+  assert.equal(s.step, "horizon");
+  assert.equal(s.answers.market, "spot");
+  assert.equal(s.answers.leverage, 1);
+});
+
+test("바이낸스 묶음은 시장을 묻는다 — 선물이 있다", () => {
+  let s = answer(answer(initialState(), "exchange", "binance"), "mode", "bundle");
+  s = answer(s, "profile", "balanced");
+  assert.equal(s.step, "market");
+});
+
+test("거래소 · 묶음 · 성향 · 기간이면 바로 물어볼 준비가 된다", () => {
+  let s = answer(askUpbitBundle(), "profile", "balanced");
+  s = answer(s, "horizon", "weeks");
+  assert.equal(s.phase, "ready", "보는 빈도를 더 묻지 않는다");
+});
+
+test("묶음에서는 보는 빈도가 아예 질문 목록에 없다", () => {
+  assert.equal(stepsFor({ mode: "bundle", exchange: "upbit" }).includes("watch"), false);
+  assert.equal(stepsFor({ mode: "single", exchange: "upbit" }).includes("watch"), true);
+});
+
+test("종목 하나 쪽 질문은 일곱 그대로다", () => {
+  assert.deepEqual(stepsFor({ mode: "single" }), STEPS);
+  let s = answer(answer(initialState(), "exchange", "upbit"), "mode", "single");
+  assert.equal(s.step, "balance", "종목 하나는 자금을 그대로 묻는다");
+});
+
+test("서버로 보내는 모양에는 보는 빈도가 없다", () => {
+  let s = answer(askUpbitBundle(), "profile", "balanced");
+  s = answer(s, "horizon", "months");
+  const body = toBundlesRequest(s.answers);
+  assert.deepEqual(body, {
+    exchange: "upbit", account_balance: 1_000_000, risk_profile: "balanced",
+    market: "spot", leverage: 1, invest_horizon: "months",
+  });
+});
+
+test("묶음에서 거래소를 바꾸면 기본 자금도 따라 바뀐다", () => {
+  let s = answer(askUpbitBundle(), "profile", "balanced");
+  s = answer(s, "exchange", "binance");
+  s = answer(s, "mode", "bundle");
+  assert.equal(s.answers.balance, 1000);
 });

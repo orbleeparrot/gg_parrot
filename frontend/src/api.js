@@ -216,6 +216,8 @@ export const api = {
   // 카드 네 장의 답으로 종목 후보를 받는다 — 하루 횟수는 이 호출에서 차감된다.
   askCandidates: (body) => req("/api/ask/candidates", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000 }),
   askMacros: (body, options = {}) => req("/api/ask/macros", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000, ...options }),
+  // 분야 묶음 — 고르는 자리가 없어 이 한 번이 질문 하나다(하루 횟수를 여기서 쓴다).
+  askBundles: (body) => req("/api/ask/bundles", { method: "POST", body: JSON.stringify(body), timeoutMs: 90_000 }),
   // 프로 빌더 코치 — 좁혀 가는 대화. start 만 하루 횟수를 깎고(동의 없으면 403, 한도 없으면 429), 나머지는 깎지 않는다.
   // 네 끝점이 같은 모양을 돌려준다: { session_id, turn, max_turns, question, form_patch, form, done, wrapped_up, remaining_today }.
   coachStart: (body = {}) => req("/api/coach/start", { method: "POST", body: JSON.stringify(body), timeoutMs: 30_000 }),

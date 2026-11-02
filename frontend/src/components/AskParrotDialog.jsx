@@ -9,7 +9,7 @@ import { api } from "../api.js";
 import CoinIcon from "./CoinIcon.jsx";
 import CheckIcon from "./CheckIcon.jsx";
 import {
-  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE, BUNDLE_PROMPT, BUNDLE_RUN_NOTE,
+  BACK_TO_STEP, BALANCE_ERROR, BALANCE_NOTE,
   CANDIDATES_PROMPT, COMPARE_TITLE, CONDITION_LABEL, CONSENT_BUTTON, CONSENT_TEXT, DISCLAIMER, DOMESTIC_SPOT_ONLY,
   FOLLOW_UPS, FOLLOW_UPS_TITLE, HOLD_LABEL, LEGEND_BASE, LEGEND_EQUITY, LEVERAGES, LOAD_BUTTON,
   MANUAL_PICK_LABEL, MANUAL_SEARCH_MISS, MANUAL_SEARCH_PLACEHOLDER, MARKETS, NEXT_LABEL,
@@ -20,20 +20,18 @@ import {
 import { useSymbolList } from "../hooks/useSymbolList.js";
 import { resolveSymbol, searchSymbols } from "../lib/symbolSearch.js";
 import {
-  MAX_BUNDLE_SYMBOLS, MODES, PROFILE_ORDER, STEPS, answerLabel, canChooseFutures, extraOffer,
-  horizonsFor, initialState, isBundle, readyToAsk, reduce, toAskRequest,
+  MODES, PROFILE_ORDER, answerLabel, canChooseFutures, extraOffer,
+  horizonsFor, initialState, isBundle, reduce, stepsFor, toAskRequest, toBundlesRequest,
   toCandidatesRequest, validBalance, formatAmountInput, parseAmountInput,
 } from "../lib/askFlow.js";
 import {
   coinTint, conditionLines, holdDiff, holdOf, intervalLabel, marketLabel, noEdgeDetail, numberParts,
-  resultsHeadline, shortNote, sideLabel, withSide,
+  emptySectorsNote, resultsHeadline, shortNote, sideLabel, withSide,
   signedPct, signedPoints, sparkPaths, splitRuleLabel, whyHeadline, whyPoints,
 } from "../lib/askView.js";
 import { coinName } from "../lib/macroSource.js";
 import { baseOf, quoteOf } from "../lib/format.js";
-import { usePortfolioPresets } from "../hooks/usePortfolioPresets.js";
-import { macroSymbols, splitBundles } from "../lib/portfolio.js";
-import { BundleCards } from "./BundleCards.jsx";
+import { macroSymbols } from "../lib/portfolio.js";
 import { RULE_TYPES } from "../lib/macro.js";
 import { EXCHANGES, exchangeLabel, isDomestic, quoteForExchange } from "../lib/exchanges.js";
 import "./AskParrotDialog.css";
@@ -194,7 +192,8 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
           {/* 방향 배지는 티커 줄에 둔다 — 휴대폰 카드는 ask-mc-tags 를 숨기므로(.is-compact),
               거기 두면 가장 중요한 표시가 작은 화면에서만 사라진다. */}
           <span className="ask-tk num"><strong>{symbols.length > 1 ? symbols.map(baseOf).join(" · ") : baseOf(first)}</strong><small>{quoteOf(first)}</small>{side ? <b className="ask-side">{side}</b> : null}</span>
-          <span className="ask-mc-rule">{withSide(name, macro)}{by ? <em> · {by}</em> : null}</span>
+          {/* 분야 묶음 카드는 분야 이름이 먼저다 — 고른 것이 그 분야이지 규칙이 아니다. */}
+          <span className="ask-mc-rule">{item.sector ? <><b>{item.sector}</b> · </> : null}{withSide(name, macro)}{by ? <em> · {by}</em> : null}</span>
         </span>
         <span className="ask-mc-tags">
           <span className="ask-tag">{exchangeLabel(macro.exchange)}</span>
@@ -240,8 +239,7 @@ function ResultCard({ item, rank, best, compact = false, onLoad }) {
 // 한 달 범위에서 어디쯤인지는 서버가 만든 문장(range_note)으로만 말한다. 사용자가
 // 아쉬워한 "이미 고점에 올라간 코인" 에 답하는 줄이고, 위치 퍼센트는 그 자체로는
 // 설명이 필요한 값이라 숫자로 띄우지 않는다.
-// 종목 하나 고르기 전용이다 — 누르면 바로 넘어간다. 묶음 쪽은 분야 카드(BundleCards)로
-// 묻는다(2026-11-02).
+// 종목 하나 고르기 전용이다 — 누르면 바로 넘어간다. 묶음은 이 화면에 오지 않는다(2026-11-02).
 function CandidateRow({ c, marketText, onPick, disabled, i }) {
   const kr = coinName(c.symbol);
   return (
@@ -262,18 +260,6 @@ function CandidateRow({ c, marketText, onPick, disabled, i }) {
       <span className="ask-chev" aria-hidden="true" />
     </button>
   );
-}
-
-// 묶음 후보 — 빌더와 같은 끝점(/api/portfolios)을 쓰되 **분야 묶음만** 쓴다.
-// "시가총액 TOP10" 같은 기준 묶음은 분야가 아니라 큰 것들의 목록이라 빌더에만 둔다.
-//
-// 아직 못 받았으면 아무것도 안 그린다 — 빈 목록을 바로 그리면 "불러오지 못했어요" 가
-// 한 번 번쩍이고 사라진다.
-function AskBundles({ exchange, market, marketText, picked, disabled, onPick, i }) {
-  const { items, ready } = usePortfolioPresets(exchange, market || "spot");
-  if (!ready) return null;
-  return <BundleCards items={splitBundles(items).sectors} marketText={marketText}
-                      picked={picked} disabled={disabled} onPick={onPick} i={i} />;
 }
 
 // 직접 고를래요 — 빠른 선택 칩 + 거래 가능 종목 검색(빌더 검색창과 같은 목록).
@@ -435,8 +421,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
   const noQuota = status && !status.error && status.remaining_today <= 0;
   // 관리자 계정은 횟수 제한이 없다 — 남은 횟수 · 비용 안내를 보이지 않는다.
   const unlimited = !!(status && !status.error && status.unlimited);
-  const answeredSteps = STEPS.filter((s) => state.answers[s] != null)
-    .filter((s) => state.phase !== "cards" || STEPS.indexOf(s) < STEPS.indexOf(state.step));
+  // 묶음은 안 묻는 칸이 있다 — 그 칸을 답한 것처럼 말풍선에 띄우면 거짓말이 된다.
+  const flowSteps = stepsFor(state.answers);
+  const answeredSteps = flowSteps.filter((s) => state.answers[s] != null)
+    .filter((s) => state.phase !== "cards" || flowSteps.indexOf(s) < flowSteps.indexOf(state.step));
   const asking = status && !status.error && status.consented && (state.phase === "cards" || state.phase === "ready") && !(noQuota && answeredSteps.length === 0);
   const options = asking && state.phase === "cards" ? stepOptions(state.step, state.answers) : [];
   const results = state.phase === "results" ? state.results || [] : [];
@@ -521,6 +509,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   // 네 답을 다 하면(phase "ready") 종목 후보를 받는다 — 하루 횟수는 여기서 차감된다.
   const submitCards = async () => {
+    // 묶음은 고르는 자리가 없다 — 분야 여섯을 서버가 다 돌려 나온 것만 돌려준다.
+    if (isBundle(state.answers)) return submitBundles();
     dispatch({ type: "loadingCandidates" });
     try {
       const data = await api.askCandidates(toCandidatesRequest(state.answers));
@@ -536,6 +526,19 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     }
   };
 
+  const submitBundles = async () => {
+    dispatch({ type: "loadingResults" });
+    try {
+      const data = await api.askBundles(toBundlesRequest(state.answers));
+      dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
+                 emptySectors: data.empty_sectors,
+                 refunded: data.refunded, remaining: data.remaining_today });
+      setStatus((s) => (s && !s.error ? { ...s, remaining_today: data.remaining_today } : s));
+    } catch (e) {
+      dispatch({ type: "error", message: e.message });
+    }
+  };
+
   // 후보(또는 직접 고르기)에서 종목을 하나 고르면 바로 매크로 후보를 받는다 — 이 요청은 차감 없음.
   const pickSymbol = async (symbol, resolved = false) => {
     const next = reduce(state, { type: "chooseSymbol", symbol, resolved });
@@ -544,21 +547,6 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     dispatch({ type: "loadingResults" });
     try {
       const data = await api.askMacros(toAskRequest(next));
-      dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
-                 noEdgeBest: data.no_edge_best,
-                 refunded: data.refunded, remaining: data.remaining_today });
-    } catch (e) {
-      dispatch({ type: "error", message: e.message });
-    }
-  };
-
-  // 묶음은 여러 개를 다 고른 뒤 한 번에 물어본다 — 종목 하나 고르기처럼 누르자마자
-  // 보내면 두 번째 종목을 넣을 틈이 없다.
-  const askBundle = async () => {
-    if (!readyToAsk(state)) return;
-    dispatch({ type: "loadingResults" });
-    try {
-      const data = await api.askMacros(toAskRequest(state));
       dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
                  noEdgeBest: data.no_edge_best,
                  refunded: data.refunded, remaining: data.remaining_today });
@@ -670,19 +658,11 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     );
   } else if (state.phase === "candidates") {
     const n = state.candidates.length;
-    const bundle = isBundle(state.answers);
-    const picked = state.answers.symbols || [];
-    const toggle = (sym, resolved = false) => dispatch({ type: "toggleSymbol", symbol: sym, resolved });
+    // 묶음은 이 화면에 오지 않는다 — 질문이 끝나면 바로 결과다(2026-11-02).
     stage = (
       <>
-        <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{bundle ? BUNDLE_PROMPT : CANDIDATES_PROMPT}</span></p>
-        {/* 묶음 쪽은 종목을 따로따로 늘어놓지 않는다 — 서로 아무 사이도 아닌 종목을
-            체크해 담으면 나눠 담는 까닭이 "그냥 여러 개" 가 된다. 분야로 묻는다. */}
-        {bundle ? (
-          <AskBundles i={0.5} exchange={state.answers.exchange} market={state.answers.market}
-            marketText={marketText} picked={picked} disabled={lock}
-            onPick={(symbols) => dispatch({ type: "setBundle", symbols })} />
-        ) : n ? (
+        <p className="ask-say ask-in" style={{ "--i": 0 }}><Face size={32} /><span>{CANDIDATES_PROMPT}</span></p>
+        {n ? (
           <div className="ask-cands">
             {state.candidates.map((c, idx) => (
               <CandidateRow key={c.symbol} c={c} i={idx + 1} marketText={marketText} disabled={lock}
@@ -691,20 +671,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
           </div>
         ) : null}
         <ManualPick chips={state.manualSymbols} i={n + 1} exchange={state.answers.exchange} disabled={lock}
-          onPick={(sym, resolved) => (bundle ? toggle(sym, resolved) : leaveThen(() => pickSymbol(sym, resolved)))} />
-        {bundle ? (
-          <div className="ask-bundle ask-in" style={{ "--i": n + 2 }}>
-            <p className="ask-bundle-sum" aria-live="polite">
-              {picked.length ? `${picked.map(baseOf).join(" · ")} · ${picked.length}종목` : `둘부터 ${MAX_BUNDLE_SYMBOLS}종목까지 고를 수 있어요`}
-            </p>
-            {/* 아직 실행기로 못 돌린다는 사실을 카드를 보여 주기 **전에** 말한다. */}
-            <p className="ask-bundle-note" role="note">{BUNDLE_RUN_NOTE}</p>
-            <button type="button" className="ask-bundle-go" disabled={lock || !readyToAsk(state)}
-              onClick={() => leaveThen(askBundle)}>
-              {picked.length >= 2 ? "이 묶음으로 물어보기" : "두 종목부터 물어볼 수 있어요"}
-            </button>
-          </div>
-        ) : null}
+          onPick={(sym, resolved) => leaveThen(() => pickSymbol(sym, resolved))} />
         <p className="ask-disc ask-in" style={{ "--i": n + 3 }} role="note">{DISCLAIMER}</p>
       </>
     );
@@ -717,6 +684,10 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
         </div>
         {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{noEdgeDetail(state.noEdgeBest)}</p> : null}
         {state.refunded ? <p className="ask-note ask-in" style={{ "--i": 2 }} role="status">{REFUNDED_TEXT}</p> : null}
+        {/* 카드가 안 나온 분야를 말없이 숨기지 않는다 — 여섯을 다 돌렸다는 사실이 보여야 한다. */}
+        {(state.emptySectors || []).length ? (
+          <p className="ask-note ask-in" style={{ "--i": 2.5 }} role="note">{emptySectorsNote(state.emptySectors)}</p>
+        ) : null}
         {results.length > 1 && !carousel ? <CompareTable results={results} hold={hold} /> : null}
         {results.length > 0 && !carousel ? (
           <div className="ask-mcs">
@@ -773,8 +744,8 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
         <div className="ask-body" ref={bodyRef}>
           {showProgress ? (
             <div className="ask-prog" aria-hidden="true">
-              <span className="ask-prog-bar"><i style={{ "--fill": `${(answered / STEPS.length) * 100}%` }} /></span>
-              <span className="num">{Math.min(answered + 1, STEPS.length)} / {STEPS.length}</span>
+              <span className="ask-prog-bar"><i style={{ "--fill": `${(answered / flowSteps.length) * 100}%` }} /></span>
+              <span className="num">{Math.min(answered + 1, flowSteps.length)} / {flowSteps.length}</span>
             </div>
           ) : null}
           {status && status.consented && answeredSteps.length ? (

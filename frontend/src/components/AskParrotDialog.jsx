@@ -531,7 +531,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     try {
       const data = await api.askBundles(toBundlesRequest(state.answers));
       dispatch({ type: "results", results: data.results, noEdge: data.no_edge,
-                 emptySectors: data.empty_sectors,
+                 emptySectors: data.empty_sectors, emptyByReason: data.empty_reasons,
                  refunded: data.refunded, remaining: data.remaining_today });
       setStatus((s) => (s && !s.error ? { ...s, remaining_today: data.remaining_today } : s));
     } catch (e) {
@@ -592,6 +592,7 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
 
   const marketText = `${exchangeLabel(state.answers.exchange)} · ${state.answers.market === "futures" ? `${MARKETS[1].label} ${state.answers.leverage}x` : MARKETS[0].label}`;
   const hold = holdOf(results);
+  const bundle = isBundle(state.answers);
 
   let stage;
   if (status == null) {
@@ -679,14 +680,14 @@ export default function AskParrotDialog({ open, onClose, onLoad }) {
     stage = (
       <>
         <div className={"ask-rh ask-in" + (carousel ? " is-compact" : "")} style={{ "--i": 0 }}>
-          <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length, state.noEdge)}</span></p>
+          <p className="ask-say"><Face size={32} /><span>{resultsHeadline(results.length, state.noEdge, { bundle })}</span></p>
           {results.length > 0 && !carousel ? <span className="ask-legend"><span><i />{LEGEND_EQUITY}</span><span><i className="is-base" />{LEGEND_BASE}</span></span> : null}
         </div>
-        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{noEdgeDetail(state.noEdgeBest)}</p> : null}
+        {state.noEdge ? <p className="ask-hold ask-in" style={{ "--i": 1 }} role="note">{noEdgeDetail(state.noEdgeBest, { bundle })}</p> : null}
         {state.refunded ? <p className="ask-note ask-in" style={{ "--i": 2 }} role="status">{REFUNDED_TEXT}</p> : null}
         {/* 카드가 안 나온 분야를 말없이 숨기지 않는다 — 여섯을 다 돌렸다는 사실이 보여야 한다. */}
         {(state.emptySectors || []).length ? (
-          <p className="ask-note ask-in" style={{ "--i": 2.5 }} role="note">{emptySectorsNote(state.emptySectors)}</p>
+          <p className="ask-note ask-in" style={{ "--i": 2.5 }} role="note">{emptySectorsNote(state.emptySectors, state.emptyByReason)}</p>
         ) : null}
         {results.length > 1 && !carousel ? <CompareTable results={results} hold={hold} /> : null}
         {results.length > 0 && !carousel ? (

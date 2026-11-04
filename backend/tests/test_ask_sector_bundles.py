@@ -14,7 +14,10 @@ import secrets
 import pytest
 from fastapi.testclient import TestClient
 
+from sqlmodel import select
+
 from app import ask, portfolios
+from app.db import AskMacroSession, User, get_session
 from app.main import app
 from engine import BacktestResult
 
@@ -64,11 +67,15 @@ def world(monkeypatch):
     return seen
 
 
-def _signup():
+def _signup_with_id():
     tok = secrets.token_hex(4)
     body = client.post("/api/auth/signup", json={
         "email": f"sb{tok}@ex.com", "username": f"sb_{tok}", "password": "password123"}).json()
-    return body["token"]
+    return body["token"], body["user"]["id"]
+
+
+def _signup():
+    return _signup_with_id()[0]
 
 
 def _auth(tok):
@@ -166,3 +173,121 @@ def test_no_sectors_at_all_says_why_and_gives_the_use_back(world, monkeypatch):
 def test_consent_comes_first(world):
     tok = _signup()
     assert client.post("/api/ask/bundles", json=_body(), headers=_auth(tok)).status_code == 403
+
+
+# --- 돌리다 실패하면 횟수를 돌려준다 (2026-11-04) -------------------------------
+#
+# 횟수는 분야를 돌리기 **전에** 잡힌다(행을 먼저 커밋해 동시 요청 창을 닫는다). 그 뒤에
+# 무엇이 터지든 사용자는 결과 없이 오류만 본다 — 마지막 저장이 연결을 못 받는 경우(웹 풀
+# 2초 대기)가 가장 흔하다. 후보 단계(_run_candidates)와 같이 행을 지우고 추가권을 푼다.
+
+def _remaining(tok):
+    return client.get("/api/ask/status", headers=_auth(tok)).json()["remaining_today"]
+
+
+def _sessions(uid):
+    with get_session() as db:
+        return list(db.exec(select(AskMacroSession).where(AskMacroSession.user_id == uid)).all())
+
+
+def _boom(*args, **kwargs):
+    raise RuntimeError("db down")
+
+
+def test_a_failure_after_the_run_gives_the_use_back(world, monkeypatch):
+    tok, uid = _signup_with_id()
+    client.post("/api/ask/consent", headers=_auth(tok))
+    before = _remaining(tok)
+    monkeypatch.setattr(ask, "_settle_use", _boom)  # 마지막 저장 직전에 터진다
+    with pytest.raises(RuntimeError):  # TestClient 는 서버 예외를 그대로 올린다
+        _ask(tok)
+    assert _remaining(tok) == before
+    assert _sessions(uid) == [], "결과 없는 빈 기록을 남기지 않는다"
+
+
+def test_a_failure_while_making_cards_gives_the_use_back(world, monkeypatch):
+    tok = _signup()
+    client.post("/api/ask/consent", headers=_auth(tok))
+    before = _remaining(tok)
+    monkeypatch.setattr(ask, "_result_view", _boom)
+    with pytest.raises(RuntimeError):
+        _ask(tok)
+    assert _remaining(tok) == before
+
+
+def test_a_failure_gives_the_extra_credit_back(world, monkeypatch):
+    tok, uid = _signup_with_id()
+    client.post("/api/ask/consent", headers=_auth(tok))
+    monkeypatch.setenv("ASK_DAILY_LIMIT", "0")
+    with get_session() as db:
+        user = db.get(User, uid)
+        user.points_balance = 100
+        db.add(user)
+        db.commit()
+    assert client.post("/api/ask/extra", headers=_auth(tok)).status_code == 200
+    assert _remaining(tok) == 1
+    monkeypatch.setattr(ask, "_settle_use", _boom)
+    with pytest.raises(RuntimeError):
+        _ask(tok)
+    assert _remaining(tok) == 1, "산 추가권이 묶인 채 남으면 안 된다"
+
+
+def test_a_good_run_still_costs_one_use_and_keeps_the_record(world):
+    tok, uid = _signup_with_id()
+    client.post("/api/ask/consent", headers=_auth(tok))
+    before = _remaining(tok)
+    body = _ask(tok).json()
+    assert _remaining(tok) == before - 1
+    [row] = _sessions(uid)
+    assert row.id == body["session_id"] and row.ask_count == 1 and row.chosen_symbol == "레이어1, 디파이"
+
+
+# --- 안 나온 까닭을 나눠 말한다 (2026-11-04) ------------------------------------
+#
+# 카드는 관문 셋(최소 거래 수 · MDD 상한 · 홀딩 문턱)을 다 넘어야 나온다. 홀딩은 넘었는데
+# MDD 상한에 걸린 분야에 "그냥 들고 있는 게 나았다" 고 말하면 거짓이다 — 한 종목 경로는
+# 이미 그렇게 고쳤다(run_ask 의 no_edge 주석: 안정형 · BTC 1년 실측).
+
+def test_empty_sectors_carry_why_they_came_up_empty(world):
+    body = _ask(_signup()).json()
+    assert body["empty_reasons"] == {"no_edge": ["밈"]}
+    assert body["no_edge"] is False, "카드가 나왔으면 이득이 없었다고 말하지 않는다"
+
+
+def test_beating_holding_but_failing_the_drawdown_cap_is_not_no_edge(world, monkeypatch):
+    # 균형형 · 3개월의 MDD 상한은 32% — 60% 는 홀딩을 크게 넘어도 걸린다.
+    monkeypatch.setattr("app.main._run_any",
+                        lambda macro: (_result(18.0, 1.0, mdd=60.0), [], "test", macro.period.preset))
+    body = _ask(_signup()).json()
+    assert body["results"] == []
+    assert body["no_edge"] is False, "홀딩은 넘었다 — 걸린 곳은 성향 조건이다"
+    assert body["empty_reasons"] == {"filtered": ["레이어1", "디파이", "밈"]}
+    assert body["refunded"] is True, "보여 줄 게 없으면 횟수는 그대로 돌려준다"
+
+
+def test_a_sector_that_could_not_run_is_not_called_no_edge(world, monkeypatch):
+    def run(macro):
+        if macro.leg_specs()[0].symbol in LOSERS:
+            raise RuntimeError("시세 없음")
+        return _result(18.0, 1.0)
+
+    monkeypatch.setattr("app.main._run_any", lambda macro: (run(macro), [], "test", macro.period.preset))
+    body = _ask(_signup()).json()
+    assert body["empty_reasons"] == {"failed": ["밈"]}
+    assert body["empty_sectors"] == ["밈"], "옛 화면이 읽는 칸은 그대로 둔다"
+
+
+def test_mixed_reasons_keep_the_sector_order(world, monkeypatch):
+    def run(macro):
+        first = macro.leg_specs()[0].symbol
+        if first == "KRW-BTC":
+            return _result(18.0, 1.0, mdd=60.0)  # 레이어1: 조건에 걸림
+        if first in LOSERS:
+            return _result(2.0, 40.0)            # 밈: 홀딩을 못 넘음
+        return _result(18.0, 1.0)                # 디파이: 나옴
+
+    monkeypatch.setattr("app.main._run_any", lambda macro: (run(macro), [], "test", macro.period.preset))
+    body = _ask(_signup()).json()
+    assert [r["sector"] for r in body["results"]] == ["디파이"]
+    assert body["empty_sectors"] == ["레이어1", "밈"]
+    assert body["empty_reasons"] == {"filtered": ["레이어1"], "no_edge": ["밈"]}

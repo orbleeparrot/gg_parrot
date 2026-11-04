@@ -5,7 +5,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { renderComponent, textOf } from "./renderHelper.js";
 import { bundleStatPhrases, splitBundles } from "../src/lib/portfolio.js";
-import { BUNDLE_HORIZONS, HORIZONS } from "../src/lib/askCopy.js";
+import { BUNDLE_HORIZONS, FEW_RESULTS_TEXT, HORIZONS, NO_EDGE_NOTE } from "../src/lib/askCopy.js";
+import { emptySectorsNote, noEdgeDetail, resultsHeadline } from "../src/lib/askView.js";
+import { readFileSync } from "node:fs";
 import { STEPS, answerLabel, horizonsFor, initialState, reduce, stepsFor, toBundlesRequest } from "../src/lib/askFlow.js";
 
 const leg = (symbol) => ({ symbol, weight: 25 });
@@ -221,4 +223,56 @@ test("종목 하나짜리에는 그 안내가 안 붙는다", async () => {
   const html = await renderComponent("src/components/PaperPanel.jsx",
     { macro, valErr: "" }, { router: true, exportName: "PaperNextSteps" });
   assert.doesNotMatch(textOf(html), /실행기가 오래됐으면/);
+});
+
+// --- 안 나온 분야는 까닭마다 다른 말 (2026-11-04) --------------------------------
+//
+// 카드는 관문 셋(최소 거래 수 · MDD 상한 · 홀딩 문턱)을 다 넘어야 나온다. 홀딩은 넘었는데
+// MDD 상한에 걸린 분야에 "그냥 들고 있는 것보다 나은 조합이 없었어요" 라고 하면 거짓이다.
+
+test("까닭을 받으면 까닭마다 한 문장씩 말한다", () => {
+  const line = emptySectorsNote(["레이어1", "밈", "AI"],
+    { filtered: ["레이어1"], no_edge: ["밈"], failed: ["AI"] });
+  assert.equal(line,
+    "밈 는 이 기간에 그냥 들고 있는 것보다 나은 조합이 없었어요. "
+    + "레이어1 는 홀딩보다 나은 조합이 있었지만 이 성향의 낙폭 · 거래 수 조건에 걸렸어요. "
+    + "AI 는 이번에 돌려 보지 못했어요.");
+});
+
+test("조건에 걸린 분야에는 '홀딩보다 나은 조합이 없었다' 고 하지 않는다", () => {
+  const line = emptySectorsNote(["디파이"], { filtered: ["디파이"] });
+  assert.doesNotMatch(line, /나은 조합이 없었어요/);
+});
+
+test("까닭을 안 싣는 옛 응답은 예전 한 줄 그대로", () => {
+  assert.equal(emptySectorsNote(["밈"]), "밈 는 이 기간에 그냥 들고 있는 것보다 나은 조합이 없었어요.");
+  assert.equal(emptySectorsNote(["밈"], {}), "밈 는 이 기간에 그냥 들고 있는 것보다 나은 조합이 없었어요.");
+});
+
+test("결과 화면이 서버의 까닭 칸을 받아 둔다", () => {
+  const s = reduce(initialState(), { type: "results", results: [], emptySectors: ["밈"],
+                                     emptyByReason: { no_edge: ["밈"] } });
+  assert.deepEqual(s.emptyByReason, { no_edge: ["밈"] });
+  assert.equal(reduce(initialState(), { type: "results", results: [] }).emptyByReason, null);
+  const dialog = readFileSync(new URL("../src/components/AskParrotDialog.jsx", import.meta.url), "utf8");
+  assert.match(dialog, /emptyByReason: data\.empty_reasons/, "응답 칸을 그대로 받아야 한다");
+  assert.match(dialog, /emptySectorsNote\(state\.emptySectors, state\.emptyByReason\)/);
+});
+
+// --- 묶음은 종목 · 보는 빈도를 안 묻는다 — 바꾸라고 하지 않는다 ------------------
+
+test("묶음의 빈 화면 설명은 바꿀 수 있는 것만 말한다", () => {
+  const line = noEdgeDetail(null, { bundle: true });
+  assert.doesNotMatch(line, /보는 빈도|종목/);
+  assert.match(line, /첫날 사서 그냥 두기/, "기준이 무엇인지는 그대로 말한다");
+  assert.match(line, /다시 물어봐/);
+});
+
+test("묶음의 '후보가 적었어요' 도 빈도를 바꾸라고 하지 않는다", () => {
+  assert.doesNotMatch(resultsHeadline(2, false, { bundle: true }), /빈도/);
+});
+
+test("종목 하나 쪽 문구는 한 글자도 안 바뀐다", () => {
+  assert.equal(noEdgeDetail(null), NO_EDGE_NOTE);
+  assert.equal(resultsHeadline(2), FEW_RESULTS_TEXT);
 });

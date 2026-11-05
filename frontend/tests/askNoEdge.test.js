@@ -42,8 +42,8 @@ test("화면이 서버의 no_edge 를 받아 안내로 바꾼다", () => {
   assert.doesNotMatch(dialog, /all_lost_to_hold/, "없어진 칸을 읽으면 늘 undefined 다");
   // 문단 전체를 noEdgeDetail 이 만든다(2026-10-12) — 어느 관문에서 떨어졌는지에 따라
   // 설명이 달라야 해서 화면이 두 조각을 이어 붙이던 방식을 버렸다.
-  assert.match(dialog, /state\.noEdge \?.*noEdgeDetail\(state\.noEdgeBest\)/s, "못 넘겼을 때 이유를 적어 준다");
-  assert.match(dialog, /resultsHeadline\(results\.length, state\.noEdge\)/, "머리글도 이유를 봐야 한다");
+  assert.match(dialog, /state\.noEdge \?.*noEdgeDetail\(state\.noEdgeBest[,)]/s, "못 넘겼을 때 이유를 적어 준다");
+  assert.match(dialog, /resultsHeadline\(results\.length, state\.noEdge[,)]/, "머리글도 이유를 봐야 한다");
   assert.ok(NO_EDGE_NOTE.includes("다시"), "다음에 뭘 하면 되는지 말해야 한다");
 });
 
@@ -107,7 +107,7 @@ test("홀딩 라벨이 전제를 드러낸다", () => {
 test("실행 화면이 서버의 빈 화면 숫자를 받아 그린다", () => {
   // 안 받으면 숫자는 서버에만 있고 사용자는 한 줄만 본다 — 바로 그 문제였다.
   assert.match(dialog, /noEdgeBest: data\.no_edge_best/, "응답 칸을 그대로 받아야 한다");
-  assert.match(dialog, /noEdgeDetail\(state\.noEdgeBest\)/, "빈 화면에 그려야 한다");
+  assert.match(dialog, /noEdgeDetail\(state\.noEdgeBest[,)]/, "빈 화면에 그려야 한다");
 });
 
 test("홀딩을 이겼는데도 손실이면 홀딩 이야기를 하지 않는다", () => {

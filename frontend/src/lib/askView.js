@@ -1,7 +1,7 @@
 // 껄무새에게 물어볼까? 결과·후보 카드가 보여 줄 값을 만드는 순수 함수들 (2026-09-30 재설계).
 // 숫자는 전부 서버가 계산한 값이고, 여기서는 모양만 바꾼다 — 없는 값을 만들어 내지 않는다.
-import { FEW_RESULTS_TEXT, NO_EDGE_LOST_NOTE, NO_EDGE_NOTE, NO_EDGE_TEXT, NO_RESULTS_TEXT,
-         TOP_RESULTS_TEXT } from "./askCopy.js";
+import { FEW_RESULTS_BUNDLE_TEXT, FEW_RESULTS_TEXT, NO_EDGE_BUNDLE_NOTE, NO_EDGE_LOST_NOTE, NO_EDGE_NOTE,
+         NO_EDGE_TEXT, NO_RESULTS_TEXT, TOP_RESULTS_TEXT } from "./askCopy.js";
 import { quoteForExchange } from "./exchanges.js";
 
 const num = (v) => (v == null || v === "" || Number.isNaN(Number(v)) ? null : Number(v));
@@ -33,9 +33,10 @@ export function holdOf(results = []) {
 
 // 빈 결과의 이유가 둘이다. 돌렸는데 홀딩을 못 넘긴 것(noEdge)과, 애초에 살아남은 후보가
 // 없던 것(시세 부족 · MDD 상한 · 거래 수). 하는 말이 달라야 한다.
-export function resultsHeadline(count, noEdge = false) {
+export function resultsHeadline(count, noEdge = false, { bundle = false } = {}) {
   if (!count) return noEdge ? NO_EDGE_TEXT : NO_RESULTS_TEXT;
-  return count < 3 ? FEW_RESULTS_TEXT : TOP_RESULTS_TEXT;
+  if (count < 3) return bundle ? FEW_RESULTS_BUNDLE_TEXT : FEW_RESULTS_TEXT;
+  return TOP_RESULTS_TEXT;
 }
 
 // 빈 화면이 하는 말 전체 — 가장 나았던 조합의 숫자 + **그것이 떨어진 관문**의 설명.
@@ -44,7 +45,9 @@ export function resultsHeadline(count, noEdge = false) {
 // 설명하면 "홀딩보다 15%p 앞선 -5%" 에서 화면이 스스로 어긋난다 — 숫자는 이겼다고 말하고
 // 글은 못 넘었다고 말한다. made_money 로 갈라서 실제로 적용된 이유만 말한다.
 // 서버가 준 값만 쓴다. 홀딩 기준을 못 구한 결과가 1등일 수 있어 그때는 그 쪽만 뺀다.
-export function noEdgeDetail(best) {
+export function noEdgeDetail(best, { bundle = false } = {}) {
+  // 분야 묶음은 '가장 나았던 조합' 숫자를 싣지 않는다 — 분야마다 종목이 달라 한 홀딩과 견줄 수 없다.
+  if (bundle) return NO_EDGE_BUNDLE_NOTE;
   const ret = num(best?.return_pct);
   if (ret == null) return NO_EDGE_NOTE;
   const what = best?.rule_label ? `가장 나았던 조합(${best.rule_label})이` : "가장 나았던 조합이";
@@ -215,7 +218,20 @@ export function coinTint(base = "") {
 }
 
 
-// 분야 묶음에서 카드가 안 나온 분야. 값이 오를지 내릴지는 말하지 않는다 — 지난 구간에
-// '그냥 들고 있기' 를 못 넘었다는 **과거 사실**만 적는다.
-export const emptySectorsNote = (names) =>
-  `${names.join(" · ")} 는 이 기간에 그냥 들고 있는 것보다 나은 조합이 없었어요.`;
+// 분야 묶음에서 카드가 안 나온 분야. 값이 오를지 내릴지는 말하지 않는다 — 지난 구간의
+// **과거 사실**만 적는다.
+//
+// 까닭이 셋이고 하는 말이 달라야 한다(서버 ask._empty_reason). 홀딩은 넘었는데 성향 조건
+// (MDD 상한 · 최소 거래 수)에 걸린 분야에 "그냥 들고 있는 것보다 나은 조합이 없었다" 고
+// 말하면 거짓이다(2026-11-04). 까닭을 안 싣는 옛 응답은 예전 한 줄로 둔다.
+const EMPTY_REASON_TEXT = {
+  no_edge: "이 기간에 그냥 들고 있는 것보다 나은 조합이 없었어요.",
+  filtered: "홀딩보다 나은 조합이 있었지만 이 성향의 낙폭 · 거래 수 조건에 걸렸어요.",
+  failed: "이번에 돌려 보지 못했어요.",
+};
+
+export function emptySectorsNote(names = [], byReason = null) {
+  const groups = Object.keys(EMPTY_REASON_TEXT).filter((key) => (byReason?.[key] || []).length);
+  if (!groups.length) return `${names.join(" · ")} 는 ${EMPTY_REASON_TEXT.no_edge}`;
+  return groups.map((key) => `${byReason[key].join(" · ")} 는 ${EMPTY_REASON_TEXT[key]}`).join(" ");
+}

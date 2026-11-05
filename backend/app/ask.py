@@ -1507,6 +1507,7 @@ def run_sector_bundles(db: Session, user: User, req: BundlesRequest,
 
 def _run_sector_bundles(db: Session, user: User, req: BundlesRequest,
                         run_backtest: Callable[[Macro], BacktestResult]) -> dict:
+    identity = (user.id, user.auth_version)
     if remaining_today(db, user) <= 0:
         raise AskError(429, f"오늘은 {daily_limit()}번 다 물어봤어요. 내일 다시 물어봐 주세요.")
 
@@ -1517,54 +1518,75 @@ def _run_sector_bundles(db: Session, user: User, req: BundlesRequest,
 
     row, credit = _open_session(db, user, req)
     release_read_session(db, user, row, credit)
+    reservation_id = row.id
+    credit_id = credit.id if credit is not None else None
     period = to_period(req.invest_horizon)
     # 예산을 분야 수로 나눈다 — 앞의 분야가 다 쓰면 뒤는 한 장도 못 낸다.
     budget = time_budget_sec() / len(bundles)
     started = time.monotonic()
 
-    results: list[dict] = []
-    empty: list[str] = []
-    evaluated_any = False
-    for bundle in bundles:
-        symbols = [leg.symbol for leg in bundle.legs]
-        plan = _Plan(risk_profile=req.risk_profile, market=req.market, leverage=req.leverage,
-                     symbols=symbols, period_preset=period, interval=BUNDLE_INTERVAL,
-                     exchange=req.exchange, account_balance=req.account_balance)
-        try:
-            evaluated = evaluate(build_templates(plan)[:MAX_CANDIDATES], run_backtest, budget)
-        except Exception:
-            log.warning("ask: %s 분야를 돌리지 못했다", bundle.name, exc_info=True)
-            evaluated = []
-        evaluated_any = evaluated_any or bool(evaluated)
-        # 분야마다 **한 장**이다. 여섯 분야가 세 장씩 내면 화면에 열여덟 장이 쌓인다.
-        top = select_top(evaluated, req.risk_profile, n=1, period=period, interval=BUNDLE_INTERVAL)
-        if not top:
-            empty.append(bundle.name)
-            continue
-        view = _result_view(top[0])
-        view["sector"] = bundle.name
-        view["sector_lead"] = bundle.lead
-        view["symbols"] = symbols
-        results.append(view)
+    # 횟수는 위에서 이미 잡혔다. 여기서 무엇이 터지든(마지막 저장의 연결 대기 포함) 사용자는
+    # 결과 없이 오류만 본다 — 후보 단계(_run_candidates)와 같이 행을 지우고 추가권을 푼다.
+    try:
+        results: list[dict] = []
+        empty: list[tuple[str, str]] = []
+        evaluated_all: list[Evaluated] = []
+        for bundle in bundles:
+            symbols = [leg.symbol for leg in bundle.legs]
+            plan = _Plan(risk_profile=req.risk_profile, market=req.market, leverage=req.leverage,
+                         symbols=symbols, period_preset=period, interval=BUNDLE_INTERVAL,
+                         exchange=req.exchange, account_balance=req.account_balance)
+            try:
+                evaluated = evaluate(build_templates(plan)[:MAX_CANDIDATES], run_backtest, budget)
+            except Exception:
+                log.warning("ask: %s 분야를 돌리지 못했다", bundle.name, exc_info=True)
+                evaluated = []
+            evaluated_all.extend(evaluated)
+            # 분야마다 **한 장**이다. 여섯 분야가 세 장씩 내면 화면에 열여덟 장이 쌓인다.
+            top = select_top(evaluated, req.risk_profile, n=1, period=period, interval=BUNDLE_INTERVAL)
+            if not top:
+                empty.append((bundle.name, _empty_reason(evaluated, period)))
+                continue
+            view = _result_view(top[0])
+            view["sector"] = bundle.name
+            view["sector_lead"] = bundle.lead
+            view["symbols"] = symbols
+            results.append(view)
+        # 홀딩 문턱을 넘은 조합이 하나도 없었는가 — 한 종목 경로(run_ask)와 같은 기준이다.
+        # `not results` 로 세면 성향 조건(MDD 상한 · 최소 거래 수)에 걸려 빈 경우까지
+        # "이득이 난 조합이 없었다" 고 말하게 된다.
+        no_edge = bool(evaluated_all) and not any(
+            worth_the_macro(e.result, period) for e in evaluated_all)
+        elapsed_ms = int((time.monotonic() - started) * 1000)
 
-    row.chosen_symbol = ", ".join(r["sector"] for r in results)
-    row.candidate_count = len(results)
-    row.results_json = json.dumps(
-        [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"],
-          "metrics": r["metrics"]} for r in results], ensure_ascii=False)
-    row.ask_count += 1
-    row.elapsed_ms = int((time.monotonic() - started) * 1000)
-    _settle_use(db, user, row, bool(results))
-    db.add(row)
-    db.commit()
+        user = resume_external_user(db, user, identity=identity)
+        row, _answers = _load_flow(db, user, reservation_id)
+        row.chosen_symbol = ", ".join(r["sector"] for r in results)
+        row.candidate_count = len(results)
+        row.results_json = json.dumps(
+            [{"label": r["label"], "rule_type": r["rule_type"], "macro": r["macro"],
+              "metrics": r["metrics"]} for r in results], ensure_ascii=False)
+        row.ask_count += 1
+        row.elapsed_ms = elapsed_ms
+        _settle_use(db, user, row, bool(results))
+        db.add(row)
+        db.commit()
+    except Exception:
+        refund_external_reservation(db, reservation_id, credit_id)
+        raise
 
+    by_reason: dict[str, list[str]] = {}
+    for name, reason in empty:
+        by_reason.setdefault(reason, []).append(name)
     return {
         "session_id": row.id,
         "results": results,
         # 돌리기는 했는데 어느 분야도 홀딩 문턱을 못 넘었다 — 화면이 추천 대신 그렇게 말한다.
-        "no_edge": evaluated_any and not results,
+        "no_edge": no_edge,
         # 안 나온 분야를 말없이 숨기지 않는다. 화면이 한 줄로 말할 수 있어야 한다.
-        "empty_sectors": empty,
+        "empty_sectors": [name for name, _reason in empty],
+        # 안 나온 까닭은 분야마다 다르다 — 화면이 까닭마다 다른 말을 한다(_empty_reason).
+        "empty_reasons": by_reason,
         "refunded": bool(row.refunded),
         "min_excess_pct": min_excess_pct(period),
         "interval": BUNDLE_INTERVAL,
@@ -1573,6 +1595,22 @@ def _run_sector_bundles(db: Session, user: User, req: BundlesRequest,
         "disclaimer": DISCLAIMER,
         "disclaimer_version": DISCLAIMER_VERSION,
     }
+
+
+def _empty_reason(evaluated: list[Evaluated], period: str) -> str:
+    """카드가 안 나온 분야가 **어느 관문에서** 떨어졌는가.
+
+    - ``failed``: 한 조합도 돌리지 못했다(시세 · 예산 · 오류).
+    - ``no_edge``: 돌렸지만 홀딩 문턱(worth_the_macro)을 넘은 조합이 없었다.
+    - ``filtered``: 넘은 조합은 있었지만 성향 조건(MDD 상한 · 최소 거래 수)에 걸렸다.
+
+    셋을 한 말("홀딩보다 나은 조합이 없었다")로 뭉치면 셋째는 거짓이 된다.
+    """
+    if not evaluated:
+        return "failed"
+    if not any(worth_the_macro(e.result, period) for e in evaluated):
+        return "no_edge"
+    return "filtered"
 
 
 def _settle_use(db: Session, user: User, row: AskMacroSession, has_results: bool) -> None:

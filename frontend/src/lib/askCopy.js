@@ -88,6 +88,7 @@ export const feesNote = (commission, slippage) => `수수료 ${commission}% · �
 export const NO_QUOTA_TEXT = "오늘은 다 물어봤어요. 내일 다시 물어봐 주세요.";
 export const RUNNING_TEXT = "돌려 볼게요… 후보를 백테스트하는 중이에요";
 export const FEW_RESULTS_TEXT = "이 조건에선 후보가 적었어요 — 기간이나 빈도를 바꿔 보세요";
+export const FEW_RESULTS_BUNDLE_TEXT = "이 조건에선 후보가 적었어요 — 기간이나 성향을 바꿔 보세요";
 export const NO_RESULTS_TEXT = "이 조건으론 살아남은 후보가 없었어요. 조건을 바꿔 다시 물어봐요.";
 export const LOADED_TEXT = "조건 판에 불러왔어요. 숫자 한 번 보고 백테스트부터 돌려 보세요";
 
@@ -102,6 +103,8 @@ export const NO_EDGE_TEXT = "이번 조건에선 보여 드릴 만큼 이득이 
 // 돈을 잃은 조합은 보여 주지 않는다 — 그때 홀딩 숫자를 들이밀면 이긴 것처럼 읽힌다.
 export const NO_EDGE_LOST_NOTE = "홀딩보다 나았든 아니든, 돈을 잃은 조합은 보여 드리지 않아요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
 export const NO_EDGE_NOTE = "기준은 같은 기간을 '첫날 사서 그냥 두기' 예요 — 그 날짜는 기간을 고르면 자동으로 정해지고, 매크로는 살 날을 스스로 찾아야 해요. 기간이나 종목, 보는 빈도를 바꿔 다시 물어봐 주세요.";
+// 분야 묶음은 종목도 보는 빈도도 묻지 않는다 — 바꿀 수 없는 것을 바꾸라고 하지 않는다(2026-11-04).
+export const NO_EDGE_BUNDLE_NOTE = "기준은 같은 기간을 '첫날 사서 그냥 두기' 예요 — 그 날짜는 기간을 고르면 자동으로 정해지고, 매크로는 살 날을 스스로 찾아야 해요. 기간이나 성향을 바꿔 다시 물어봐 주세요.";
 
 // 직접 고를래요 — 거래 가능한 종목을 검색해서 고른다.
 export const MANUAL_SEARCH_PLACEHOLDER = "종목 검색 (예: AVAX)";

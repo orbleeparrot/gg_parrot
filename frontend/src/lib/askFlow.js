@@ -62,7 +62,7 @@ export function initialState() {
   return {
     step: "exchange", answers: emptyAnswers(), phase: "cards",
     session: null, candidates: [], manualSymbols: [],
-    results: null, noEdge: false, noEdgeBest: null, emptySectors: [], refunded: false, remaining: null, error: "",
+    results: null, noEdge: false, noEdgeBest: null, emptySectors: [], emptyByReason: null, refunded: false, remaining: null, error: "",
   };
 }
 
@@ -199,6 +199,7 @@ export function reduce(state, action) {
                noEdge: !!action.noEdge, noEdgeBest: action.noEdgeBest || null,
                // 분야 묶음에서 카드가 안 나온 분야 — 없는 것을 말없이 숨기지 않는다.
                emptySectors: action.emptySectors || [],
+               emptyByReason: action.emptyByReason || null,
                refunded: !!action.refunded,
                remaining: action.remaining ?? state.remaining, error: "" };
     case "error":

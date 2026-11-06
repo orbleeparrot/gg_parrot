@@ -121,3 +121,12 @@ test("headlineReturn shows the runner's pnl while holding and total return when 
   assert.equal(legacy.pct, 1.2);
   assert.equal(legacy.note, "평단 대비 +1.20%");
 });
+
+test("포지션 블록 · 종료 기록 — 0 으로 보이는 금액은 '+0' 도 초록도 아니다", async () => {
+  const { fmtSignedMoney: money, toneOf: tone } = await import("../src/lib/positionExits.js");
+  assert.equal(money(0.3, "KRW-GTC"), "0 KRW");
+  assert.equal(tone(0.3, "KRW-GTC"), "");
+  assert.equal(tone(-0.6, "KRW-GTC"), "is-down");
+  assert.equal(fmtSignedPct(0.004), "0.00%");
+  assert.equal(tone(0.004), "", "% 는 소수 둘째 자리로");
+});

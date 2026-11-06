@@ -119,7 +119,7 @@ export default function PositionStrip({ session, macro, waitModel = null, defaul
             </span>
           ) : (
             <span className="agent-position-idle">
-              실현손익 누적 <b className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}</b>{realizedTag}
+              실현손익 누적 <b className={"num " + toneOf(realized, session.symbol)}>{fmtSignedMoney(realized, session.symbol)}</b>{realizedTag}
             </span>
           )}
         </div>
@@ -144,7 +144,7 @@ export default function PositionStrip({ session, macro, waitModel = null, defaul
         <div><dt>수량</dt><dd className="num">{inPosition ? fmtQty(session.position_qty, session.symbol) : "—"}</dd></div>
         <div><dt>현재가</dt><dd className="num">{Number(session.last_price) > 0 ? fmtPrice(session.last_price) : "—"}</dd></div>
         <div><dt>{running ? "실행 시간" : "실행했던 시간"}</dt><dd className="num">{elapsed || "—"}</dd></div>
-        <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized)}>{fmtSignedMoney(realized, session.symbol)}{realizedTag}</dd></div>
+        <div><dt>실현손익 · 누적</dt><dd className={"num " + toneOf(realized, session.symbol)}>{fmtSignedMoney(realized, session.symbol)}{realizedTag}</dd></div>
         <div><dt>투입금</dt><dd className="num">{Number(session.invested_usdt) > 0 ? formatQuoteAmount(session.invested_usdt, session.symbol) : "—"}</dd></div>
         <div><dt>실행기</dt><dd className="num">{runner || "—"}</dd></div>
         {newer ? (

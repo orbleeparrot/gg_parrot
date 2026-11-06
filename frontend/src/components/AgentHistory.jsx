@@ -5,6 +5,7 @@ import CoinIcon from "./CoinIcon.jsx";
 import { RULE_TYPES } from "../lib/macro.js";
 import { baseOf, quoteOf } from "../lib/format.js";
 import { formatSignedMoney, toneOf } from "../features/agents/runOutcome.js";
+import { realizedPnl } from "../lib/positionExits.js";
 import { endLabel, environmentLabel, runDurationLabel, runPeriodLabel } from "../features/agents/history.js";
 import "./AgentHistory.css";
 
@@ -94,7 +95,9 @@ export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePi
           </div>
           {sessions.map((session) => {
             const end = endLabel(session);
-            const tone = toneOf(session.realized_pnl);
+            // 실현손익은 실행기와 같은 수수료 반영 값(옛 실행기면 수수료 전) — 화면에 0 이면 색 없음.
+            const realized = realizedPnl(session).money;
+            const tone = toneOf(realized, session.symbol);
             const duration = runDurationLabel(session.started_at, session.stopped_at);
             return (
               <div
@@ -117,7 +120,7 @@ export function AgentHistoryList({ sessions, policy, pinBusy, onOpen, onTogglePi
                   <span>{runPeriodLabel(session.started_at, session.stopped_at)}</span>
                 </span>
                 <span className={`agent-history-end is-${end.tone}`} role="cell"><i aria-hidden="true" />{end.text}</span>
-                <span className={`agent-history-pnl num is-${tone}`} role="cell">{formatSignedMoney(session.realized_pnl, session.symbol)}</span>
+                <span className={`agent-history-pnl num is-${tone}`} role="cell">{formatSignedMoney(realized, session.symbol)}</span>
                 <span className="agent-history-file-cell" role="cell">
                   {/* 매크로 파일(.ggm.json)을 다시 받는다 — 실행기 창에 끌어다 놓아 같은 매크로를 다시 돌린다. */}
                   <button

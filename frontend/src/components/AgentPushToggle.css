@@ -1,0 +1,12 @@
+/* 채팅 탭 줄 끝 '알림' 단추 — 탭 칸과 같은 높이(44) · 괘선 · 모서리. 켜지면 노란 바탕(시안 ②). 탭이 길면 탭 칸만 가로로 밀린다. */
+.agent-chat-controls:has(> .agent-push-toggle) { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.agent-push-toggle { display: flex; min-width: 0; }
+.agent-push-toggle button {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 12px;
+  border: 1px solid rgb(var(--c-slate-300)); border-radius: 8px; background: rgb(var(--c-surface));
+  color: rgb(var(--c-slate-700)); font-size: 13px; font-weight: 700; line-height: 1; white-space: nowrap; cursor: pointer;
+}
+.agent-push-toggle button:hover { color: rgb(var(--c-slate-900)); border-color: rgb(var(--c-slate-400)); }
+.agent-push-toggle button.is-on { border-color: transparent; background: rgb(var(--c-brand)); color: rgb(var(--c-brand-ink)); }
+.agent-push-toggle button:disabled { opacity: .6; cursor: default; }
+.agent-push-toggle button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }

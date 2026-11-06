@@ -1111,8 +1111,8 @@ def evaluate_session(session_id: int, *, now_ms: Optional[int] = None, candles_f
     from . import push_alerts
     with get_session() as db:
         added = save(db, facts, says, next_state, now_ms=now_ms)
-        # 새 기사 · 커뮤니티 글은 앱 알림으로도 — 말풍선과 같은 트랜잭션에 쌓아, 커밋된 소식만 울린다.
-        queued = push_alerts.enqueue_posts(db, facts, says, now_ms=now_ms) if added else 0
+        # 말풍선은 앱 알림으로도 — 같은 트랜잭션에 쌓아, 커밋된 말풍선만 울린다.
+        queued = push_alerts.enqueue_says(db, facts, says, now_ms=now_ms) if added else 0
         db.commit()
     if queued:
         from . import push_runtime

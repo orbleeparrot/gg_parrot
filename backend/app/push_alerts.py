@@ -1,7 +1,8 @@
-"""앱(PWA) 알림 — 기기 구독 저장, 내 에이전트 코인 소식을 보낼 알림으로 쌓기, 꺼내서 보내기.
+"""앱(PWA) 알림 — 기기 구독 저장, 내 에이전트 중계를 보낼 알림으로 쌓기, 꺼내서 보내기.
 
-흐름: 껄무새 중계(agent_commentary)가 실행 중인 세션에 기사 · 커뮤니티 글 말풍선(kind ``post``)을 남길 때
-같은 트랜잭션에서 ``enqueue_posts`` 가 PushOutbox 에 한 줄 넣는다(계정 · 글마다 한 번). 커밋 뒤
+흐름: 껄무새 중계(agent_commentary)가 말풍선을 남길 때 — 매수 · 매도, 손익 구간, 급등락 · 출렁임, 진입 대기,
+문제, 뉴스 · 커뮤니티 글, 시작 · 종료 등 채팅에 뜨는 것 전부 — 같은 트랜잭션에서 ``enqueue_says`` 가
+PushOutbox 에 한 줄씩 넣는다. 커밋 뒤
 push_runtime 이 ``dispatch`` 로 꺼내 그 계정의 기기마다 web_push.send 로 보낸다. 네트워크는 DB 연결을
 놓은 뒤에 기다린다(운영 DB 왕복 80ms · 웹 풀 8개).
 """
@@ -30,6 +31,7 @@ KEEP_MS = 3 * 86_400_000            # 보낸 기록은 사흘 남겨 같은 글�
 FAIL_LIMIT = 10                     # 연달아 이만큼 거절되면(키 바뀜 등) 그 기기를 지운다
 BATCH = 100
 TTL_SECONDS = 3600                  # 기기가 꺼져 있으면 한 시간까지만 기다렸다 전한다
+STALE_SAY_MS = 30 * 60_000          # 일어난 지 30분 넘은 일(처음 보는 세션의 옛 체결 등)은 채팅에만 — 늦은 알림은 헷갈린다
 PLATFORMS = {"android", "ios", "desktop"}
 
 _cleanup_lock = threading.Lock()
@@ -113,33 +115,51 @@ def delete_for_user(db, user_id: int) -> None:
 
 
 # --- 쌓기 ---------------------------------------------------------------------
-def post_payload(facts: dict, say: dict) -> dict:
-    """중계 말풍선(기사 · 커뮤니티 글) 하나를 알림 한 장으로. 문구는 채팅 말풍선과 같다."""
-    post = say.get("post") or {}
-    title = str(post.get("title") or "").strip()
-    summary = str(post.get("summary") or "").strip()
-    body = title if not summary or summary == title else f"{title}\n{summary}"
+def _sub_text(sub) -> str:
+    if not isinstance(sub, dict):
+        return ""
+    return f"{sub.get('b') or ''}{sub.get('t') or ''}".strip()
+
+
+def say_payload(facts: dict, say: dict) -> dict:
+    """중계 말풍선 하나를 알림 한 장으로. 제목은 '코인 · 말풍선 첫 줄', 본문은 말풍선의 숫자 줄과 덧붙인 줄 —
+    문구는 채팅과 같다(매크로가 주어인 말투 그대로). 기사 · 커뮤니티 글은 제목과 내용."""
+    post = say.get("post") if isinstance(say.get("post"), dict) else None
+    if post:
+        title = str(post.get("title") or "").strip()
+        summary = str(post.get("summary") or "").strip()
+        lines = [title] + ([summary] if summary and summary != title else [])
+    else:
+        lines = [str(say.get("nums") or "").strip(), *(_sub_text(sub) for sub in say.get("subs") or [])]
     return {
         "title": f"{facts['base']} · {say.get('hl') or '새 소식이 있어요'}"[:120],
-        "body": body[:400],
+        "body": "\n".join(line for line in lines if line)[:400],
         "url": f"/agents?session={int(facts['id'])}",
-        "tag": str(say.get("key") or "")[:120],
+        "tag": _dedupe_key(facts, say)[:120],
     }
 
 
-def enqueue_posts(db, facts: dict, says: list[dict], *, now_ms: int) -> int:
-    """실행 중인 세션의 새 소식 말풍선을 보낼 알림으로 쌓는다(커밋은 호출자). 쌓은 개수.
+def _dedupe_key(facts: dict, say: dict) -> str:
+    # 기사 · 글은 계정마다 한 번(같은 코인을 두 세션이 돌려도), 그 밖의 일은 세션마다 그 말풍선 하나.
+    key = str(say.get("key") or "")
+    return key if say.get("kind") == "post" else f"s{int(facts['id'])}:{key}"
 
-    알림을 켠 기기가 없는 계정은 아무것도 쌓지 않는다. 같은 글은 계정마다 한 번 — 같은 코인을 두 세션이
-    돌려도 한 번만 울린다.
+
+def enqueue_says(db, facts: dict, says: list[dict], *, now_ms: int) -> int:
+    """새 중계 말풍선을 보낼 알림으로 쌓는다(커밋은 호출자). 쌓은 개수.
+
+    알림을 켠 기기가 없는 계정은 아무것도 쌓지 않는다. 기사 · 커뮤니티 글은 실행 중인 세션 것만 — 끝나는
+    바퀴에 나온 글은 '투자 중인 코인' 소식이 아니다. 체결 · 종료처럼 끝나는 바퀴의 일은 보낸다.
     """
-    posts = [say for say in says if say.get("kind") == "post" and isinstance(say.get("post"), dict)]
-    if not posts or facts.get("status") != "running" or not web_push.enabled():
+    chosen = [say for say in says if say.get("key") and say.get("hl")
+              and now_ms - int(say.get("at_ms") or now_ms) <= STALE_SAY_MS
+              and (say.get("kind") != "post" or (facts.get("status") == "running" and isinstance(say.get("post"), dict)))]
+    if not chosen or not web_push.enabled():
         return 0
     user_id = int(facts["user_id"])
-    rows = [{"user_id": user_id, "dedupe_key": str(say["key"])[:160], "created_ms": now_ms, "sent_ms": 0,
-             "payload_json": json.dumps(post_payload(facts, say), ensure_ascii=False, separators=(",", ":"))}
-            for say in posts]
+    rows = [{"user_id": user_id, "dedupe_key": _dedupe_key(facts, say)[:160], "created_ms": now_ms, "sent_ms": 0,
+             "payload_json": json.dumps(say_payload(facts, say), ensure_ascii=False, separators=(",", ":"))}
+            for say in chosen]
     try:
         # 알림 쪽이 실패해도 말풍선 저장(같은 트랜잭션)은 그대로 커밋되게 — 저장 지점 안에서만 되돌린다.
         with db.begin_nested():
@@ -271,7 +291,7 @@ def send_test(user_id: int, *, now_ms: Optional[int] = None, send: Callable = we
     if not subscriptions:
         raise HTTPException(status_code=404, detail="알림을 켠 기기가 없어요.")
     payload = {"title": "껄무새 앱 알림이 켜졌어요",
-               "body": "내 에이전트가 거래 중인 코인의 새 기사 · 커뮤니티 글을 이렇게 알려 드려요.",
+               "body": "내 에이전트의 매매 · 손익 · 시세 · 뉴스 소식을 이렇게 알려 드려요.",
                "url": "/agents", "tag": "push-test"}
     result = _deliver([(user_id, payload)], subscriptions, now_ms=now_ms, send=send)
     return {"sent": result["sent"], "devices": result["jobs"]}

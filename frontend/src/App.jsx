@@ -12,6 +12,8 @@ import RouteErrorBoundary, { ShellBoundary } from "./components/RouteErrorBounda
 import { recordVisit } from "./lib/visit.js";
 import { PRO_BUILDER_OPEN } from "./lib/proBuilder.js";
 import { usePushBridge } from "./hooks/usePushBridge.js";
+import AppInstallDialog from "./components/AppInstallDialog.jsx";
+import PushPermissionPrompt from "./components/PushPermissionPrompt.jsx";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
 // community screens are fetched only when their route is opened.
@@ -232,6 +234,9 @@ export default function App() {
         </main>
         {hasMarquee ? <ShellBoundary name="marquee"><HotCoinsMarquee /></ShellBoundary> : null}
       </div>
+      {/* 앱(PWA) 설치 안내 · 앱으로 처음 열 때 알림 묻기 — 화면 위에 뜨는 층이라 틀 밖에 하나씩. */}
+      <ShellBoundary name="app-install"><AppInstallDialog /></ShellBoundary>
+      {!authShell ? <ShellBoundary name="push-ask"><PushPermissionPrompt /></ShellBoundary> : null}
     </div>
   );
 }

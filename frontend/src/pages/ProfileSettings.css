@@ -26,6 +26,20 @@
 .profile-settings-session-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 24px; border-top: 1px solid rgb(var(--c-slate-200)); }
 .profile-settings-session-actions .btn { min-height: 44px; font-size: 14px; }
 .profile-settings-session-actions .profile-settings-withdrawal { margin-left: auto; color: rgb(var(--c-red-600)); }
+/* 앱 알림 — 줄 왼쪽: 제목 · 칩(이 기기 · 기기 · 받는 것) · 상태 한 줄, 오른쪽: 스위치(켜면 노랑) 또는 버튼 · 차단 배지. */
+.app-alerts-label { display: grid; gap: 8px; min-width: 0; }
+.app-alerts-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.app-alerts-hint { margin: 0; font-size: 13.5px; line-height: 1.6; color: rgb(var(--c-slate-500)); word-break: keep-all; }
+.app-alerts-hint b { font-weight: 600; color: rgb(var(--c-slate-900)); }
+.app-alerts-blocked { flex: none; background: rgb(var(--c-red-50)); color: rgb(var(--c-red-700)); }
+.app-alerts-switch {
+  flex: none; width: 52px; height: 32px; padding: 3px; border: 0; border-radius: 16px;
+  display: flex; justify-content: flex-start; background: rgb(var(--c-slate-300)); cursor: pointer;
+  transition: background-color .15s ease;
+}
+.app-alerts-switch > span { width: 26px; height: 26px; border-radius: 50%; background: #ffffff; box-shadow: 0 1px 3px rgba(0, 0, 0, .25); }
+.app-alerts-switch[aria-checked="true"] { justify-content: flex-end; background: rgb(var(--c-brand)); }
+.app-alerts-switch:disabled { opacity: .6; cursor: default; }
 .profile-settings-page a:focus-visible, .profile-settings-page button:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 3px; }
 @media (hover: hover) {
   .profile-settings-nav a:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-slate-900)); }

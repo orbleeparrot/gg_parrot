@@ -15,6 +15,7 @@ import { ArrowBendUpLeftIcon as PhosphorArrowBendUpLeft } from "@phosphor-icons/
 import { RobotIcon as PhosphorRobot } from "@phosphor-icons/react/dist/csr/Robot";
 import { EnvelopeSimpleIcon as PhosphorEnvelopeSimple } from "@phosphor-icons/react/dist/csr/EnvelopeSimple";
 import { MegaphoneIcon as PhosphorMegaphone } from "@phosphor-icons/react/dist/csr/Megaphone";
+import { DeviceMobileIcon as PhosphorDeviceMobile } from "@phosphor-icons/react/dist/csr/DeviceMobile";
 
 // Keep the library's native paths and fill; CSS only sizes and aligns icons.
 const iconProps = { size: 24, weight: "regular", "aria-hidden": true, focusable: false };
@@ -28,6 +29,8 @@ export function HelpIcon() { return <QuestionIcon {...iconProps} />; }
 export function ChevronDownIcon() { return <CaretDownIcon {...iconProps} />; }
 export function MenuIcon() { return <ListIcon {...iconProps} />; }
 export function KeyIcon() { return <PhosphorKey {...iconProps} />; }
+// 앱(PWA) 설치 — 머리글 · 휴대폰 메뉴.
+export function DeviceMobileIcon() { return <PhosphorDeviceMobile {...iconProps} />; }
 // 알림 종과 알림 종류 표시(NotificationBell) — 모두 regular 원본, 크기는 CSS 가 정한다.
 export function BellIcon() { return <PhosphorBell {...iconProps} />; }
 export function TrophyIcon() { return <PhosphorTrophy {...iconProps} />; }

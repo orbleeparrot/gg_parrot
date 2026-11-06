@@ -5,6 +5,7 @@ import { advanceActivityTimeline, emptyActivityTimeline } from "../features/agen
 import { countNewObservations } from "../features/agents/positionNews/presentation.js";
 import RunResultScreen from "./RunResultScreen.jsx";
 import AgentCommentary from "./AgentCommentary.jsx";
+import AgentPushToggle from "./AgentPushToggle.jsx";
 import { CHAT_GROUPS, supportsWhale, todayCount } from "../lib/agentCommentary.js";
 import { Icon } from "./icons.jsx";
 
@@ -231,7 +232,7 @@ export default function AgentActivityStream({
             <div className="agent-chat-tabs agent-chat-result-toggle" role="group" aria-label="결과 화면">
               <button type="button" onClick={() => { setShowLog(false); selectFilter("all"); }}>결과 보기</button>
             </div>
-          ) : null}
+          ) : <AgentPushToggle />}
         </div>
       </header>
       {view === "activity_logs" && activityLog ? activityLog

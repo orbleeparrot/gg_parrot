@@ -60,8 +60,10 @@ export function loadPushConfig({ refresh = false } = {}) {
   return configPromise;
 }
 
-// supported | needs-install(아이폰 사파리 탭 — 홈 화면 앱에서만 된다) | in-app | unsupported
+// supported | desktop(PC 알림은 데스크톱 실행기가 보낸다 — 웹 푸시까지 켜면 같은 체결이 두 번 울린다)
+// | needs-install(아이폰 사파리 탭 — 홈 화면 앱에서만 된다) | in-app | unsupported
 export function pushSupport(win = globalThis.window, device = currentDevice(win)) {
+  if (device.platform === "desktop") return "desktop";
   if (device.browser === "in-app") return "in-app";
   const ready = Boolean(win?.navigator && "serviceWorker" in win.navigator && "PushManager" in win && "Notification" in win);
   if (ready) return "supported";
@@ -109,7 +111,7 @@ async function freshRegistration(win) {
   return ready;
 }
 
-// 이 기기의 상태: on | off | denied | unconfigured | needs-install | in-app | unsupported
+// 이 기기의 상태: on | off | denied | unconfigured | desktop | needs-install | in-app | unsupported
 export async function readPushState({ userId, config, win = globalThis.window } = {}) {
   const support = pushSupport(win);
   if (support !== "supported") return support;
@@ -189,6 +191,13 @@ export async function syncPush({ userId, win = globalThis.window, now = Date.now
   await api.pushSubscribe({ endpoint: body.endpoint, keys: body.keys, platform: currentDevice(win).platform });
   write(SYNC_KEY, String(now));
   return "synced";
+}
+
+// 앱으로 처음 열었을 때 한 번 묻는 조건 — 앱(홈 화면 · 바탕화면)으로 열었고, 이 기기에서 꺼져 있고, 권한을 아직 안 물었고,
+// 이 기기에서 한 번도 답하지 않았고, 로그인 · 거래소 연결처럼 다른 일을 하는 화면이 아닐 때.
+const QUIET_PATHS = ["/login", "/forgot", "/reset", "/exchange-connect"];
+export function shouldAskPush({ standalone, state, permission, alreadyAsked, path }) {
+  return Boolean(standalone) && state === "off" && permission === "default" && !alreadyAsked && !QUIET_PATHS.includes(path);
 }
 
 export function sendTestPush() {

@@ -228,7 +228,12 @@ def _rows(user_id: int) -> list[PushOutbox]:
         return list(db.exec(select(PushOutbox).where(PushOutbox.user_id == user_id).order_by(PushOutbox.id)).all())
 
 
-def test_news_for_a_running_agent_reaches_every_device_once(vapid_on):
+def _posts(rows):
+    return [row for row in rows if row.dedupe_key.startswith("post:")]
+
+
+def test_agent_commentary_reaches_every_device_once(vapid_on):
+    """중계 말풍선 전부(시작 · 매수 · 기사 · 종료 …)가 알림으로 — 기사는 계정마다 한 번, 그 밖은 세션마다."""
     token = _signup()
     user_id = _user_id(token)
     key = _key(token)
@@ -237,17 +242,28 @@ def test_news_for_a_running_agent_reaches_every_device_once(vapid_on):
         assert client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token)).status_code == 200
     first, second = _start(key), _start(key)  # 같은 코인(LTC)을 두 세션이 돌린다
     try:
+        r = client.post("/api/runner/heartbeat", json={"session_id": first, "last_price": 100.0, "in_position": True,
+                                                       "entry_price": 100.0, "position_qty": 2.0, "events": [
+            {"kind": "fill", "message": "실전 주문 결과", "event_name": "runner.order_result", "event_key": "fill-1",
+             "details": {"action": "BUY", "executed_qty": 2.0, "fill_price": 100.0}}]}, headers={"X-Runner-Key": key})
+        assert r.status_code == 200, r.text
         now = int(time.time() * 1000)
         _cycle(now, [], 1)  # 처음 본 피드는 위치만 기억
+        keys = {row.dedupe_key for row in _rows(user_id)}
+        assert {f"s{first}:start", f"s{second}:start"} <= keys
+        fill = next(row for row in _rows(user_id) if row.dedupe_key.startswith(f"s{first}:fill"))
+        assert json.loads(fill.payload_json) == {"title": "LTC · 샀어요!",
+                                                 "body": "100.00 USDT · 2개 · 200.00 USDT\n시작하자마자 사는 매크로예요",
+                                                 "url": f"/agents?session={first}", "tag": fill.dedupe_key}
         article = _article(7, "라이트코인 ETF 심사 연기", now - 60_000)
         _cycle(now + 2_000, [article], 2)
-        rows = _rows(user_id)
-        assert len(rows) == 1, "두 세션이 같은 기사를 말해도 알림은 한 번"
-        payload = json.loads(rows[0].payload_json)
-        assert payload["title"] == "LTC · " + payload["title"].split(" · ", 1)[1]
-        assert payload["title"].split(" · ", 1)[1] in ("관련 기사가 나왔어요", "이런 기사가 떴어요")
+        posts = _posts(_rows(user_id))
+        assert len(posts) == 1, "두 세션이 같은 기사를 말해도 알림은 한 번"
+        payload = json.loads(posts[0].payload_json)
+        assert payload["title"].split(" · ", 1) in (["LTC", "관련 기사가 나왔어요"], ["LTC", "이런 기사가 떴어요"])
         assert payload["body"].startswith("라이트코인 ETF 심사 연기\n라이트코인 현물 ETF 심사가 다음 주로 미뤄졌다.")
         assert payload["url"] in (f"/agents?session={first}", f"/agents?session={second}")
+        queued = len(_rows(user_id))
 
         delivered = []
 
@@ -255,9 +271,10 @@ def test_news_for_a_running_agent_reaches_every_device_once(vapid_on):
             delivered.append((subscription["endpoint"], data, kwargs))
             return web_push.GONE if subscription["endpoint"] == laptop["endpoint"] else web_push.SENT
         result = push_alerts.dispatch(now_ms=now + 3_000, send=fake_send)
-        assert result["claimed"] == 1 and result["sent"] == 1 and result["gone"] == 1
-        assert sorted(endpoint for endpoint, _, _ in delivered) == sorted([phone["endpoint"], laptop["endpoint"]])
-        assert json.loads(delivered[0][1]) == payload and delivered[0][2]["urgency"] == "high"
+        assert result["claimed"] == queued and result["jobs"] == queued * 2
+        assert result["sent"] == 1 and result["gone"] == 1, "기기 수로 센다 — 전화는 받고 노트북 구독은 끝남"
+        assert {endpoint for endpoint, _, _ in delivered} == {phone["endpoint"], laptop["endpoint"]}
+        assert payload in [json.loads(data) for _, data, _ in delivered] and delivered[0][2]["urgency"] == "high"
         assert push_alerts.dispatch(now_ms=now + 4_000, send=fake_send) == {"claimed": 0}, "한 번 꺼낸 알림은 다시 안 간다"
         with get_session() as db:
             left = db.exec(select(PushSubscription.endpoint).where(PushSubscription.user_id == user_id)).all()
@@ -265,10 +282,25 @@ def test_news_for_a_running_agent_reaches_every_device_once(vapid_on):
     finally:
         _stop(key, first)
         _stop(key, second)
-    # 끝난 세션의 마지막 바퀴에 나온 기사는 앱 알림으로 보내지 않는다 — '실행 중인' 에이전트의 소식만.
+    # 끝나는 바퀴: '실행이 끝났어요'는 보내고, 그 바퀴에 나온 기사는 보내지 않는다 — '투자 중인' 코인 소식만.
     later = int(time.time() * 1000) + 10_000
     _cycle(later, [article, _article(8, "라이트코인 거래량 급증", later - 30_000)], 3)
-    assert len(_rows(user_id)) == 1
+    rows = _rows(user_id)
+    assert {f"s{first}:end", f"s{second}:end"} <= {row.dedupe_key for row in rows}
+    assert len(_posts(rows)) == 1
+
+
+def test_old_happenings_stay_in_the_chat_only(vapid_on):
+    facts = {"id": 5, "user_id": 1, "base": "BTC", "status": "running"}
+    now = 10**13
+    says = [{"key": "fill:1", "kind": "fill", "hl": "샀어요!", "at_ms": now - push_alerts.STALE_SAY_MS - 1},
+            {"key": "loss:5", "kind": "loss", "hl": "손실이 -5%를 넘었어요", "at_ms": now, "nums": "-5.2%",
+             "subs": [{"t": "손절선까지 1.8%p 남았어요"}, {"b": "포지션 보유 중", "t": " · 거래소에서 확인"}]}]
+    with get_session() as db:
+        assert push_alerts.enqueue_says(db, facts, says, now_ms=now) == 0, "기기가 없는 계정"
+    assert push_alerts.say_payload(facts, says[1]) == {
+        "title": "BTC · 손실이 -5%를 넘었어요", "body": "-5.2%\n손절선까지 1.8%p 남았어요\n포지션 보유 중 · 거래소에서 확인",
+        "url": "/agents?session=5", "tag": "s5:loss:5"}
 
 
 def test_accounts_without_a_device_queue_nothing(vapid_on):

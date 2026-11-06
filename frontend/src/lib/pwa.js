@@ -38,12 +38,19 @@ export function currentDevice(win = globalThis.window) {
   return { platform: detectPlatform(env), browser: detectBrowser(env), standalone: isStandalone(win) };
 }
 
+// 앱 설치 안내를 보일 기기 — 휴대폰 · 태블릿에서 아직 앱으로 열지 않았을 때. PC 는 데스크톱 실행기가 앱 · 알림을 맡는다.
+export function offersAppInstall(device = currentDevice()) {
+  return device.platform !== "desktop" && !device.standalone;
+}
+
 // --- 바로 설치 -----------------------------------------------------------------
 let deferredPrompt = null;
 let installedNow = false;
+let snapshot = { canPrompt: false, installed: false }; // useSyncExternalStore 는 같은 상태면 같은 객체를 받아야 한다
 const listeners = new Set();
 
 function emit() {
+  snapshot = { canPrompt: Boolean(deferredPrompt), installed: installedNow };
   for (const listener of listeners) listener();
 }
 
@@ -62,7 +69,7 @@ export function captureInstallPrompt(win = globalThis.window) {
 }
 
 export function installState() {
-  return { canPrompt: Boolean(deferredPrompt), installed: installedNow };
+  return snapshot;
 }
 
 export function subscribeInstall(listener) {

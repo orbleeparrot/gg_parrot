@@ -1,12 +1,6 @@
 import { communityPostIdentity, communitySummaryPresentation, hasKoreanText, newsSourceLabel } from "../../../lib/newsBriefings.js";
 import { publicationTime } from "./presentation.js";
 
-function impactPresentation(effect) {
-  if (effect === "favorable") return { severity: "signal", expression: "signal" };
-  if (effect === "unfavorable") return { severity: "warning", expression: "warning" };
-  return { severity: "info", expression: "curious" };
-}
-
 function normalizeIdentity(value) {
   return String(value ?? "").normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
 }
@@ -80,7 +74,6 @@ export const positionNewsModule = {
       const identity = articleIdentity(item);
       if (!identity) return;
       const isCommunityPost = item.content_type === "community";
-      const presentation = impactPresentation(isCommunityPost ? "unclear" : item.position_effect);
       const isHistorical = item.is_historical === true || data.content_scope === "archive";
       const publishedAt = publicationTime(item.published);
       const receipt = state?.receiptLinks?.[item._activity_receipt_key];
@@ -90,8 +83,8 @@ export const positionNewsModule = {
         activityEventId: linked ? receipt.eventId : null,
         activitySessionId: linked ? data.context?.session_id : null,
         module: "position_news",
-        severity: presentation.severity,
-        expression: presentation.expression,
+        severity: "info",
+        expression: "curious",
         title: item.title || "관련 뉴스",
         summary: isCommunityPost ? "커뮤니티 작성자의 의견이며 포지션 영향은 확인되지 않았어요."
           : hasKoreanText(item.summary) ? item.summary : "",

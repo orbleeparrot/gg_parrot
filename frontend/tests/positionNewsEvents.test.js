@@ -16,6 +16,16 @@ test("article cards link only to the exact signed response that covered their ow
   assert.deepEqual(rows.map((row) => row.activitySessionId), [41, 41, null]);
 });
 
+test("articles are never colored as favorable or unfavorable for the position", () => {
+  // 11/06 유리/불리 판단을 뺐다 — 옛 서버 응답에 값이 남아 있어도 표정 · 색을 바꾸지 않는다.
+  const rows = positionNewsModule.buildEvents({ featureStates: { position_news: { data: { items: [
+    { id: "up", title: "비트코인 ETF 승인", position_effect: "favorable" },
+    { id: "down", title: "거래소 해킹으로 출금 중단", position_effect: "unfavorable" },
+    { id: "plain", title: "비트코인 소식" },
+  ] } } } });
+  assert.deepEqual(rows.map((row) => [row.severity, row.expression]), [["info", "curious"], ["info", "curious"], ["info", "curious"]]);
+});
+
 test("successful empty collection does not create a chat notification", () => {
   const events = positionNewsModule.buildEvents({ featureStates: { position_news: {
     data: { context: { asset_symbol: "NEW" }, items: [], analysis_status: "empty", collection: { status: "ready" } },
@@ -80,7 +90,6 @@ test("position news shows the article title and content summary without position
             source: "CoinDesk",
             url: "https://news.example.com/openeden",
             published: "2026-08-25T01:11:44Z",
-            position_effect: "unclear",
             summary: "OpenEden이 토큰화 미국 국채 플랫폼의 지원 범위를 확대했다는 내용입니다.",
           }],
           analysis_status: "rate_limited",

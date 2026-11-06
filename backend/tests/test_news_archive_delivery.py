@@ -121,7 +121,7 @@ def test_historical_article_is_not_a_current_position_signal(monkeypatch):
         {'items':[{'sentiment':'positive','summary':'자금 조달 발표','confidence':'high'}]},
     )
     assert payload['items'][0]['is_historical'] is True
-    assert payload['items'][0]['position_effect']=='unclear'
+    assert payload['items'][0]['asset_sentiment']=='unclear'
 
 
 def test_successful_empty_search_is_not_reported_as_collection_outage(monkeypatch):

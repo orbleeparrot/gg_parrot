@@ -36,7 +36,6 @@ class Fixtures:
         self.news_items = [{
             "id": "link-news-one", "url": "https://fixture.example/news/link-one",
             "title": "체인링크 네트워크 업데이트 발표", "source": "검증 뉴스",
-            "position_effect": "neutral",
             # Missing publication date deliberately exercises the mutable
             # snapshot timestamp fallback without changing the article itself.
             "summary": "체인링크가 네트워크 업데이트를 발표했습니다. 기존 기사와 발생 시각을 유지하며 새 소식만 추가하는지 확인합니다.",
@@ -222,7 +221,7 @@ def main():
         fixture.news_items.append({
             "id": "link-news-two", "url": "https://fixture.example/news/link-two",
             "title": "체인링크 새 파트너십 발표", "source": "검증 뉴스", "published": fixture.now,
-            "position_effect": "neutral", "summary": "실제 새 기사 한 건입니다.",
+            "summary": "실제 새 기사 한 건입니다.",
         })
         advance(page, fixture, 35)
         after_news = messages(page)

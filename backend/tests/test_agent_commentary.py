@@ -195,6 +195,22 @@ def test_community_posts_come_one_by_one_without_repeats_or_floods():
     assert len([s for s in says if s["kind"] == "post"]) == 10, "개수로 자르지 않는다 — 걸러내는 건 같은 글 · 퍼 나른 글뿐"
 
 
+def test_news_bubble_has_no_position_favorable_or_unfavorable_line():
+    """11/06 사용자 결정: 기사 말풍선에 '내 포지션엔 유리/불리한 쪽 소식' 줄을 붙이지 않는다(제목 단어 규칙 판단이라 거칠다)."""
+    state = started_state() | {"news_rev": 40}
+    article = lambda pid, title, minutes: {"id": pid, "url": f"https://news.example.com/{pid}", "title": title, "source": "CoinDesk",
+                                           "published": __import__("datetime").datetime.fromtimestamp((NOW - minutes * MIN) / 1000, ac.timezone.utc).isoformat()}
+    feed = {"cursor": 45, "reset": False,
+            "items": [article(1, "비트코인 ETF 승인", 9), article(2, "거래소 해킹으로 출금 중단", 8)],
+            "analysis": {"items": [{"sentiment": "positive", "summary": "ETF 가 승인됐다."},
+                                   {"sentiment": "negative", "summary": "해킹으로 출금이 멈췄다."}]}}
+    says, _ = ac.decide(state, facts(), feed=feed, now_ms=NOW)
+    news = [s for s in says if s["kind"] == "post"]
+    assert [s["post"]["kind"] for s in news] == ["news", "news"]
+    assert all(s["subs"] == [] and s["face"] == "curious" for s in news)
+    assert "유리" not in str(news) and "불리" not in str(news)
+
+
 def test_community_post_waits_for_its_summary_then_comes_with_title_and_body():
     """10/17 운영: 글을 보자마자 말해 83%가 제목만 나갔다(요약은 몇 분 뒤 준비됨)."""
     state = started_state() | {"news_rev": 40}

@@ -846,12 +846,6 @@ def _say_posts(state: dict, facts: dict, feed, now_ms: int) -> list[dict]:
             hl = "같은 소식 기사가 또 나왔어요" if repeat else pick(("관련 기사가 나왔어요", "이런 기사가 떴어요"), key)
         summary = first_sentence(clean_text(raw_summary), limit=200, sentences=2)  # 제목 + 내용 — 두 문장까지
         subs = []
-        if not community:
-            effect = _position_effect(assessed, facts["side"])
-            if effect == "favorable":
-                subs.append(_sub("내 포지션엔 유리한 쪽 소식으로 분류됐어요"))
-            elif effect == "unfavorable":
-                subs.append(_sub("내 포지션엔 불리한 쪽 소식으로 분류됐어요"))
         url = str(item.get("url") or "")
         post = {"kind": "community" if community else "news", "title": title[:200], "summary": summary,
                 "author": author, "source": source, "url": url if url.startswith("https://") else "",
@@ -883,17 +877,6 @@ def _same_numbers(found: list[str], seen: list[str]) -> bool:
     if not percents:
         return False
     return len(shared) >= 2 or any("." in token and len(token[:-1].split(".")[1]) >= 2 for token in percents)
-
-
-def _position_effect(assessed: dict, side: str) -> str:
-    sentiment = assessed.get("sentiment") if isinstance(assessed, dict) else None
-    try:
-        from .agent_features.position_news import classifier
-        if sentiment not in classifier.SENTIMENTS:
-            return "unclear"
-        return classifier.position_effect(sentiment, side)
-    except Exception:
-        return "unclear"
 
 
 def _say_end(facts: dict, now_ms: int) -> dict:

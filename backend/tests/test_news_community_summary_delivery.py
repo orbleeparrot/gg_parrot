@@ -117,7 +117,7 @@ def test_agent_projection_keeps_prepared_summary_without_private_fields_or_headl
     assert result["items"][0]["community_summary"] == SUMMARY
     assert result["items"][0]["community_summary_status"] == "ready"
     assert result["items"][0]["community_summary_partial"] is True
-    assert result["items"][0]["position_effect"] == "unclear"
+    assert result["items"][0]["asset_sentiment"] == "unclear"
     assert_no_body(result)
     monkeypatch.setattr(summary_module, "_schedule", lambda _: pytest.fail("prepared summary must not be regenerated"))
     public = news._localize_news_payload(result)
@@ -157,8 +157,8 @@ def test_agent_read_passes_private_body_to_summary_then_strips_it_and_preserves_
     assert pending["community_summaries"]["pending_count"] == 1
     assert ready["community_summaries"]["pending_count"] == 0
     assert ready["items"][0]["community_summary"] == SUMMARY
-    assert ready["items"][0]["position_effect"] == "unclear"
-    assert ready["items"][1]["position_effect"] == "favorable"
+    assert ready["items"][0]["asset_sentiment"] == "unclear"
+    assert ready["items"][1]["asset_sentiment"] == "positive"
     assert "community_summary" not in ready["items"][1]
     assert stored == original
     assert_no_body(pending)

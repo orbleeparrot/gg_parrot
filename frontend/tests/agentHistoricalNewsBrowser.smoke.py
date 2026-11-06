@@ -88,7 +88,7 @@ with sync_playwright() as playwright:
         "content_type": "community", "community_post_id": "123456789", "author": "시장기록자",
         "source": "Binance Square", "url": "https://www.binance.com/en/square/post/123456789",
         "title": "CHIP에 대한 커뮤니티 작성자의 의견", "original_title": "A personal CHIP outlook",
-        "summary": "Original English community body", "position_effect": "favorable",
+        "summary": "Original English community body",
         "community_summary_status": "pending", "community_summary": "Original English summary must stay hidden",
         "is_historical": True, "published": "2022-01-02T01:30:00Z",
     })

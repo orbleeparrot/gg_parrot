@@ -8,7 +8,7 @@ import { countNewObservations } from "../src/features/agents/positionNews/presen
 const post = { content_type: "community", source: "Binance Square", community_post_id: "123456789",
   author: "시장기록자", url: "https://www.binance.com/en/square/post/123456789",
   title: "CHIP에 대한 커뮤니티 작성자의 전망", original_title: "A personal outlook on CHIP",
-  published: "2026-09-08T01:00:00Z", position_effect: "favorable", summary: "상승을 보장한다는 잘못된 요약" };
+  published: "2026-09-08T01:00:00Z", summary: "상승을 보장한다는 잘못된 요약" };
 const state = (items) => ({ position_news: { status: "ready", data: { items, collection: { status: "ready", freshness: "fresh" } } } });
 
 
@@ -38,7 +38,7 @@ test("post IDs survive revised translations, backend title IDs and renamed autho
 });
 
 
-test("community opinions never become favorable position signals or expose supplied body summaries", () => {
+test("community opinions stay neutral and never expose supplied body summaries", () => {
   const event = positionNewsModule.buildEvents({ featureStates: state([post]) })[0];
   assert.equal(event.isCommunityPost, true);
   assert.equal(event.severity, "info");

@@ -1,4 +1,4 @@
-"""Read-only service for applying one session's side to shared ticker news."""
+"""Read-only service for projecting shared ticker news into one session's view."""
 from __future__ import annotations
 
 import hashlib
@@ -94,11 +94,10 @@ def build_position_news(
             if assessed.get("sentiment") in classifier.SENTIMENTS
             else "unclear"
         )
-        effect = classifier.position_effect(sentiment, side)
         if is_historical or is_community:
             # History and unverified community opinions do not establish a
-            # directional observation about the user's current position.
-            sentiment, effect = "unclear", "unclear"
+            # directional observation about the asset.
+            sentiment = "unclear"
         items.append(
             {
                 "id": _article_id(raw),
@@ -123,7 +122,6 @@ def build_position_news(
                 "published": raw.get("published"),
                 "is_historical": is_historical,
                 "asset_sentiment": sentiment,
-                "position_effect": effect,
                 "summary": str(
                     "커뮤니티 작성자의 의견이며 포지션 영향은 확인되지 않았어요."
                     if is_community else assessed.get("summary") or raw.get("excerpt") or ""
@@ -247,7 +245,7 @@ def get_position_news(session: dict, db: Session | None = None, *, cursor: int |
                                          freshness="stale" if age > _STALE_SECONDS else "fresh")
         if db is not None:
             db.rollback()
-        # Filtering and side projection are local CPU work. No title cache,
+        # Filtering and projection are local CPU work. No title cache,
         # provider, source loader or enrichment scheduler is invoked here.
         payload["items"] = [item for item in payload["items"] if news_mod._within_coin_news_window(item)]
         payload["collection"].update(delivery_metadata({**feed, "items": payload["items"]}, collection=collection))

@@ -63,13 +63,13 @@ def test_position_get_is_db_only_and_projects_ready_articles_by_identity(engine,
     monkeypatch.setattr(collector.classifier, "analyze_headlines", forbidden)
     with Session(engine) as db:
         first = service.get_position_news({"symbol": "BTCUSDT", "position_side": "short"}, db=db)
-    assert len(first["items"]) == 1 and first["items"][0]["position_effect"] == "favorable"
+    assert len(first["items"]) == 1 and first["items"][0]["asset_sentiment"] == "negative"
     translated = {**raw[0], "original_title": raw[0]["title"], "title": "비트코인 ETF 승인"}
     articles.upsert_articles("BTC", [translated])
     with Session(engine) as db:
         next_page = service.get_position_news({"symbol": "BTCUSDT", "position_side": "short"}, db=db, cursor=first["cursor"])
     assert len(next_page["items"]) == 1
-    assert next_page["items"][0]["position_effect"] == "unfavorable"
+    assert next_page["items"][0]["asset_sentiment"] == "positive"
     assert next_page["items"][0]["id"] == service._article_id(raw[0])
 
 

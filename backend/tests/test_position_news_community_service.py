@@ -31,7 +31,7 @@ def test_community_fields_survive_without_inheriting_analyzed_sentiment_or_body(
     item = payload['items'][0]
     for field in ('content_type', 'source', 'community_post_id', 'author', 'url', 'published', 'original_title'):
         assert item[field] == POST[field]
-    assert item['asset_sentiment'] == item['position_effect'] == 'unclear'
+    assert item['asset_sentiment'] == 'unclear'
     assert item['confidence'] == 'low'
     assert item['summary'] == '커뮤니티 작성자의 의견이며 포지션 영향은 확인되지 않았어요.'
     assert 'Untranslated' not in str(payload)
@@ -48,12 +48,12 @@ def test_community_skips_rule_classifier_and_keeps_following_article_analysis_in
         {'sentiment': 'positive', 'confidence': 'high'},
         {'sentiment': 'negative', 'confidence': 'medium'},
     ])
-    assert [item['position_effect'] for item in payload['items']] == ['unclear', 'unfavorable']
+    assert [item['asset_sentiment'] for item in payload['items']] == ['unclear', 'negative']
     assert payload['overview']['scope'] == 'mixed_sources'
     assert '뉴스 1건과 커뮤니티 게시글 1건' in payload['overview']['text']
     assert payload['ai'] is True
     # Missing classifier output also must not trigger headline heuristics for posts.
-    assert build([POST])['items'][0]['position_effect'] == 'unclear'
+    assert build([POST])['items'][0]['asset_sentiment'] == 'unclear'
 
 
 def test_post_identity_survives_title_translation_author_edits_and_url_locale():
@@ -72,18 +72,19 @@ def test_post_without_explicit_id_uses_source_and_canonical_url_not_title():
     assert service._article_id(item) != service._article_id({**item, 'url': item['url'] + '0'})
 
 
-def test_historical_post_keeps_actual_publication_and_has_no_position_effect():
+def test_historical_post_keeps_actual_publication_and_has_no_sentiment():
     post = {**POST, 'published': '2022-01-02T01:30:00Z'}
     item = build([post])['items'][0]
     assert item['is_historical'] is True
     assert item['published'] == '2022-01-02T01:30:00Z'
-    assert item['position_effect'] == 'unclear'
+    assert item['asset_sentiment'] == 'unclear'
 
 
 def test_regular_article_identity_and_classification_are_unchanged():
     article = {'title': '공식 ETF 승인', 'source': 'CoinDesk', 'published': POST['published']}
     payload = build([article], [{'sentiment': 'positive', 'confidence': 'high', 'summary': '정식 승인 발표입니다.'}])
-    assert payload['items'][0]['position_effect'] == 'favorable'
+    assert payload['items'][0]['asset_sentiment'] == 'positive'
+    assert 'position_effect' not in payload['items'][0]
     assert payload['items'][0]['confidence'] == 'high'
     assert 'content_type' not in payload['items'][0]
     assert payload['analysis_source'] == 'ai'

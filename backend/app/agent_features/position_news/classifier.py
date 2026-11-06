@@ -23,7 +23,6 @@ _MAX_AI_SUMMARY_ITEMS = max(
 )
 
 SENTIMENTS = {"positive", "negative", "neutral", "unclear"}
-POSITION_EFFECTS = {"favorable", "unfavorable", "neutral", "unclear"}
 _SENTIMENT_REASONS = {
     "positive": "헤드라인을 자산에 긍정적인 맥락으로 분류했어요.",
     "negative": "헤드라인을 자산에 부정적인 맥락으로 분류했어요.",
@@ -152,19 +151,6 @@ def classify_headline(title: str) -> dict:
         "reason": "헤드라인만으로 긍정·부정을 뚜렷하게 판단하기 어려워요.",
         "confidence": "low",
     }
-
-
-def position_effect(sentiment: str, position_side: str) -> str:
-    """Map asset sentiment to a macro-direction effect without model judgment."""
-    side = str(position_side or "").strip().lower()
-    if side not in {"long", "short"}:
-        raise ValueError("position_side must be 'long' or 'short'")
-    if sentiment == "neutral":
-        return "neutral"
-    if sentiment not in {"positive", "negative"}:
-        return "unclear"
-    favorable = sentiment == "positive" if side == "long" else sentiment == "negative"
-    return "favorable" if favorable else "unfavorable"
 
 
 def _trim_title(title: str, limit: int = 54) -> str:

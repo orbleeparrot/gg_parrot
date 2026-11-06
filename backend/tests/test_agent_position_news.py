@@ -9,7 +9,7 @@ import pytest
 from app.agent_features.position_news import classifier, service
 
 # 실시간 뉴스 창(POSITION_NEWS_BROWSER_MAX_AGE_DAYS, 기본 30일) 안쪽을 항상 가리킨다 —
-# 날짜를 박아 두면 창을 지나는 날 position_effect 가 unclear 로 바뀌어 테스트가 저절로 깨진다.
+# 날짜를 박아 두면 창을 지나는 날 asset_sentiment 가 unclear 로 바뀌어 테스트가 저절로 깨진다.
 def _ago(**delta):
     return (datetime.now(timezone.utc) - timedelta(**delta)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -25,23 +25,6 @@ def legacy_snapshot_projection(monkeypatch):
     # durable cursor delivery is exercised in test_position_news_articles.py.
     from app.agent_features.position_news import repository
     monkeypatch.setattr(repository, "read_article_feed", lambda *args, **kwargs: None)
-
-
-@pytest.mark.parametrize(
-    ("side", "sentiment", "expected"),
-    [
-        ("long", "positive", "favorable"),
-        ("long", "negative", "unfavorable"),
-        ("short", "positive", "unfavorable"),
-        ("short", "negative", "favorable"),
-        ("long", "neutral", "neutral"),
-        ("short", "neutral", "neutral"),
-        ("long", "unclear", "unclear"),
-        ("short", "unclear", "unclear"),
-    ],
-)
-def test_position_effect_truth_table(side, sentiment, expected):
-    assert classifier.position_effect(sentiment, side) == expected
 
 
 def test_agent_position_news_preserves_collector_localized_titles(monkeypatch):
@@ -362,7 +345,8 @@ def test_payload_uses_registered_macro_direction_and_preserves_sources():
     assert payload["context"]["position_basis"] == "macro_configuration"
     assert payload["context"]["market_symbol"] == "BTCUSDT"
     assert payload["context"]["asset_symbol"] == "BTC"
-    assert [item["position_effect"] for item in payload["items"]] == ["unfavorable", "favorable"]
+    assert [item["asset_sentiment"] for item in payload["items"]] == ["positive", "negative"]
+    assert all("position_effect" not in item for item in payload["items"])
     assert payload["items"][0]["summary"] == (
         "금융 당국이 비트코인 현물 ETF 출시를 승인했습니다."
     )
@@ -422,8 +406,8 @@ def test_request_path_reads_one_shared_snapshot_for_long_and_short(monkeypatch):
 
     assert loaded == ["BTC", "BTC"]
     assert long_payload["snapshot_id"] == "a" * 20
-    assert long_payload["items"][0]["position_effect"] == "favorable"
-    assert short_payload["items"][0]["position_effect"] == "unfavorable"
+    assert long_payload["items"][0]["asset_sentiment"] == short_payload["items"][0]["asset_sentiment"] == "positive"
+    assert "position_effect" not in long_payload["items"][0]
     assert long_payload["collection"]["freshness"] == "fresh"
 
 

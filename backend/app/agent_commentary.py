@@ -1065,7 +1065,15 @@ def _targets(db, now_ms: int) -> list[int]:
         RunSession, RunSession.id == AgentCommentaryState.session_id).where(
         RunSession.status != "running", AgentCommentaryState.updated_ms >= now_ms - ENDED_LOOKBACK_MS,
         ~AgentCommentaryState.state_json.contains('"ended":true'))).all())
-    return list(dict.fromkeys([*running, *ended]))
+    # 첫 바퀴 전에 시작 · 체결 · 종료가 다 끝난 짧은 실행(바퀴 사이 몇 초 · 서버 재시작 중) — 상태 줄이 없어 위 둘에
+    # 걸리지 않으면 시작 · 매수 · 매도 · 종료가 채팅에도 앱 알림에도 영영 안 나온다. 방금 끝난 것만 처음부터 한 번 말한다.
+    # stopped_at 은 어디서나 '%Y-%m-%dT%H:%M:%SZ'(UTC)라 글자 비교가 시각 비교다.
+    since = datetime.fromtimestamp((now_ms - ENDED_LOOKBACK_MS) / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    unseen = list(db.exec(select(RunSession.id).outerjoin(
+        AgentCommentaryState, AgentCommentaryState.session_id == RunSession.id).where(
+        RunSession.status != "running", RunSession.stopped_at >= since,
+        AgentCommentaryState.session_id.is_(None))).all())
+    return list(dict.fromkeys([*running, *ended, *unseen]))
 
 
 def evaluate_session(session_id: int, *, now_ms: Optional[int] = None, candles_for=None, feed_for=None,

@@ -718,6 +718,10 @@ class PushOutbox(SQLModel, table=True):
 
     ``dedupe_key`` 가 계정마다 유일하다 — 같은 코인을 두 세션이 돌려도 같은 기사는 한 번만 울린다. 보낸 행은
     며칠 남겨 중복을 막다가 지운다(push_alerts.KEEP_MS).
+
+    꺼낸 프로세스는 ``lease_ms`` 까지 맡는다. 보내고 나서야 ``sent_ms`` 를 채우므로, 보내다 죽으면 맡은 시간이 지나
+    다른 바퀴가 다시 꺼낸다. 잠깐 막힌 기기(429 · 5xx · 연결 실패)는 ``lease_ms`` 를 다음 시도 시각으로 미뤄 그 기기에만
+    다시 보낸다 — 이미 끝낸 기기는 ``done_json`` 에 적어 두 번 보내지 않는다.
     """
 
     __table_args__ = (
@@ -729,7 +733,10 @@ class PushOutbox(SQLModel, table=True):
     dedupe_key: str
     payload_json: str = ""
     created_ms: int = Field(default=0, sa_type=BigInteger)
-    sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 안 보냄(꺼내 간 순간 채운다)
+    sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 다 못 보냄. 모든 기기를 끝내거나 시도를 다 쓴 시각
+    lease_ms: int = Field(default=0, sa_type=BigInteger)  # 이 시각 전에는 꺼내지 않는다(보내는 중 · 다시 보내기 대기)
+    attempts: int = 0
+    done_json: str = ""  # 이미 끝낸 기기(구독 id) 목록 — 다시 보낼 때 건너뛴다
 
 
 class TickerNewsSnapshot(SQLModel, table=True):

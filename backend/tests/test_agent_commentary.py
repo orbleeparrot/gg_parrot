@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app import agent_commentary as ac
-from app.db import AgentCommentaryState, AgentUtterance, get_session
+from app.db import AgentCommentaryState, AgentUtterance, RunSession, get_session
 from app.main import app
 from sqlmodel import select
 from tests.test_runner import _auth, _signup
@@ -341,6 +341,37 @@ def test_one_broken_session_does_not_stop_the_cycle(monkeypatch):
         assert sid in calls and result["failed"] >= 1
     finally:
         _stop(key, sid)
+
+
+def test_a_run_that_ends_before_the_first_cycle_is_still_told():
+    """바퀴 사이에 시작 · 매수 · 종료가 다 끝난 짧은 실행 — 상태 줄이 없어도 처음부터 한 번 말한다(앱 알림도 여기서 나간다)."""
+    import time
+    token = _signup()
+    key = _key(token)
+    sid = _start_session(key)
+    r = client.post("/api/runner/heartbeat", json={"session_id": sid, "last_price": 100.0, "in_position": True,
+                                                   "entry_price": 100.0, "position_qty": 2.0, "events": [
+        {"kind": "fill", "message": "실전 주문 결과", "event_name": "runner.order_result", "event_key": "fill-short",
+         "details": {"action": "BUY", "executed_qty": 2.0, "fill_price": 100.0}}]}, headers={"X-Runner-Key": key})
+    assert r.status_code == 200, r.text
+    _stop(key, sid)
+    old = _start_session(key)
+    _stop(key, old)
+    with get_session() as db:
+        row = db.get(RunSession, old)
+        row.stopped_at = "2000-01-01T00:00:00Z"  # 오래전에 끝난 실행은 처음부터 말하지 않는다
+        db.add(row)
+        db.commit()
+    now = int(time.time() * 1000)
+    _cycle(now)
+    body = client.get(f"/api/me/runner/sessions/{sid}/agent", headers=_auth(token)).json()
+    assert [item["kind"] for item in body["items"]] == ["start", "fill", "end"]
+    _cycle(now + 1_000)
+    again = client.get(f"/api/me/runner/sessions/{sid}/agent", headers=_auth(token)).json()
+    assert len(again["items"]) == 3, "한 번만"
+    with get_session() as db:
+        assert db.get(AgentCommentaryState, old) is None
+        assert db.exec(select(AgentUtterance).where(AgentUtterance.session_id == old)).first() is None
 
 
 def test_moves_before_the_entry_are_not_news_and_losses_are_not_cheered():

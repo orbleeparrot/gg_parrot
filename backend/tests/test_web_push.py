@@ -94,7 +94,8 @@ def test_only_browser_push_services_are_reachable():
         assert web_push.allowed_endpoint(ok), ok
     for bad in ("http://fcm.googleapis.com/fcm/send/abc", "https://169.254.169.254/latest", "https://localhost/x",
                 "https://fcm.googleapis.com.evil.example/x", "https://user:pw@fcm.googleapis.com/x",
-                "https://fcm.googleapis.com:8443/x", "https://evilnotify.windows.com/x", "file:///etc/passwd", ""):
+                "https://fcm.googleapis.com:8443/x", "https://evilnotify.windows.com/x", "file:///etc/passwd", "",
+                "https://fcm.googleapis.com:bad/x", "https://fcm.googleapis.com:65536/x", "https://[::1/x"):
         assert not web_push.allowed_endpoint(bad), bad
 
 
@@ -178,6 +179,13 @@ def test_bad_subscriptions_are_refused(vapid_on):
                       headers=_auth(token)).status_code == 400
     assert client.put("/api/me/push/subscription", json=sub | {"endpoint": FCM + "x" * 3000},
                       headers=_auth(token)).status_code == 422
+    # 포트가 망가진 주소는 서버 오류(500)가 아니라 거절(400) — 등록 · 확인 · 해제 모두
+    for endpoint in ("https://fcm.googleapis.com:bad/x", "https://fcm.googleapis.com:65536/x"):
+        assert client.put("/api/me/push/subscription", json=sub | {"endpoint": endpoint},
+                          headers=_auth(token)).status_code == 400
+        assert client.post("/api/me/push/status", json={"endpoint": endpoint}, headers=_auth(token)).status_code == 400
+        assert client.post("/api/me/push/unsubscribe", json={"endpoint": endpoint},
+                           headers=_auth(token)).status_code == 400
 
 
 def test_an_account_keeps_at_most_ten_devices(vapid_on):
@@ -333,9 +341,101 @@ def test_repeated_rejections_drop_the_device_and_test_push_goes_out(vapid_on):
     client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
     sent = []
     result = push_alerts.send_test(user_id, now_ms=10**13, send=lambda s, d, **k: sent.append(d) or web_push.SENT)
-    assert result == {"sent": 1, "devices": 1} and json.loads(sent[0])["url"] == "/agents"
+    assert result == {"sent": 1, "devices": 1, "retry": 0} and json.loads(sent[0])["url"] == "/agents"
     with pytest.raises(Exception):
         push_alerts.send_test(user_id, now_ms=10**13 + 1_000, send=lambda *a, **k: web_push.SENT)
+
+
+def test_test_push_tells_a_blocked_service_from_a_dead_device(vapid_on):
+    """시험 알림이 0건이면 화면이 '보냈어요'라고 하지 않게 — 잠깐 막힘(retry)과 끝난 구독을 가려 준다."""
+    token = _signup()
+    user_id = _user_id(token)
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    now = 10**13
+    assert push_alerts.send_test(user_id, now_ms=now, send=lambda *a, **k: web_push.RETRY) == {
+        "sent": 0, "devices": 1, "retry": 1}
+    assert push_alerts.send_test(user_id, now_ms=now + 10_000, send=lambda *a, **k: web_push.GONE) == {
+        "sent": 0, "devices": 1, "retry": 0}
+    with get_session() as db:
+        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is None, \
+            "끝난 구독(410)은 지운다 — 화면은 상태를 다시 읽어 '꺼짐'으로"
+
+
+# --- 보내다 막히거나 죽었을 때 -----------------------------------------------------------
+FAR = 10**13  # 다른 시험이 남긴 대기열(지금 시각)과 섞이지 않게 먼 시각에서 돈다
+
+
+def _queue(user_id: int, key: str, now_ms: int) -> None:
+    facts = {"id": 77, "user_id": user_id, "base": "BTC", "status": "running"}
+    say = {"key": key, "kind": "fill", "hl": "샀어요!", "at_ms": now_ms, "nums": "100.00 USDT"}
+    with get_session() as db:
+        assert push_alerts.enqueue_says(db, facts, [say], now_ms=now_ms) == 1
+        db.commit()
+
+
+def test_a_blocked_device_gets_the_alert_later_and_only_that_device(vapid_on):
+    """429 · 5xx · 연결 실패는 그 기기에만 다시 보낸다 — 이미 받은 기기에 두 번 가지 않는다."""
+    token = _signup()
+    user_id = _user_id(token)
+    phone, laptop = device(), device()
+    for sub in (phone, laptop):
+        client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
+    _queue(user_id, "fill:blocked", FAR)
+    answers = {phone["endpoint"]: [web_push.RETRY, web_push.SENT], laptop["endpoint"]: [web_push.SENT]}
+    calls = []
+
+    def fake_send(subscription, data, **kwargs):
+        calls.append(subscription["endpoint"])
+        return answers[subscription["endpoint"]].pop(0)
+    first = push_alerts.dispatch(now_ms=FAR + 1_000, send=fake_send)
+    assert (first["claimed"], first["sent"], first["retry"], first["later"]) == (1, 1, 1, 1)
+    row = _rows(user_id)[0]
+    assert row.sent_ms == 0 and row.attempts == 1, "막힌 기기가 남았으니 아직 끝나지 않았다"
+    assert push_alerts.dispatch(now_ms=FAR + 2_000, send=fake_send) == {"claimed": 0}, "기다리는 동안은 꺼내지 않는다"
+    second = push_alerts.dispatch(now_ms=FAR + 1_000 + push_alerts.RETRY_WAIT_MS[0], send=fake_send)
+    assert (second["claimed"], second["jobs"], second["sent"]) == (1, 1, 1), "받은 노트북은 건너뛰고 전화에만"
+    assert sorted(calls) == sorted([phone["endpoint"], phone["endpoint"], laptop["endpoint"]])
+    assert _rows(user_id)[0].sent_ms == FAR + 1_000 + push_alerts.RETRY_WAIT_MS[0]
+    assert push_alerts.dispatch(now_ms=FAR + 10 * 60_000, send=fake_send) == {"claimed": 0}
+
+
+def test_a_crash_while_sending_does_not_lose_the_alert(vapid_on):
+    """꺼낸 뒤 보내기 전에 프로세스가 죽어도 — 맡은 시간이 지나면 다시 꺼내 보낸다."""
+    token = _signup()
+    user_id = _user_id(token)
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    _queue(user_id, "fill:crash", FAR)
+
+    class Crash(BaseException):
+        pass
+
+    def dying(*args, **kwargs):
+        raise Crash()
+    with pytest.raises(Crash):
+        push_alerts.dispatch(now_ms=FAR + 1_000, send=dying)
+    sent = []
+    ok = lambda subscription, data, **kwargs: sent.append(data) or web_push.SENT  # noqa: E731
+    assert push_alerts.dispatch(now_ms=FAR + 2_000, send=ok) == {"claimed": 0}, "맡은 동안 다른 바퀴가 겹쳐 보내지 않는다"
+    result = push_alerts.dispatch(now_ms=FAR + 1_000 + push_alerts.LEASE_MS, send=ok)
+    assert (result["claimed"], result["sent"]) == (1, 1) and len(sent) == 1
+    assert _rows(user_id)[0].sent_ms > 0
+
+
+def test_a_device_that_stays_blocked_is_given_up_after_a_few_tries(vapid_on):
+    token = _signup()
+    user_id = _user_id(token)
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    _queue(user_id, "fill:down", FAR)
+    at = FAR
+    for attempt in range(1, push_alerts.MAX_ATTEMPTS + 1):
+        assert push_alerts.dispatch(now_ms=at, send=lambda *a, **k: web_push.RETRY)["claimed"] == 1, attempt
+        at += push_alerts.RETRY_WAIT_MS[min(attempt, len(push_alerts.RETRY_WAIT_MS)) - 1]
+    row = _rows(user_id)[0]
+    assert row.sent_ms > 0 and row.attempts == push_alerts.MAX_ATTEMPTS, "시도를 다 쓰면 끝낸다"
+    assert push_alerts.dispatch(now_ms=at + 60_000, send=lambda *a, **k: web_push.RETRY) == {"claimed": 0}
+    with get_session() as db:
+        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is not None, \
+            "잠깐 막힘은 기기를 지우지 않는다"
 
 
 def test_leaving_the_service_removes_devices_and_history(vapid_on):

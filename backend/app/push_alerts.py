@@ -30,7 +30,10 @@ PENDING_MAX_AGE_MS = 60 * 60_000    # 한 시간 넘게 못 보낸 알림은 보
 KEEP_MS = 3 * 86_400_000            # 보낸 기록은 사흘 남겨 같은 글이 다시 울리지 않게 한다
 FAIL_LIMIT = 10                     # 연달아 이만큼 거절되면(키 바뀜 등) 그 기기를 지운다
 BATCH = 100
-TTL_SECONDS = 3600                  # 기기가 꺼져 있으면 한 시간까지만 기다렸다 전한다
+LEASE_MS = 5 * 60_000               # 꺼낸 프로세스가 이 안에 끝내지 못하면(죽음 · 멈춤) 다른 바퀴가 다시 꺼낸다
+MAX_ATTEMPTS = 5                    # 잠깐 막힌 기기(429 · 5xx · 연결 실패)에 보내 보는 횟수(첫 시도 포함)
+RETRY_WAIT_MS = (30_000, 60_000, 120_000, 300_000)  # n 번째 시도가 막혔을 때 다음 시도까지
+TTL_SECONDS = 3600                 # 기기가 꺼져 있으면 한 시간까지만 기다렸다 전한다
 STALE_SAY_MS = 30 * 60_000          # 일어난 지 30분 넘은 일(처음 보는 세션의 옛 체결 등)은 채팅에만 — 늦은 알림은 헷갈린다
 PLATFORMS = {"android", "ios", "desktop"}
 
@@ -158,6 +161,7 @@ def enqueue_says(db, facts: dict, says: list[dict], *, now_ms: int) -> int:
         return 0
     user_id = int(facts["user_id"])
     rows = [{"user_id": user_id, "dedupe_key": _dedupe_key(facts, say)[:160], "created_ms": now_ms, "sent_ms": 0,
+             "lease_ms": 0, "attempts": 0, "done_json": "",
              "payload_json": json.dumps(say_payload(facts, say), ensure_ascii=False, separators=(",", ":"))}
             for say in chosen]
     try:
@@ -189,41 +193,43 @@ def _send_all(jobs: list[tuple[dict, bytes]], send: Callable) -> list[str]:
         return list(pool.map(one, jobs))
 
 
+def _encode(payload: dict) -> bytes:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def _device_results(db, jobs: list[tuple[dict, bytes]], outcomes: list[str], *, now_ms: int) -> dict:
+    """보낸 결과로 기기 상태를 고친다(커밋은 호출자). 기기 수로 센다.
+
+    받음은 실패 횟수를 지우고, 끝난 구독(404 · 410)은 지우고, 거절(그 밖의 4xx)은 세다가 FAIL_LIMIT 번이면 지운다.
+    잠깐 막힘(429 · 5xx · 연결 실패)은 기기를 그대로 둔다 — 그 알림은 dispatch 가 다시 보낸다.
+    """
+    ok, gone, failed, retry = set(), set(), set(), set()
+    for (subscription, _), outcome in zip(jobs, outcomes):
+        {web_push.SENT: ok, web_push.GONE: gone, web_push.FAILED: failed}.get(outcome, retry).add(subscription["id"])
+    failed -= ok | gone
+    retry -= ok | gone | failed
+    if gone:
+        db.exec(sql_delete(PushSubscription).where(PushSubscription.id.in_(gone)))
+    if ok:
+        db.exec(update(PushSubscription).where(PushSubscription.id.in_(ok)).values(last_ok_ms=now_ms, fail_count=0))
+    if failed:
+        db.exec(update(PushSubscription).where(PushSubscription.id.in_(failed))
+                .values(fail_count=PushSubscription.fail_count + 1))
+        db.exec(sql_delete(PushSubscription).where(PushSubscription.id.in_(failed),
+                                                   PushSubscription.fail_count >= FAIL_LIMIT))
+    return {"sent": len(ok), "gone": len(gone), "failed": len(failed), "retry": len(retry), "jobs": len(jobs)}
+
+
 def _deliver(payloads: list[tuple[int, dict]], subscriptions: list[dict], *, now_ms: int,
              send: Callable) -> dict:
-    """(user_id, 알림) 목록을 그 계정 기기마다 보내고, 결과로 기기 상태를 고친다."""
-    by_user: dict[int, list[dict]] = {}
-    for subscription in subscriptions:
-        by_user.setdefault(subscription["user_id"], []).append(subscription)
-    jobs = []
-    for user_id, payload in payloads:
-        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-        jobs += [(subscription, data) for subscription in by_user.get(user_id, [])]
+    """(user_id, 알림) 목록을 그 계정 기기마다 한 번 보내고(다시 보내지 않는다), 결과로 기기 상태를 고친다."""
+    jobs = [(subscription, _encode(payload)) for user_id, payload in payloads
+            for subscription in subscriptions if subscription["user_id"] == user_id]
     outcomes = _send_all(jobs, send)
-    ok, gone, failed = set(), set(), set()
-    for (subscription, _), outcome in zip(jobs, outcomes):
-        if outcome == web_push.SENT:
-            ok.add(subscription["id"])
-        elif outcome == web_push.GONE:
-            gone.add(subscription["id"])
-        elif outcome == web_push.FAILED:
-            failed.add(subscription["id"])
-        # RETRY(429 · 5xx · 연결 실패)는 잠깐 막힌 것 — 그 알림만 놓치고 기기는 그대로 둔다.
-    failed -= ok | gone
-    if ok or gone or failed:
-        with get_session() as db:
-            if gone:
-                db.exec(sql_delete(PushSubscription).where(PushSubscription.id.in_(gone)))
-            if ok:
-                db.exec(update(PushSubscription).where(PushSubscription.id.in_(ok))
-                        .values(last_ok_ms=now_ms, fail_count=0))
-            if failed:
-                db.exec(update(PushSubscription).where(PushSubscription.id.in_(failed))
-                        .values(fail_count=PushSubscription.fail_count + 1))
-                db.exec(sql_delete(PushSubscription).where(PushSubscription.id.in_(failed),
-                                                           PushSubscription.fail_count >= FAIL_LIMIT))
-            db.commit()
-    return {"sent": len(ok), "gone": len(gone), "failed": len(failed), "jobs": len(jobs)}
+    with get_session() as db:
+        result = _device_results(db, jobs, outcomes, now_ms=now_ms)
+        db.commit()
+    return result
 
 
 def _subscriptions_for(db, user_ids) -> list[dict]:
@@ -232,32 +238,76 @@ def _subscriptions_for(db, user_ids) -> list[dict]:
              "auth": row.auth} for row in rows]
 
 
+def _ids(text: str) -> set[int]:
+    try:
+        return {int(value) for value in json.loads(text or "[]")}
+    except (TypeError, ValueError):
+        return set()
+
+
 def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send) -> dict:
-    """쌓인 알림을 꺼내 보낸다. 꺼낼 때 sent_ms 를 채워 두 프로세스가 같은 알림을 두 번 보내지 않는다."""
+    """쌓인 알림을 꺼내 보낸다.
+
+    꺼낼 때 ``lease_ms`` 로 맡아 두 프로세스가 같은 알림을 함께 보내지 않게 하고, 보낸 뒤에야 ``sent_ms`` 를 채운다.
+    보내는 도중 프로세스가 죽으면 맡은 시간(LEASE_MS)이 지나 다시 꺼낸다 — 드물게 한 기기에 두 번 갈 수 있지만 같은
+    tag 라 기기에서는 한 장으로 바뀐다. 잠깐 막힌 기기는 그 기기에만 RETRY_WAIT_MS 뒤에 다시 보낸다(MAX_ATTEMPTS 번,
+    쌓인 지 PENDING_MAX_AGE_MS 안).
+    """
     now_ms = _now_ms() if now_ms is None else now_ms
     if not web_push.enabled():
         return {"claimed": 0}
     with get_session() as db:
-        pending = select(PushOutbox.id).where(PushOutbox.sent_ms == 0,
+        pending = select(PushOutbox.id).where(PushOutbox.sent_ms == 0, PushOutbox.lease_ms <= now_ms,
                                               PushOutbox.created_ms >= now_ms - PENDING_MAX_AGE_MS
                                               ).order_by(PushOutbox.id).limit(BATCH)
         claimed = list(db.exec(update(PushOutbox).where(PushOutbox.id.in_(pending.scalar_subquery()),
-                                                        PushOutbox.sent_ms == 0)
-                               .values(sent_ms=now_ms)
-                               .returning(PushOutbox.id, PushOutbox.user_id, PushOutbox.payload_json)).all())
+                                                        PushOutbox.sent_ms == 0, PushOutbox.lease_ms <= now_ms)
+                               .values(lease_ms=now_ms + LEASE_MS, attempts=PushOutbox.attempts + 1)
+                               .returning(PushOutbox.id, PushOutbox.user_id, PushOutbox.payload_json,
+                                          PushOutbox.done_json, PushOutbox.attempts)).all())
         subscriptions = _subscriptions_for(db, {row[1] for row in claimed}) if claimed else []
         db.commit()
     _cleanup(now_ms)
     if not claimed:
         return {"claimed": 0}
-    payloads = []
-    for _, user_id, payload_json in sorted(claimed):
+    by_user: dict[int, list[dict]] = {}
+    for subscription in subscriptions:
+        by_user.setdefault(subscription["user_id"], []).append(subscription)
+    jobs, owners, done, attempts = [], [], {}, {}
+    for row_id, user_id, payload_json, done_json, tries in sorted(claimed):
+        done[row_id], attempts[row_id] = _ids(done_json), int(tries or 0)
         try:
-            payloads.append((user_id, json.loads(payload_json)))
+            data = _encode(json.loads(payload_json))
         except (TypeError, ValueError):
-            continue
-    result = _deliver(payloads, subscriptions, now_ms=now_ms, send=send)
-    return {"claimed": len(claimed), **result}
+            continue  # 망가진 줄은 보내지 않고 끝낸다
+        for subscription in by_user.get(user_id, []):
+            if subscription["id"] not in done[row_id]:
+                jobs.append((subscription, data))
+                owners.append(row_id)
+    outcomes = _send_all(jobs, send)
+    blocked = set()
+    for row_id, (subscription, _), outcome in zip(owners, jobs, outcomes):
+        if outcome == web_push.RETRY:
+            blocked.add(row_id)
+        else:
+            done[row_id].add(subscription["id"])
+    finished = [row_id for row_id in done if row_id not in blocked or attempts[row_id] >= MAX_ATTEMPTS]
+    later: dict[tuple[str, int], list[int]] = {}
+    for row_id in sorted(blocked.difference(finished)):
+        wait = RETRY_WAIT_MS[min(attempts[row_id], len(RETRY_WAIT_MS)) - 1]
+        later.setdefault((json.dumps(sorted(done[row_id])), now_ms + wait), []).append(row_id)
+    with get_session() as db:
+        result = _device_results(db, jobs, outcomes, now_ms=now_ms)
+        if finished:
+            db.exec(update(PushOutbox).where(PushOutbox.id.in_(finished))
+                    .values(sent_ms=now_ms, lease_ms=0, done_json=""))
+        for (done_json, lease_ms), ids in later.items():  # 같은 처지끼리 묶어 쓴다(운영 DB 왕복 80ms)
+            db.exec(update(PushOutbox).where(PushOutbox.id.in_(ids)).values(lease_ms=lease_ms, done_json=done_json))
+        db.commit()
+    gave_up = len(blocked.intersection(finished))
+    if gave_up:
+        log.warning("push gave up after %s attempts (%s alerts)", MAX_ATTEMPTS, gave_up)
+    return {"claimed": len(claimed), **result, "later": sum(len(ids) for ids in later.values())}
 
 
 def _cleanup(now_ms: int) -> None:
@@ -294,4 +344,5 @@ def send_test(user_id: int, *, now_ms: Optional[int] = None, send: Callable = we
                "body": "내 에이전트의 매매 · 손익 · 시세 · 뉴스 소식을 이렇게 알려 드려요.",
                "url": "/agents", "tag": "push-test"}
     result = _deliver([(user_id, payload)], subscriptions, now_ms=now_ms, send=send)
-    return {"sent": result["sent"], "devices": result["jobs"]}
+    # 화면이 받음 · 일부 · 못 보냄을 가른다 — retry 는 '잠시 뒤 다시', 나머지 실패는 '알림 다시 켜기'(구독이 끝났거나 거절됨).
+    return {"sent": result["sent"], "devices": result["jobs"], "retry": result["retry"]}

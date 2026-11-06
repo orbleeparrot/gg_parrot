@@ -36,8 +36,13 @@ export default function PushPermissionPrompt() {
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
+    if (open) {
+      if (!push.signedIn) setOpen(false); // 묻는 중에 로그아웃 — 켤 계정이 없다
+      return undefined;
+    }
     const permission = globalThis.Notification?.permission;
-    if (open || !shouldAskPush({ standalone: isStandalone(), state: push.state, permission, alreadyAsked: asked(), path: pathname })) {
+    if (!shouldAskPush({ signedIn: push.signedIn, standalone: isStandalone(), state: push.state, permission,
+      alreadyAsked: asked(), path: pathname })) {
       return undefined;
     }
     // 화면이 자리 잡은 뒤 — 다른 대화상자(개발 노트 등)가 떠 있으면 이번에는 건너뛰고 다음 화면 이동 때 다시 본다.
@@ -45,16 +50,18 @@ export default function PushPermissionPrompt() {
       if (!document.querySelector('[aria-modal="true"]')) setOpen(true);
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [open, push.state, pathname]);
+  }, [open, push.signedIn, push.state, pathname]);
 
   function later() {
     markAsked();
     setOpen(false);
   }
 
+  // 답은 실제로 권한을 물었을 때만 적는다 — 켤 계정이 없었거나(signed-out) 켜는 동안 계정이 바뀌었으면(cancelled)
+  // 아직 답한 게 아니다. 권한을 물은 뒤의 실패는 브라우저 권한이 'default' 가 아니게 되어 어차피 다시 묻지 않는다.
   function accept() {
-    markAsked();
     push.enable().then((result) => {
+      if (result !== "signed-out" && result !== "cancelled") markAsked();
       setOpen(false);
       setToast(enableToast(result));
     });

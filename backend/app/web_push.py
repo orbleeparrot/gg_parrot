@@ -47,10 +47,11 @@ def b64u_decode(text: str) -> bytes:
 def allowed_endpoint(endpoint: str) -> bool:
     try:
         parts = urlsplit(str(endpoint or ""))
+        host = (parts.hostname or "").lower()
+        port = parts.port  # ':bad' · ':65536' 은 여기서 ValueError — 서버 오류(500)가 아니라 거절(400)로
     except ValueError:
         return False
-    host = (parts.hostname or "").lower()
-    if parts.scheme != "https" or not host or parts.username or parts.password or parts.port not in (None, 443):
+    if parts.scheme != "https" or not host or parts.username or parts.password or port not in (None, 443):
         return False
     return host in _PUSH_HOSTS or any(host.endswith(suffix) for suffix in _PUSH_HOST_SUFFIXES)
 

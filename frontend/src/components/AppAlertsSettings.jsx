@@ -2,7 +2,7 @@
 // 줄 모양은 '계정 및 보안' 탭과 같다(괘선으로 나눈 줄, 오른쪽에 조작). 상태마다 오른쪽 조작과 아래 한 줄만 바뀐다.
 import { useMemo, useState } from "react";
 import AppToast from "./AppToast.jsx";
-import { enableToast, unblockHint, usePushState } from "../hooks/usePushState.js";
+import { enableToast, testToast, unblockHint, usePushState } from "../hooks/usePushState.js";
 import { openAppInstall } from "../lib/installDialog.js";
 import { currentDevice } from "../lib/pwa.js";
 
@@ -37,7 +37,7 @@ export default function AppAlertsSettings() {
 
   function sendTest() {
     push.test()
-      .then((result) => setToast({ tone: "done", label: "알림", title: "시험 알림을 보냈어요", body: `기기 ${result?.devices ?? 1}대` }))
+      .then((result) => setToast(testToast(result)))
       .catch((error) => setToast({ tone: "error", label: "실패", title: String(error?.message || "시험 알림을 보내지 못했어요.") }));
   }
 

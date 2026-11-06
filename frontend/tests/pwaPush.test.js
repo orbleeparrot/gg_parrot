@@ -1,8 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import { api } from "../src/api.js";
+import { clearAuth, setAuth } from "../src/lib/auth.js";
 import { detectBrowser, detectPlatform, offersAppInstall, promptInstall, installState, resetInstallStateForTest } from "../src/lib/pwa.js";
-import { disablePush, enablePush, openTarget, pushSupport, readPushState, syncPush, urlBase64ToUint8Array } from "../src/lib/push.js";
+import {
+  disablePush, enablePush, forgetPushStatus, openTarget, pushSupport, readPushState, syncPush, urlBase64ToUint8Array,
+} from "../src/lib/push.js";
+import { enableToast, testToast } from "../src/hooks/usePushState.js";
 
 const UA = {
   iphone: "Mozilla/5.0 (iPhone; CPU iPhone OS 26_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Mobile/15E148 Safari/604.1",
@@ -56,19 +62,54 @@ function fakeStorage() {
   return { getItem: (k) => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k) };
 }
 
-function fakeBrowser({ userAgent = UA.android, permission = "default", answer = "granted", standalone = false } = {}) {
-  const state = { subscription: null, unsubscribed: 0, permissionAsked: 0 };
-  const makeSubscription = (key) => ({
-    endpoint: "https://fcm.googleapis.com/fcm/send/abc",
-    options: { applicationServerKey: key.buffer },
-    toJSON: () => ({ endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "P", auth: "A" } }),
-    unsubscribe: async () => { state.unsubscribed += 1; state.subscription = null; return true; },
-  });
+// 서비스 워커 하나 — answers 에 적힌 말에만 답한다(옛 워커는 아무 말에도 답하지 않는다).
+function fakeWorker({ state = "activated", answers = {} } = {}) {
+  const listeners = new Set();
+  const worker = {
+    state, asked: [],
+    addEventListener: (_, fn) => listeners.add(fn),
+    removeEventListener: (_, fn) => listeners.delete(fn),
+    postMessage(message, ports) {
+      worker.asked.push(message.type);
+      const answer = answers[message.type];
+      if (!answer) return;
+      ports?.[0]?.postMessage(answer);
+      if (answer.skipping) {
+        worker.state = "activated";
+        listeners.forEach((fn) => fn());
+      }
+    },
+  };
+  return worker;
+}
+
+let endpoints = 0;
+function fakeBrowser({ userAgent = UA.android, permission = "default", answer = "granted", standalone = false, active = null,
+  waiting = null, beforeSubscribe = null } = {}) {
+  const state = { subscription: null, unsubscribed: 0, permissionAsked: 0, updates: 0 };
+  const makeSubscription = (key) => {
+    const endpoint = `https://fcm.googleapis.com/fcm/send/${(endpoints += 1)}`;
+    const subscription = {
+      endpoint,
+      options: { applicationServerKey: key.buffer },
+      toJSON: () => ({ endpoint, keys: { p256dh: "P", auth: "A" } }),
+      unsubscribe: async () => {
+        state.unsubscribed += 1;
+        if (state.subscription === subscription) state.subscription = null;
+        return true;
+      },
+    };
+    return subscription;
+  };
   const pushManager = {
     getSubscription: async () => state.subscription,
-    subscribe: async ({ applicationServerKey }) => { state.subscription = makeSubscription(applicationServerKey); return state.subscription; },
+    subscribe: async ({ applicationServerKey }) => {
+      if (beforeSubscribe) await beforeSubscribe();
+      state.subscription = makeSubscription(applicationServerKey);
+      return state.subscription;
+    },
   };
-  const registrationObject = { pushManager, update: async () => {}, installing: null, waiting: null };
+  const registrationObject = { pushManager, update: async () => { state.updates += 1; }, installing: null, waiting, active };
   const Notification = {
     permission,
     requestPermission: () => { state.permissionAsked += 1; Notification.permission = answer; return Promise.resolve(answer); },
@@ -84,6 +125,15 @@ function fakeBrowser({ userAgent = UA.android, permission = "default", answer = 
 }
 
 const CONFIG = { enabled: true, public_key: "AQID" };
+const PUSHES = { "ggp:ping": { push: true } };
+
+function signIn(t, id) {
+  globalThis.localStorage = fakeStorage();
+  clearAuth();
+  setAuth(`token-${id}`, { id });
+  forgetPushStatus();
+  t.after(() => clearAuth());
+}
 
 test("아이폰 사파리 탭에서는 '홈 화면에 추가해야 된다', 카카오톡 안에서는 앱 안 브라우저", () => {
   const iphone = { navigator: { userAgent: UA.iphone, platform: "iPhone", maxTouchPoints: 5 }, matchMedia: () => ({ matches: false }) };
@@ -93,26 +143,28 @@ test("아이폰 사파리 탭에서는 '홈 화면에 추가해야 된다', 카�
 });
 
 test("켜기 → 서버 등록 · 켠 계정 기억, 끄기 → 서버 해제 · 브라우저 구독 끊기", async (t) => {
-  globalThis.localStorage = fakeStorage();
+  signIn(t, 7);
   const calls = [];
   t.mock.method(api, "pushSubscribe", async (body) => { calls.push(["put", body]); return { subscribed: true }; });
   t.mock.method(api, "pushUnsubscribe", async (endpoint) => { calls.push(["delete", endpoint]); return { subscribed: false }; });
+  t.mock.method(api, "pushStatus", async () => ({ subscribed: true }));
   const { win, state } = fakeBrowser();
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "off");
   assert.equal(await readPushState({ userId: 7, config: { enabled: false }, win }), "unconfigured");
   assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
   assert.equal(state.permissionAsked, 1);
-  assert.deepEqual(calls[0], ["put", { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: { p256dh: "P", auth: "A" }, platform: "android" }]);
+  const endpoint = state.subscription.endpoint;
+  assert.deepEqual(calls[0], ["put", { endpoint, keys: { p256dh: "P", auth: "A" }, platform: "android" }]);
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on");
   assert.equal(await readPushState({ userId: 8, config: CONFIG, win }), "off", "다른 계정에게는 꺼진 것");
   assert.equal(await disablePush({ win }), "off");
-  assert.deepEqual(calls[1], ["delete", "https://fcm.googleapis.com/fcm/send/abc"]);
+  assert.deepEqual(calls[1], ["delete", endpoint]);
   assert.equal(state.unsubscribed, 1);
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "off");
 });
 
 test("권한을 거절하면 구독하지 않는다", async (t) => {
-  globalThis.localStorage = fakeStorage();
+  signIn(t, 7);
   const put = t.mock.method(api, "pushSubscribe", async () => ({}));
   const { win, state } = fakeBrowser({ answer: "denied" });
   assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "denied");
@@ -123,9 +175,10 @@ test("권한을 거절하면 구독하지 않는다", async (t) => {
 });
 
 test("다른 계정이 켜 둔 구독은 로그인한 사람에게 옮기지 않고 끊는다", async (t) => {
-  globalThis.localStorage = fakeStorage();
+  signIn(t, 7);
   const put = t.mock.method(api, "pushSubscribe", async () => ({}));
   const del = t.mock.method(api, "pushUnsubscribe", async () => ({}));
+  t.mock.method(api, "pushStatus", async () => ({ subscribed: true }));
   const { win, state } = fakeBrowser();
   await enablePush({ userId: 7, config: CONFIG, win });
   assert.equal(put.mock.callCount(), 1);
@@ -136,6 +189,200 @@ test("다른 계정이 켜 둔 구독은 로그인한 사람에게 옮기지 않
   assert.equal(state.unsubscribed, 1);
   assert.equal(del.mock.callCount(), 0, "로그아웃 뒤 정리는 서버에 묻지 않는다(410 으로 지워진다)");
   assert.equal(put.mock.callCount(), 2, "9번 계정으로 옮기지 않는다");
+});
+
+// --- 리뷰 P1: 켜는 도중 계정이 바뀌면 ------------------------------------------------------
+test("켜는 도중 다른 탭에서 B 로 로그인하면 — 그만두고, 그사이 만든 구독도 끊는다(B 로 등록하지 않는다)", async (t) => {
+  signIn(t, 7);
+  const put = t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  const { win, state } = fakeBrowser({ beforeSubscribe: async () => {
+    clearAuth();
+    setAuth("token-8", { id: 8 });
+  } });
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "cancelled");
+  assert.equal(put.mock.callCount(), 0, "B 의 토큰으로 서버에 등록하지 않는다");
+  assert.equal(state.subscription, null, "그사이 만든 구독은 끊는다");
+  assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), null, "A 를 켠 계정으로 적지 않는다");
+  assert.equal(await readPushState({ userId: 8, config: CONFIG, win }), "off");
+  assert.equal(enableToast("cancelled"), null, "토스트도 띄우지 않는다");
+});
+
+test("서버 등록 응답을 기다리는 동안 계정이 바뀌어도 — 기기에 A 를 적지 않고 구독을 끊는다", async (t) => {
+  signIn(t, 7);
+  t.mock.method(api, "pushSubscribe", async () => {
+    clearAuth();
+    setAuth("token-8", { id: 8 });
+    return { subscribed: true };
+  });
+  const { win, state } = fakeBrowser();
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "cancelled");
+  assert.equal(state.subscription, null);
+  assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), null);
+});
+
+// --- 리뷰 P2: 서버가 기기를 지웠을 때 -------------------------------------------------------
+test("서버가 이 기기를 지웠으면 '꺼짐' — 같이 읽어도 서버에는 한 번 묻고, 다음 동기화가 브라우저 구독도 정리한다", async (t) => {
+  signIn(t, 7);
+  const put = t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  let subscribed = true;
+  const status = t.mock.method(api, "pushStatus", async () => ({ subscribed }));
+  const { win, state } = fakeBrowser();
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on");
+  assert.equal(status.mock.callCount(), 0, "방금 켠 기기는 서버에 다시 묻지 않는다");
+  forgetPushStatus();
+  subscribed = false; // 11번째 기기로 밀림 · 끝난 구독(410) · 거절 반복
+  const reads = await Promise.all([1, 2, 3].map(() => readPushState({ userId: 7, config: CONFIG, win })));
+  assert.deepEqual(reads, ["off", "off", "off"]);
+  assert.equal(status.mock.callCount(), 1, "설정 · 단추 · 첫 묻기가 같이 읽어도 서버에는 한 번");
+  assert.equal(await syncPush({ userId: 7, win }), "dropped", "12시간 안이어도 정리한다");
+  assert.equal(state.subscription, null);
+  // 다시 켜면 남은 구독을 다시 쓰지 않고 새 구독으로 등록한다
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
+  assert.equal(put.mock.callCount(), 2);
+  assert.notEqual(put.mock.calls[1].arguments[0].endpoint, put.mock.calls[0].arguments[0].endpoint);
+});
+
+test("12시간 재등록 때도 서버가 지운 기기는 되살리지 않는다 · 서버에 못 물으면 브라우저를 믿는다", async (t) => {
+  signIn(t, 7);
+  const put = t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  let answer = async () => ({ subscribed: false });
+  t.mock.method(api, "pushStatus", () => answer());
+  const { win, state } = fakeBrowser();
+  await enablePush({ userId: 7, config: CONFIG, win });
+  answer = async () => { throw new Error("offline"); };
+  forgetPushStatus();
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on", "못 물으면 그대로");
+  assert.equal(await syncPush({ userId: 7, win, now: Date.now() + 13 * 3600_000 }), "skip");
+  answer = async () => ({ subscribed: false });
+  assert.equal(await syncPush({ userId: 7, win, now: Date.now() + 13 * 3600_000 }), "dropped");
+  assert.equal(put.mock.callCount(), 1, "다른 기기를 밀어내며 다시 등록하지 않는다");
+  assert.equal(state.subscription, null);
+});
+
+// --- 리뷰 P2: 알림을 켜면서 다른 탭의 옛 파일을 지우지 않게 ------------------------------------
+test("지금 워커가 푸시를 처리하면 업데이트 · 교체를 건드리지 않는다", async (t) => {
+  signIn(t, 7);
+  t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  const waiting = fakeWorker({ state: "installed", answers: { "ggp:skip-waiting": { skipping: true } } });
+  const { win, state } = fakeBrowser({ active: fakeWorker({ answers: PUSHES }), waiting });
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
+  assert.equal(state.updates, 0);
+  assert.deepEqual(waiting.asked, [], "기다리는 새 워커(새 배포)를 억지로 올리지 않는다");
+});
+
+test("옛 워커(푸시 처리 없음)면 새 워커에 올려 달라고 하고, 다른 창이 있어 거절하면 기다리지 않고 켠다", async (t) => {
+  signIn(t, 7);
+  t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  const waiting = fakeWorker({ state: "installed", answers: { "ggp:skip-waiting": { skipping: false } } });
+  const { win, state } = fakeBrowser({ active: fakeWorker(), waiting });
+  const started = Date.now();
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
+  assert.equal(state.updates, 1);
+  assert.deepEqual(waiting.asked, ["ggp:skip-waiting"]);
+  assert.equal(waiting.state, "installed");
+  assert.ok(Date.now() - started < 4_000, "거절하면 8초를 기다리지 않는다");
+});
+
+// --- 리뷰 P2: 시험 알림 결과 · 첫 묻기 -----------------------------------------------------
+test("시험 알림 — 0건은 '보냈어요'가 아니다(잠깐 막힘 · 끊긴 기기를 가른다)", () => {
+  assert.deepEqual(testToast({ sent: 2, devices: 2, retry: 0 }), { tone: "done", label: "알림", title: "시험 알림을 보냈어요", body: "기기 2대" });
+  assert.equal(testToast({ sent: 1, devices: 2, retry: 0 }).body, "기기 2대 중 1대");
+  const blocked = testToast({ sent: 0, devices: 1, retry: 1 });
+  assert.equal(blocked.tone, "error");
+  assert.match(blocked.body, /잠시 뒤에 다시 보내/);
+  const dead = testToast({ sent: 0, devices: 1, retry: 0 });
+  assert.equal(dead.tone, "error");
+  assert.match(dead.body, /알림을 다시 켜/);
+});
+
+// --- 리뷰 P2: 오프라인 안내 화면에서 알림을 눌렀을 때 · 워커 교체 조건 --------------------------
+function workerHarness({ windows = [] } = {}) {
+  const hooks = new Map();
+  const opened = [];
+  let skipped = 0;
+  const source = readFileSync(new URL("../build/serviceWorker.js", import.meta.url), "utf8")
+    .replace("__CACHE_VERSION__", "fixture")
+    .replace("__BUILD_ASSETS__", "[]");
+  vm.runInNewContext(source, {
+    URL, Set, Promise, Error, MessageChannel, clearTimeout,
+    setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 100)),
+    self: {
+      location: { origin: "https://ggparrot.test" },
+      registration: {},
+      clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url) => { opened.push(url); return {}; } },
+      skipWaiting: async () => { skipped += 1; },
+      addEventListener: (name, fn) => hooks.set(name, fn),
+    },
+  });
+  return {
+    opened, skipped: () => skipped,
+    async fire(name, event) {
+      const pending = [];
+      hooks.get(name)({ ...event, waitUntil: (promise) => pending.push(promise) });
+      await Promise.all(pending);
+    },
+  };
+}
+
+function fakeWindow({ url = "https://ggparrot.test/news", listens = true, controlled = true, focused = false } = {}) {
+  const log = [];
+  return {
+    url, focused, visibilityState: "visible", log,
+    focus: async () => { log.push("focus"); },
+    postMessage: (message, ports) => {
+      log.push(["message", message.url]);
+      if (listens) ports?.[0]?.postMessage({ opened: true }); // usePushBridge 가 옮기고 답한다
+    },
+    navigate: async (path) => {
+      log.push(["navigate", path]);
+      if (!controlled) throw new TypeError("not controlled");
+      return {};
+    },
+  };
+}
+
+const click = (url) => ({ notification: { close() {}, data: { url } } });
+
+test("알림을 누르면 — 앱 화면은 그 자리에서 옮기고, 답이 없는 화면(오프라인 안내)은 그 주소로 다시 연다", async () => {
+  const app = fakeWindow();
+  const h = workerHarness({ windows: [app] });
+  await h.fire("notificationclick", click("/agents?session=4"));
+  assert.deepEqual(app.log, ["focus", ["message", "/agents?session=4"]]);
+  assert.deepEqual(h.opened, []);
+
+  const offline = fakeWindow({ listens: false });
+  const h2 = workerHarness({ windows: [offline] });
+  await h2.fire("notificationclick", click("/agents?session=4"));
+  assert.deepEqual(offline.log.at(-1), ["navigate", "/agents?session=4"], "받는 코드가 없는 화면은 그 창을 그 주소로");
+  assert.deepEqual(h2.opened, []);
+
+  const stranger = fakeWindow({ listens: false, controlled: false });
+  const h3 = workerHarness({ windows: [stranger] });
+  await h3.fire("notificationclick", click("/agents?session=4"));
+  assert.deepEqual(h3.opened, ["/agents?session=4"], "이 워커가 맡지 않은 창이면 새 창으로");
+
+  const h4 = workerHarness();
+  await h4.fire("notificationclick", click("https://evil.example/x"));
+  assert.deepEqual(h4.opened, ["/"], "다른 사이트 주소는 첫 화면으로");
+});
+
+test("워커 — ping 에 답하고, 열린 창이 둘 이상이면 새 워커로 바로 바꾸지 않는다", async () => {
+  const ask = async (h, type) => {
+    const channel = new MessageChannel();
+    const answer = new Promise((resolve) => { channel.port1.onmessage = (event) => resolve(event.data); });
+    await h.fire("message", { data: { type }, ports: [channel.port2] });
+    const value = await answer;
+    channel.port1.close();
+    return value;
+  };
+  const single = workerHarness({ windows: [fakeWindow()] });
+  assert.deepEqual(await ask(single, "ggp:ping"), { push: true });
+  assert.deepEqual(await ask(single, "ggp:skip-waiting"), { skipping: true });
+  assert.equal(single.skipped(), 1);
+  const busy = workerHarness({ windows: [fakeWindow(), fakeWindow({ url: "https://ggparrot.test/agents" })] });
+  assert.deepEqual(await ask(busy, "ggp:skip-waiting"), { skipping: false });
+  assert.equal(busy.skipped(), 0, "옛 파일로 도는 다른 창의 캐시를 지우지 않는다");
 });
 
 // --- 설치 안내(시안 B안) · 처음 묻기 ------------------------------------------------
@@ -184,9 +431,10 @@ test("카카오톡 · 네이버 앱 안에서는 먼저 브라우저로", () => 
   assert.deepEqual(inApp.steps.map((s) => s.title), ["⋮ 누르기", "다른 브라우저로 열기", "앱 설치"]);
 });
 
-test("처음 묻기는 앱으로 열었고 · 꺼져 있고 · 권한을 안 물었고 · 답한 적 없을 때만", () => {
-  const base = { standalone: true, state: "off", permission: "default", alreadyAsked: false, path: "/agents" };
+test("처음 묻기는 로그인했고 · 앱으로 열었고 · 꺼져 있고 · 권한을 안 물었고 · 답한 적 없을 때만", () => {
+  const base = { signedIn: true, standalone: true, state: "off", permission: "default", alreadyAsked: false, path: "/agents" };
   assert.equal(shouldAskPush(base), true);
+  assert.equal(shouldAskPush({ ...base, signedIn: false }), false, "로그인 전에는 묻지 않는다 — 켤 계정이 없어 답만 써 버린다");
   assert.equal(shouldAskPush({ ...base, standalone: false }), false, "브라우저 탭에서는 묻지 않는다");
   assert.equal(shouldAskPush({ ...base, state: "on" }), false);
   assert.equal(shouldAskPush({ ...base, permission: "denied" }), false);

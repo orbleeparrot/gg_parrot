@@ -11,6 +11,7 @@ import DevNoteDialog from "./components/DevNoteDialog.jsx";
 import RouteErrorBoundary, { ShellBoundary } from "./components/RouteErrorBoundary.jsx";
 import { recordVisit } from "./lib/visit.js";
 import { PRO_BUILDER_OPEN } from "./lib/proBuilder.js";
+import { usePushBridge } from "./hooks/usePushBridge.js";
 
 // Keep the first screen small and quick. The builder, charts, guide, and
 // community screens are fetched only when their route is opened.
@@ -144,6 +145,7 @@ export default function App() {
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const menuButtonRef = useRef(null);
   const closeMobileNavigation = useCallback(() => setMobileNavigationOpen(false), []);
+  usePushBridge();
 
   useEffect(() => {
     setMobileNavigationOpen(false);

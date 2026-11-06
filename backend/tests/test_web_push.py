@@ -1,0 +1,321 @@
+"""앱(PWA) 알림 — 암호화(RFC 8291 예시) · VAPID · 구독 API · 중계 소식 → 대기열 → 보내기."""
+from __future__ import annotations
+
+import json
+import os
+import time
+from datetime import datetime, timezone
+
+import jwt
+import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from fastapi.testclient import TestClient
+from sqlmodel import select
+
+from app import agent_commentary as ac
+from app import push_alerts, web_push
+from app.db import PushOutbox, PushSubscription, get_session
+from app.main import app
+from tests.test_runner import _auth, _signup
+from tests.test_runner_signals_api import _key, _stop
+
+client = TestClient(app)
+VAPID_KEY = "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw"  # RFC 8291 부록 A 의 서버 키(시험 전용)
+FCM = "https://fcm.googleapis.com/fcm/send/"
+
+
+@pytest.fixture
+def vapid_on(monkeypatch):
+    monkeypatch.setenv("VAPID_PRIVATE_KEY", VAPID_KEY)
+    monkeypatch.setenv("VAPID_SUBJECT", "https://gg-parrot.vercel.app")
+
+
+def device(name: str = "") -> dict:
+    """브라우저 한 대 — PushManager 가 주는 것과 같은 모양의 구독과, 받은 본문을 풀 비밀키."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    public = key.public_key().public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+    return {"endpoint": FCM + (name or os.urandom(8).hex()), "keys": {"p256dh": web_push.b64u(public),
+                                                                     "auth": web_push.b64u(os.urandom(16))},
+            "_key": key}
+
+
+def decrypt(body: bytes, sub: dict) -> bytes:
+    """브라우저 쪽 풀기(RFC 8291) — 서버가 싼 본문을 그 기기만 풀 수 있는지 본다."""
+    salt, idlen = body[:16], body[20]
+    server_public = body[21:21 + idlen]
+    ua_public = web_push.b64u_decode(sub["keys"]["p256dh"])
+    auth = web_push.b64u_decode(sub["keys"]["auth"])
+    shared = sub["_key"].exchange(ec.ECDH(), ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), server_public))
+
+    def hkdf(s, ikm, info, n):
+        return HKDF(algorithm=hashes.SHA256(), length=n, salt=s, info=info).derive(ikm)
+    ikm = hkdf(auth, shared, b"WebPush: info\x00" + ua_public + server_public, 32)
+    plain = AESGCM(hkdf(salt, ikm, b"Content-Encoding: aes128gcm\x00", 16)).decrypt(
+        hkdf(salt, ikm, b"Content-Encoding: nonce\x00", 12), body[21 + idlen:], None)
+    assert plain.endswith(b"\x02")
+    return plain[:-1]
+
+
+def public_sub(sub: dict) -> dict:
+    return {key: value for key, value in sub.items() if not key.startswith("_")}
+
+
+def stored(sub: dict) -> dict:
+    """서버가 표에서 읽어 send 에 넘기는 모양."""
+    return {"endpoint": sub["endpoint"], **sub["keys"]}
+
+
+# --- 프로토콜 --------------------------------------------------------------------
+def test_encryption_matches_the_rfc_8291_example():
+    server = ec.derive_private_key(int.from_bytes(web_push.b64u_decode(VAPID_KEY), "big"), ec.SECP256R1())
+    body = web_push.encrypt(b"When I grow up, I want to be a watermelon",
+                            "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4",
+                            "BTBZMqHH6r4Tts7J_aSIgg", salt=web_push.b64u_decode("DGv6ra1nlYgDCS1FRnbzlw"),
+                            server_key=server)
+    assert web_push.b64u(body) == (
+        "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_"
+        "yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN")
+
+
+def test_a_random_message_round_trips_and_oversized_payloads_are_refused():
+    sub = device()
+    text = json.dumps({"title": "BTC · 관련 기사가 나왔어요", "body": "가" * 400}, ensure_ascii=False).encode()
+    assert decrypt(web_push.encrypt(text, sub["keys"]["p256dh"], sub["keys"]["auth"]), sub) == text
+    with pytest.raises(ValueError):
+        web_push.encrypt(b"x" * (web_push.MAX_PLAINTEXT + 1), sub["keys"]["p256dh"], sub["keys"]["auth"])
+
+
+def test_only_browser_push_services_are_reachable():
+    for ok in ("https://fcm.googleapis.com/fcm/send/abc", "https://web.push.apple.com/QK1",
+               "https://updates.push.services.mozilla.com/wpush/v2/x", "https://wns2-par02p.notify.windows.com/w/?token=1"):
+        assert web_push.allowed_endpoint(ok), ok
+    for bad in ("http://fcm.googleapis.com/fcm/send/abc", "https://169.254.169.254/latest", "https://localhost/x",
+                "https://fcm.googleapis.com.evil.example/x", "https://user:pw@fcm.googleapis.com/x",
+                "https://fcm.googleapis.com:8443/x", "https://evilnotify.windows.com/x", "file:///etc/passwd", ""):
+        assert not web_push.allowed_endpoint(bad), bad
+
+
+def test_vapid_header_is_signed_for_the_push_service_origin(vapid_on):
+    keys = web_push.vapid()
+    header = web_push.vapid_authorization("https://web.push.apple.com/QK1abc", keys, now=1_800_000_000)
+    token = header.split("t=")[1].split(",")[0]
+    assert header.endswith(f"k={keys.public_key}")
+    claims = jwt.decode(token, keys.private_key.public_key(), algorithms=["ES256"], audience="https://web.push.apple.com",
+                        options={"verify_exp": False})
+    assert claims == {"aud": "https://web.push.apple.com", "exp": 1_800_000_000 + 12 * 3600,
+                      "sub": "https://gg-parrot.vercel.app"}
+
+
+def test_send_reads_the_push_service_answer(vapid_on):
+    sub = device()
+    seen = []
+
+    class Fake:
+        def __init__(self, status):
+            self.status = status
+
+        def post(self, url, *, content, headers, timeout, follow_redirects):
+            seen.append((url, headers, follow_redirects))
+            return type("R", (), {"status_code": self.status})()
+    assert web_push.send(stored(sub), b"{}", client=Fake(201)) == web_push.SENT
+    url, headers, follow = seen[-1]
+    assert url == sub["endpoint"] and headers["Content-Encoding"] == "aes128gcm" and headers["TTL"] == "3600"
+    assert follow is False, "리다이렉트를 따라가 다른 곳으로 보내지 않는다"
+    assert web_push.send(stored(sub), b"{}", client=Fake(410)) == web_push.GONE
+    assert web_push.send(stored(sub), b"{}", client=Fake(404)) == web_push.GONE
+    assert web_push.send(stored(sub), b"{}", client=Fake(429)) == web_push.RETRY
+    assert web_push.send(stored(sub), b"{}", client=Fake(403)) == web_push.FAILED
+    count = len(seen)
+    assert web_push.send(stored(sub) | {"endpoint": "https://10.0.0.1/x"}, b"{}", client=Fake(201)) == web_push.FAILED
+    assert len(seen) == count, "허용 목록 밖으로는 요청 자체를 보내지 않는다"
+
+
+# --- 구독 API ----------------------------------------------------------------------
+def test_push_is_off_without_a_key(monkeypatch):
+    monkeypatch.delenv("VAPID_PRIVATE_KEY", raising=False)
+    assert client.get("/api/push/config").json() == {"enabled": False, "public_key": ""}
+    token = _signup()
+    r = client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    assert r.status_code == 503
+
+
+def test_subscribe_status_and_unsubscribe(vapid_on):
+    config = client.get("/api/push/config").json()
+    assert config["enabled"] and len(web_push.b64u_decode(config["public_key"])) == 65
+    token = _signup()
+    sub = device()
+    assert client.put("/api/me/push/subscription", json=public_sub(sub)).status_code == 401
+    r = client.put("/api/me/push/subscription", json=public_sub(sub) | {"platform": "android"}, headers=_auth(token))
+    assert r.status_code == 200 and r.json() == {"subscribed": True}
+    assert client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token)).status_code == 200
+    with get_session() as db:
+        rows = db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).all()
+        assert len(rows) == 1, "같은 기기는 한 줄"
+    status = client.post("/api/me/push/status", json={"endpoint": sub["endpoint"]}, headers=_auth(token)).json()
+    assert status == {"subscribed": True}
+    other = _signup()
+    assert client.post("/api/me/push/status", json={"endpoint": sub["endpoint"]}, headers=_auth(other)).json() == {
+        "subscribed": False}
+    # 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮긴다 — 앞 계정의 소식이 이 기기에 오지 않는다.
+    assert client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(other)).status_code == 200
+    assert client.post("/api/me/push/status", json={"endpoint": sub["endpoint"]}, headers=_auth(token)).json() == {
+        "subscribed": False}
+    assert client.post("/api/me/push/unsubscribe", json={"endpoint": sub["endpoint"]}, headers=_auth(other)).json() == {
+        "subscribed": False}
+    with get_session() as db:
+        assert db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).first() is None
+
+
+def test_bad_subscriptions_are_refused(vapid_on):
+    token = _signup()
+    sub = public_sub(device())
+    assert client.put("/api/me/push/subscription", json=sub | {"endpoint": "https://127.0.0.1/x"},
+                      headers=_auth(token)).status_code == 400
+    assert client.put("/api/me/push/subscription", json=sub | {"keys": {"p256dh": "AAAA", "auth": "BBBB"}},
+                      headers=_auth(token)).status_code == 400
+    assert client.put("/api/me/push/subscription", json=sub | {"endpoint": FCM + "x" * 3000},
+                      headers=_auth(token)).status_code == 422
+
+
+def test_an_account_keeps_at_most_ten_devices(vapid_on):
+    token = _signup()
+    endpoints = []
+    for index in range(push_alerts.MAX_DEVICES + 2):
+        sub = public_sub(device())
+        endpoints.append(sub["endpoint"])
+        push_alerts.subscribe(_user_id(token), sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"],
+                              now_ms=1_000 + index)
+    with get_session() as db:
+        kept = set(db.exec(select(PushSubscription.endpoint).where(PushSubscription.user_id == _user_id(token))).all())
+    assert kept == set(endpoints[2:]), "가장 오래 안 쓴 두 대가 빠진다"
+
+
+def _user_id(token: str) -> int:
+    return client.get("/api/auth/me", headers=_auth(token)).json()["user"]["id"]
+
+
+# --- 중계 소식 → 대기열 → 보내기 -----------------------------------------------------
+MACRO = {"symbol": "LTCUSDT", "exchange": "binance", "rule_type": "A", "position_side": "long", "market": "spot",
+         "leverage": 1, "candle_interval": "1h", "period": {"preset": "3m"},
+         "params": {"take_profit_pct": 5, "initial_capital": 1000}, "risk": {}}
+
+
+def _start(key):
+    body = {"symbol": "LTCUSDT", "position_side": "long", "leverage": 1, "market": "spot", "testnet": True,
+            "human_summary": "t", "macro": MACRO, "runner_version": "7"}
+    r = client.post("/api/runner/start", json=body, headers={"X-Runner-Key": key})
+    assert r.status_code == 200, r.text
+    return r.json()["session_id"]
+
+
+def _article(pid: int, title: str, published_ms: int) -> dict:
+    return {"id": pid, "url": f"https://www.coindesk.com/markets/{pid}", "title": title, "source": "CoinDesk",
+            "excerpt": "라이트코인 현물 ETF 심사가 다음 주로 미뤄졌다. 시장은 담담하다.",
+            "published": datetime.fromtimestamp(published_ms / 1000, timezone.utc).isoformat()}
+
+
+def _cycle(now_ms: int, items: list[dict], cursor: int):
+    feed = {"items": items, "cursor": cursor, "reset": False}
+    return ac.run_cycle(now_ms=now_ms, claim=False, candles_for=lambda f: [], wait_for=lambda args: None,
+                        feed_for=lambda f, rev: feed if rev is not None else {"items": [], "cursor": 1, "reset": True})
+
+
+def _rows(user_id: int) -> list[PushOutbox]:
+    with get_session() as db:
+        return list(db.exec(select(PushOutbox).where(PushOutbox.user_id == user_id).order_by(PushOutbox.id)).all())
+
+
+def test_news_for_a_running_agent_reaches_every_device_once(vapid_on):
+    token = _signup()
+    user_id = _user_id(token)
+    key = _key(token)
+    phone, laptop = device(), device()
+    for sub in (phone, laptop):
+        assert client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token)).status_code == 200
+    first, second = _start(key), _start(key)  # 같은 코인(LTC)을 두 세션이 돌린다
+    try:
+        now = int(time.time() * 1000)
+        _cycle(now, [], 1)  # 처음 본 피드는 위치만 기억
+        article = _article(7, "라이트코인 ETF 심사 연기", now - 60_000)
+        _cycle(now + 2_000, [article], 2)
+        rows = _rows(user_id)
+        assert len(rows) == 1, "두 세션이 같은 기사를 말해도 알림은 한 번"
+        payload = json.loads(rows[0].payload_json)
+        assert payload["title"] == "LTC · " + payload["title"].split(" · ", 1)[1]
+        assert payload["title"].split(" · ", 1)[1] in ("관련 기사가 나왔어요", "이런 기사가 떴어요")
+        assert payload["body"].startswith("라이트코인 ETF 심사 연기\n라이트코인 현물 ETF 심사가 다음 주로 미뤄졌다.")
+        assert payload["url"] in (f"/agents?session={first}", f"/agents?session={second}")
+
+        delivered = []
+
+        def fake_send(subscription, data, **kwargs):
+            delivered.append((subscription["endpoint"], data, kwargs))
+            return web_push.GONE if subscription["endpoint"] == laptop["endpoint"] else web_push.SENT
+        result = push_alerts.dispatch(now_ms=now + 3_000, send=fake_send)
+        assert result["claimed"] == 1 and result["sent"] == 1 and result["gone"] == 1
+        assert sorted(endpoint for endpoint, _, _ in delivered) == sorted([phone["endpoint"], laptop["endpoint"]])
+        assert json.loads(delivered[0][1]) == payload and delivered[0][2]["urgency"] == "high"
+        assert push_alerts.dispatch(now_ms=now + 4_000, send=fake_send) == {"claimed": 0}, "한 번 꺼낸 알림은 다시 안 간다"
+        with get_session() as db:
+            left = db.exec(select(PushSubscription.endpoint).where(PushSubscription.user_id == user_id)).all()
+        assert left == [phone["endpoint"]], "끝난 구독(410)은 지운다"
+    finally:
+        _stop(key, first)
+        _stop(key, second)
+    # 끝난 세션의 마지막 바퀴에 나온 기사는 앱 알림으로 보내지 않는다 — '실행 중인' 에이전트의 소식만.
+    later = int(time.time() * 1000) + 10_000
+    _cycle(later, [article, _article(8, "라이트코인 거래량 급증", later - 30_000)], 3)
+    assert len(_rows(user_id)) == 1
+
+
+def test_accounts_without_a_device_queue_nothing(vapid_on):
+    token = _signup()
+    key = _key(token)
+    sid = _start(key)
+    try:
+        now = int(time.time() * 1000)
+        _cycle(now, [], 1)
+        _cycle(now + 2_000, [_article(9, "라이트코인 해시레이트 최고치", now - 60_000)], 2)
+        assert _rows(_user_id(token)) == []
+    finally:
+        _stop(key, sid)
+
+
+def test_repeated_rejections_drop_the_device_and_test_push_goes_out(vapid_on):
+    token = _signup()
+    user_id = _user_id(token)
+    sub = device()
+    client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
+    for attempt in range(push_alerts.FAIL_LIMIT):
+        with get_session() as db:
+            devices = push_alerts._subscriptions_for(db, {user_id})
+        outcome = push_alerts._deliver([(user_id, {"title": "t"})], devices,
+                                       now_ms=attempt, send=lambda *a, **k: web_push.FAILED)
+        assert outcome["failed"] == 1
+    with get_session() as db:
+        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is None
+    assert client.post("/api/me/push/test", headers=_auth(token)).status_code == 404
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    sent = []
+    result = push_alerts.send_test(user_id, now_ms=10**13, send=lambda s, d, **k: sent.append(d) or web_push.SENT)
+    assert result == {"sent": 1, "devices": 1} and json.loads(sent[0])["url"] == "/agents"
+    with pytest.raises(Exception):
+        push_alerts.send_test(user_id, now_ms=10**13 + 1_000, send=lambda *a, **k: web_push.SENT)
+
+
+def test_leaving_the_service_removes_devices_and_history(vapid_on):
+    token = _signup()
+    user_id = _user_id(token)
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    with get_session() as db:
+        db.add(PushOutbox(user_id=user_id, dedupe_key="post:x", payload_json="{}", created_ms=1, sent_ms=1))
+        db.commit()
+    r = client.request("DELETE", "/api/me/account", headers=_auth(token),
+                       json={"confirmation": "탈퇴", "password": "password123"})
+    assert r.status_code == 200, r.text
+    with get_session() as db:
+        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is None
+        assert db.exec(select(PushOutbox).where(PushOutbox.user_id == user_id)).first() is None

@@ -6,7 +6,11 @@ import { RootErrorBoundary } from "./components/RouteErrorBoundary.jsx";
 import { reloadOnceForNewBuild } from "./lib/chunkReload.js";
 import { toastHost } from "./lib/toastHost.js";
 import { reportClientError } from "./lib/errorReport.js";
+import { captureInstallPrompt } from "./lib/pwa.js";
 import "./index.css";
+
+// 안드로이드 · 크롬의 '바로 설치' 이벤트는 화면보다 먼저 올 수 있다 — 렌더 전에 받아 둔다(lib/pwa.js).
+captureInstallPrompt();
 
 // 토스트 자리(status 영역)를 먼저 만들어 둔다 — 토스트와 함께 생기면 화면 읽기 프로그램이 첫 토스트를 놓친다.
 toastHost();
@@ -55,7 +59,7 @@ if (typeof window.requestIdleCallback === "function") {
   window.setTimeout(loadRum, 1_000);
 }
 
-// Static assets and a generic offline page only. Dev/HMR never installs a worker.
+// Static assets, a generic offline page and app (PWA) push notifications. Dev/HMR never installs a worker.
 if (import.meta.env.PROD && "serviceWorker" in navigator) {
   const register = () => navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {});
   if (document.readyState === "complete") register();

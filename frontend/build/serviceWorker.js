@@ -52,3 +52,56 @@ self.addEventListener("fetch", (event) => {
     return response;
   })());
 });
+
+// 앱(PWA) 알림 — 서버(push_alerts)가 보낸 '내 에이전트 코인 소식'을 알림으로 띄운다.
+// 받은 푸시마다 반드시 알림을 띄운다: iOS 는 알림 없이 끝난 푸시가 쌓이면 구독을 끊는다.
+const NOTIFICATION_ICON = "/favicon/android-icon-192x192.png";
+const NOTIFICATION_BADGE = "/favicon/notification-badge-96.png"; // 안드로이드 상태 표시줄(단색)
+
+function appPath(value) {
+  try {
+    const url = new URL(String(value || "/"), self.location.origin);
+    return url.origin === self.location.origin ? url.pathname + url.search + url.hash : "/";
+  } catch {
+    return "/";
+  }
+}
+
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { body: event.data ? event.data.text() : "" };
+  }
+  const options = {
+    body: String(data.body || "").slice(0, 400),
+    icon: NOTIFICATION_ICON,
+    badge: NOTIFICATION_BADGE,
+    lang: "ko",
+    data: { url: appPath(data.url) },
+  };
+  if (data.tag) options.tag = String(data.tag).slice(0, 120);
+  event.waitUntil(self.registration.showNotification(String(data.title || "껄무새").slice(0, 120), options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const path = appPath(event.notification.data && event.notification.data.url);
+  event.waitUntil((async () => {
+    const windows = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const open = windows.find((client) => new URL(client.url).origin === self.location.origin);
+    if (open) {
+      // 열린 앱이 있으면 새로 띄우지 않고 그 화면에서 옮긴다(lib/push.js 가 받아 라우터로 이동).
+      await open.focus();
+      open.postMessage({ type: "ggp:open", url: path });
+      return;
+    }
+    await self.clients.openWindow(path);
+  })());
+});
+
+// 알림을 켤 때만 새 워커를 바로 올린다 — 옛 워커(푸시 처리 없음)가 남아 첫 알림을 놓치지 않게(lib/push.js).
+self.addEventListener("message", (event) => {
+  if (event.data && event.data.type === "ggp:skip-waiting") self.skipWaiting();
+});

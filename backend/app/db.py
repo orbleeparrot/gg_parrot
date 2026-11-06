@@ -694,6 +694,44 @@ class AgentCommentaryState(SQLModel, table=True):
     updated_ms: int = Field(default=0, sa_type=BigInteger)
 
 
+class PushSubscription(SQLModel, table=True):
+    """앱(PWA) 알림을 받을 기기 하나 — 브라우저 PushManager 구독(web_push · push_alerts).
+
+    엔드포인트는 기기 · 브라우저마다 하나라 유일하다. 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮긴다.
+    """
+
+    __table_args__ = (Index("ux_pushsubscription_endpoint", "endpoint", unique=True),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    endpoint: str
+    p256dh: str
+    auth: str
+    platform: str = ""  # android | ios | desktop — 안내 · 통계용(브라우저가 알려 준 값)
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    updated_ms: int = Field(default=0, sa_type=BigInteger)
+    last_ok_ms: int = Field(default=0, sa_type=BigInteger)
+    fail_count: int = 0
+
+
+class PushOutbox(SQLModel, table=True):
+    """보낼(보낸) 앱 알림 한 건. 중계가 말풍선과 같은 트랜잭션에 넣고, push_runtime 이 꺼내 보낸다.
+
+    ``dedupe_key`` 가 계정마다 유일하다 — 같은 코인을 두 세션이 돌려도 같은 기사는 한 번만 울린다. 보낸 행은
+    며칠 남겨 중복을 막다가 지운다(push_alerts.KEEP_MS).
+    """
+
+    __table_args__ = (
+        Index("ux_pushoutbox_user_key", "user_id", "dedupe_key", unique=True),
+        Index("ix_pushoutbox_sent_id", "sent_ms", "id"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int
+    dedupe_key: str
+    payload_json: str = ""
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 안 보냄(꺼내 간 순간 채운다)
+
+
 class TickerNewsSnapshot(SQLModel, table=True):
     """One immutable, position-independent news analysis for an asset ticker.
 
@@ -1708,6 +1746,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
     "devnote", "newsheadlinearchive", "clienterror",
     "agentutterance", "agentcommentarystate",
+    "pushsubscription", "pushoutbox",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

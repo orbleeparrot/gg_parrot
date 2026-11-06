@@ -1520,6 +1520,12 @@ def _migrate() -> None:
             "claimed_ms": "ALTER TABLE dailychallenge ADD COLUMN claimed_ms INTEGER DEFAULT 0",
             "last_error": "ALTER TABLE dailychallenge ADD COLUMN last_error TEXT DEFAULT ''",
         },
+        # 앱 알림 대기열 — 보낸 뒤에야 sent_ms(2026-11-06). 이전 6칸 표가 있는 DB 에 칸을 더한다.
+        "pushoutbox": {
+            "lease_ms": "ALTER TABLE pushoutbox ADD COLUMN lease_ms INTEGER NOT NULL DEFAULT 0",
+            "attempts": "ALTER TABLE pushoutbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+            "done_json": "ALTER TABLE pushoutbox ADD COLUMN done_json TEXT NOT NULL DEFAULT ''",
+        },
     }
     added.setdefault("runnerlaunchticket", {}).update({
         "rejected_at": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_at TEXT DEFAULT ''",
@@ -1603,6 +1609,9 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    # 앱 알림 대기열을 '보낸 뒤에야 sent_ms' 로(2026-11-06). 마이그레이션 20261106130000 과 같은 정의.
+    "pushoutbox": {"lease_ms": "BIGINT NOT NULL DEFAULT 0", "attempts": "INTEGER NOT NULL DEFAULT 0",
+                   "done_json": "VARCHAR NOT NULL DEFAULT ''"},
     # 코인동향 소식 목록 SQL 쪽 나누기(2026-10-18) — 번역 대기 글 숨김 · 검색어 거르기. 마이그레이션 20261018000000 과 같은 정의.
     "trendarticle": {"visible": "BOOLEAN NOT NULL DEFAULT TRUE", "search_text": "VARCHAR NOT NULL DEFAULT ''"},
     "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''",

@@ -374,6 +374,30 @@ def test_a_run_that_ends_before_the_first_cycle_is_still_told():
         assert db.exec(select(AgentUtterance).where(AgentUtterance.session_id == old)).first() is None
 
 
+def test_a_run_that_ends_after_the_commentary_stalled_is_still_told():
+    """중계가 15분 넘게 멈췄다가(서버 재시작 · 장애) 그사이 체결 · 종료가 들어온 실행 — 상태가 오래돼도 방금 끝났으면 말한다."""
+    import time
+    token = _signup()
+    key = _key(token)
+    sid = _start_session(key)
+    now = int(time.time() * 1000)
+    _cycle(now)  # 시작은 말했다(상태 줄이 생김)
+    r = client.post("/api/runner/heartbeat", json={"session_id": sid, "last_price": 100.0, "in_position": True,
+                                                   "entry_price": 100.0, "position_qty": 2.0, "events": [
+        {"kind": "fill", "message": "실전 주문 결과", "event_name": "runner.order_result", "event_key": "fill-stalled",
+         "details": {"action": "BUY", "executed_qty": 2.0, "fill_price": 100.0}}]}, headers={"X-Runner-Key": key})
+    assert r.status_code == 200, r.text
+    _stop(key, sid)
+    with get_session() as db:
+        state = db.get(AgentCommentaryState, sid)
+        state.updated_ms = now - 20 * 60_000  # 중계가 20분 멈춰 있었다
+        db.add(state)
+        db.commit()
+    _cycle(now + 1_000)
+    body = client.get(f"/api/me/runner/sessions/{sid}/agent", headers=_auth(token)).json()
+    assert [item["kind"] for item in body["items"]] == ["start", "fill", "end"]
+
+
 def test_moves_before_the_entry_are_not_news_and_losses_are_not_cheered():
     candles = bars([0.6] * 20, closes=[195.0] * 19 + [201.0])
     fresh = started_state()

@@ -82,6 +82,9 @@ self.addEventListener("push", (event) => {
     data: { url: appPath(data.url) },
   };
   if (data.tag) options.tag = String(data.tag).slice(0, 120);
+  // 일어난 시각 — 다시 보내기로 늦게 와도 알림에 실제 시각이 찍혀 매수 · 매도 순서를 헷갈리지 않게(안드로이드가 표시).
+  const at = Number(data.at);
+  if (Number.isFinite(at) && at > 0) options.timestamp = at;
   event.waitUntil(self.registration.showNotification(String(data.title || "껄무새").slice(0, 120), options));
 });
 

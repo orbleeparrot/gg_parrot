@@ -260,9 +260,11 @@ def test_agent_commentary_reaches_every_device_once(vapid_on):
         keys = {row.dedupe_key for row in _rows(user_id)}
         assert {f"s{first}:start", f"s{second}:start"} <= keys
         fill = next(row for row in _rows(user_id) if row.dedupe_key.startswith(f"s{first}:fill"))
-        assert json.loads(fill.payload_json) == {"title": "LTC · 샀어요!",
-                                                 "body": "100.00 USDT · 2개 · 200.00 USDT\n시작하자마자 사는 매크로예요",
-                                                 "url": f"/agents?session={first}", "tag": fill.dedupe_key}
+        fill_payload = json.loads(fill.payload_json)
+        assert fill_payload.pop("at") > 0, "일어난 시각을 싣는다(늦게 도착해도 알림에 실제 시각)"
+        assert fill_payload == {"title": "LTC · 샀어요!",
+                                "body": "100.00 USDT · 2개 · 200.00 USDT\n시작하자마자 사는 매크로예요",
+                                "url": f"/agents?session={first}", "tag": fill.dedupe_key}
         article = _article(7, "라이트코인 ETF 심사 연기", now - 60_000)
         _cycle(now + 2_000, [article], 2)
         posts = _posts(_rows(user_id))
@@ -308,7 +310,7 @@ def test_old_happenings_stay_in_the_chat_only(vapid_on):
         assert push_alerts.enqueue_says(db, facts, says, now_ms=now) == 0, "기기가 없는 계정"
     assert push_alerts.say_payload(facts, says[1]) == {
         "title": "BTC · 손실이 -5%를 넘었어요", "body": "-5.2%\n손절선까지 1.8%p 남았어요\n포지션 보유 중 · 거래소에서 확인",
-        "url": "/agents?session=5", "tag": "s5:loss:5"}
+        "url": "/agents?session=5", "tag": "s5:loss:5", "at": now}
 
 
 def test_accounts_without_a_device_queue_nothing(vapid_on):
@@ -436,6 +438,96 @@ def test_a_device_that_stays_blocked_is_given_up_after_a_few_tries(vapid_on):
     with get_session() as db:
         assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is not None, \
             "잠깐 막힘은 기기를 지우지 않는다"
+
+
+def test_a_late_worker_cannot_overwrite_the_pass_that_took_over(vapid_on):
+    """보내다 맡은 시간이 지나 다른 바퀴가 다시 꺼내 끝냈으면, 늦게 끝난 옛 바퀴는 그 결과(받은 기기 · 다음 시각)를 덮지 않는다."""
+    import threading
+    token = _signup()
+    user_id = _user_id(token)
+    phone, laptop = device(), device()
+    for sub in (phone, laptop):
+        client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
+    _queue(user_id, "fill:fence", FAR)
+    took_over = FAR + 1_000 + push_alerts.LEASE_MS
+    second = []
+    lock = threading.Lock()
+
+    def new_pass(subscription, data, **kwargs):
+        return web_push.SENT if subscription["endpoint"] == phone["endpoint"] else web_push.RETRY
+
+    def old_pass(subscription, data, **kwargs):
+        with lock:  # 옛 바퀴가 보내는 동안 맡은 시간이 지나고, 새 바퀴가 다시 꺼내 전화에는 보낸다
+            if not second:
+                second.append(push_alerts.dispatch(now_ms=took_over, send=new_pass))
+        return web_push.RETRY
+    old = push_alerts.dispatch(now_ms=FAR + 1_000, send=old_pass)
+    assert second[0]["claimed"] == 1 and second[0]["sent"] == 1
+    assert old["lost"] == 1, "옛 바퀴의 결과는 쓰지 않는다"
+    row = _rows(user_id)[0]
+    assert row.attempts == 2 and json.loads(row.done_json) != [], "새 바퀴가 적은 '전화는 받음'이 남는다"
+    assert row.lease_ms == took_over + push_alerts.RETRY_WAIT_MS[1], "다음 시각도 새 바퀴 것"
+    calls = []
+    retry = push_alerts.dispatch(now_ms=row.lease_ms, send=lambda s, d, **k: calls.append(s["endpoint"]) or web_push.SENT)
+    assert retry["claimed"] == 1 and calls == [laptop["endpoint"]], "받은 전화에는 다시 보내지 않는다"
+
+
+def test_retry_after_from_the_push_service_is_respected(vapid_on):
+    class Fake:
+        def __init__(self, status, headers):
+            self.status, self.headers = status, headers
+
+        def post(self, url, **kwargs):
+            return type("R", (), {"status_code": self.status, "headers": self.headers})()
+    sub = device()
+    outcome = web_push.send(stored(sub), b"{}", client=Fake(429, {"Retry-After": "600"}))
+    assert outcome == web_push.RETRY and outcome.retry_after_s == 600
+    assert web_push.send(stored(sub), b"{}", client=Fake(503, {})).retry_after_s == 0
+    assert web_push.retry_after_seconds("Wed, 21 Oct 2015 07:28:00 GMT", now=1445412480 - 90) == 90
+    assert web_push.retry_after_seconds("99999") == web_push.MAX_RETRY_AFTER_S
+    assert web_push.retry_after_seconds("soon") == 0
+
+    token = _signup()
+    user_id = _user_id(token)
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    _queue(user_id, "fill:slow-down", FAR)
+    busy = web_push._retry(600)
+    assert push_alerts.dispatch(now_ms=FAR, send=lambda *a, **k: busy)["later"] == 1
+    assert push_alerts.dispatch(now_ms=FAR + push_alerts.RETRY_WAIT_MS[0], send=lambda *a, **k: web_push.SENT) == {
+        "claimed": 0}, "푸시 서비스가 10분 기다리라고 했으면 30초 뒤에 다시 보내 시도를 쓰지 않는다"
+    assert push_alerts.dispatch(now_ms=FAR + 600_000, send=lambda *a, **k: web_push.SENT)["sent"] == 1
+
+
+def test_an_older_queue_table_gains_the_new_columns_on_boot(tmp_path, monkeypatch, vapid_on):
+    """이전 버전(6칸) 대기열 표가 있는 DB — 기동 보정이 칸을 더해 쌓기 · 보내기가 그대로 돈다."""
+    from sqlalchemy import create_engine, inspect
+    from app import db as db_mod
+    engine = create_engine(f"sqlite:///{tmp_path / 'older-push.db'}")
+    monkeypatch.setattr(db_mod, "_engine", engine)
+    with engine.begin() as conn:
+        conn.exec_driver_sql("""CREATE TABLE pushoutbox (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+            dedupe_key VARCHAR NOT NULL, payload_json VARCHAR NOT NULL DEFAULT '', created_ms BIGINT NOT NULL DEFAULT 0,
+            sent_ms BIGINT NOT NULL DEFAULT 0)""")
+        conn.exec_driver_sql("INSERT INTO pushoutbox VALUES (1, 41, 's1:start', '{\"title\":\"t\"}', 1000, 0)")
+    try:
+        db_mod.init_db()
+        db_mod.init_db()
+        assert {"lease_ms", "attempts", "done_json"} <= {col["name"] for col in inspect(engine).get_columns("pushoutbox")}
+        result = push_alerts.dispatch(now_ms=2_000, send=lambda *a, **k: web_push.SENT)
+        assert result["claimed"] == 1, "옛 줄도 꺼내 끝낸다"
+    finally:
+        engine.dispose()
+    # 운영(Postgres) 기동 보정도 같은 세 칸을 더한다 — 마이그레이션 20261106130000 과 같은 정의.
+    from tests.test_db_startup_migrations import current_schema
+    state = current_schema()
+    for column in ("lease_ms", "attempts", "done_json"):
+        state["columns"].pop(("pushoutbox", column))
+    statements = db_mod._pg_migration_statements(state)
+    assert [s for s in statements if "pushoutbox" in s] == [
+        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS lease_ms BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS done_json VARCHAR NOT NULL DEFAULT ''",
+    ]
 
 
 def test_leaving_the_service_removes_devices_and_history(vapid_on):

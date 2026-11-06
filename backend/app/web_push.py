@@ -147,6 +147,34 @@ def vapid_authorization(endpoint: str, keys: Vapid, *, now: Optional[float] = No
 
 # 보낸 결과 — gone 이면 구독이 끝났으니(404 · 410) 지운다. retry 는 잠깐 막힌 것(429 · 5xx · 연결 실패).
 SENT, GONE, FAILED, RETRY = "sent", "gone", "failed", "retry"
+MAX_RETRY_AFTER_S = 3600
+
+
+class Retry(str):
+    """잠깐 막힘. RETRY 와 같은 글자로 비교되고, 푸시 서비스가 Retry-After 로 기다릴 시간을 알려 주면
+    ``retry_after_s`` 에 담는다(RFC 8030 §8.4) — 그보다 먼저 다시 보내 시도만 써 버리지 않게."""
+    retry_after_s = 0
+
+
+def _retry(after_s: int = 0) -> str:
+    outcome = Retry(RETRY)
+    outcome.retry_after_s = after_s
+    return outcome
+
+
+def retry_after_seconds(value, *, now: Optional[float] = None) -> int:
+    """Retry-After 값(초 또는 HTTP 날짜)을 초로. 읽을 수 없으면 0, 길어도 한 시간까지."""
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return min(int(text), MAX_RETRY_AFTER_S)
+    try:
+        from email.utils import parsedate_to_datetime
+        when = parsedate_to_datetime(text).timestamp()
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return 0
+    return max(0, min(int(when - (time.time() if now is None else now)), MAX_RETRY_AFTER_S))
 
 
 def send(subscription: dict, payload: bytes, *, ttl: int = 3600, urgency: str = "normal", topic: str = "",
@@ -177,12 +205,13 @@ def send(subscription: dict, payload: bytes, *, ttl: int = 3600, urgency: str = 
     try:
         response = client.post(endpoint, content=body, headers=headers, timeout=10.0, follow_redirects=False)
     except httpx.HTTPError:
-        return RETRY
+        return _retry()
     status = response.status_code
     if 200 <= status < 300:
         return SENT
     if status in (404, 410):
         return GONE
     if status == 429 or status >= 500:
-        return RETRY
+        headers = getattr(response, "headers", None) or {}
+        return _retry(retry_after_seconds(headers.get("Retry-After") or headers.get("retry-after")))
     return FAILED

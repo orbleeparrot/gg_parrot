@@ -32,7 +32,9 @@ FAIL_LIMIT = 10                     # 연달아 이만큼 거절되면(키 바�
 BATCH = 100
 LEASE_MS = 5 * 60_000               # 꺼낸 프로세스가 이 안에 끝내지 못하면(죽음 · 멈춤) 다른 바퀴가 다시 꺼낸다
 MAX_ATTEMPTS = 5                    # 잠깐 막힌 기기(429 · 5xx · 연결 실패)에 보내 보는 횟수(첫 시도 포함)
-RETRY_WAIT_MS = (30_000, 60_000, 120_000, 300_000)  # n 번째 시도가 막혔을 때 다음 시도까지
+RETRY_WAIT_MS = (30_000, 60_000, 120_000, 300_000)  # n 번째 시도가 막혔을 때 다음 시도까지(Retry-After 가 더 길면 그만큼)
+SEND_THREADS = 8
+SEND_WAVE_MS = 10_000               # 한 번에 SEND_THREADS 개씩 — 한 차례가 최대 이만큼(web_push.send 시간 제한) 걸린다고 본다
 TTL_SECONDS = 3600                 # 기기가 꺼져 있으면 한 시간까지만 기다렸다 전한다
 STALE_SAY_MS = 30 * 60_000          # 일어난 지 30분 넘은 일(처음 보는 세션의 옛 체결 등)은 채팅에만 — 늦은 알림은 헷갈린다
 PLATFORMS = {"android", "ios", "desktop"}
@@ -126,7 +128,8 @@ def _sub_text(sub) -> str:
 
 def say_payload(facts: dict, say: dict) -> dict:
     """중계 말풍선 하나를 알림 한 장으로. 제목은 '코인 · 말풍선 첫 줄', 본문은 말풍선의 숫자 줄과 덧붙인 줄 —
-    문구는 채팅과 같다(매크로가 주어인 말투 그대로). 기사 · 커뮤니티 글은 제목과 내용."""
+    문구는 채팅과 같다(매크로가 주어인 말투 그대로). 기사 · 커뮤니티 글은 제목과 내용.
+    ``at`` 은 일어난 시각 — 다시 보내기로 늦게 도착해도(매수가 매도보다 늦게 오는 등) 휴대폰 알림에 실제 시각이 찍힌다."""
     post = say.get("post") if isinstance(say.get("post"), dict) else None
     if post:
         title = str(post.get("title") or "").strip()
@@ -139,6 +142,7 @@ def say_payload(facts: dict, say: dict) -> dict:
         "body": "\n".join(line for line in lines if line)[:400],
         "url": f"/agents?session={int(facts['id'])}",
         "tag": _dedupe_key(facts, say)[:120],
+        "at": int(say.get("at_ms") or 0),
     }
 
 
@@ -189,7 +193,7 @@ def _send_all(jobs: list[tuple[dict, bytes]], send: Callable) -> list[str]:
             return web_push.RETRY
     if len(jobs) <= 1:
         return [one(job) for job in jobs]
-    with ThreadPoolExecutor(max_workers=min(8, len(jobs)), thread_name_prefix="ggp-push") as pool:
+    with ThreadPoolExecutor(max_workers=min(SEND_THREADS, len(jobs)), thread_name_prefix="ggp-push") as pool:
         return list(pool.map(one, jobs))
 
 
@@ -250,8 +254,8 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send) ->
 
     꺼낼 때 ``lease_ms`` 로 맡아 두 프로세스가 같은 알림을 함께 보내지 않게 하고, 보낸 뒤에야 ``sent_ms`` 를 채운다.
     보내는 도중 프로세스가 죽으면 맡은 시간(LEASE_MS)이 지나 다시 꺼낸다 — 드물게 한 기기에 두 번 갈 수 있지만 같은
-    tag 라 기기에서는 한 장으로 바뀐다. 잠깐 막힌 기기는 그 기기에만 RETRY_WAIT_MS 뒤에 다시 보낸다(MAX_ATTEMPTS 번,
-    쌓인 지 PENDING_MAX_AGE_MS 안).
+    tag 라 기기에서는 한 장으로 바뀐다. 잠깐 막힌 기기는 그 기기에만 RETRY_WAIT_MS(또는 Retry-After) 뒤에 다시
+    보낸다(MAX_ATTEMPTS 번, 쌓인 지 PENDING_MAX_AGE_MS 안). 결과는 아직 맡고 있는 줄에만 쓴다(``_owned``).
     """
     now_ms = _now_ms() if now_ms is None else now_ms
     if not web_push.enabled():
@@ -284,30 +288,53 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send) ->
             if subscription["id"] not in done[row_id]:
                 jobs.append((subscription, data))
                 owners.append(row_id)
+    # 큰 묶음(알림 × 기기)은 보내는 데 LEASE_MS 보다 오래 걸릴 수 있다 — 그동안 다른 작업이 다시 꺼내지 않게 늘려 둔다.
+    needed = -(-len(jobs) // SEND_THREADS) * SEND_WAVE_MS + 60_000
+    if needed > LEASE_MS:
+        with get_session() as db:
+            for where in _owned(attempts, attempts):
+                db.exec(update(PushOutbox).where(*where).values(lease_ms=now_ms + needed))
+            db.commit()
     outcomes = _send_all(jobs, send)
-    blocked = set()
+    blocked, delay = set(), {}
     for row_id, (subscription, _), outcome in zip(owners, jobs, outcomes):
         if outcome == web_push.RETRY:
             blocked.add(row_id)
+            delay[row_id] = max(delay.get(row_id, 0), int(getattr(outcome, "retry_after_s", 0) or 0) * 1000)
         else:
             done[row_id].add(subscription["id"])
     finished = [row_id for row_id in done if row_id not in blocked or attempts[row_id] >= MAX_ATTEMPTS]
-    later: dict[tuple[str, int], list[int]] = {}
+    later: dict[tuple[int, str, int], list[int]] = {}
     for row_id in sorted(blocked.difference(finished)):
-        wait = RETRY_WAIT_MS[min(attempts[row_id], len(RETRY_WAIT_MS)) - 1]
-        later.setdefault((json.dumps(sorted(done[row_id])), now_ms + wait), []).append(row_id)
+        wait = max(RETRY_WAIT_MS[min(attempts[row_id], len(RETRY_WAIT_MS)) - 1], delay.get(row_id, 0))
+        later.setdefault((attempts[row_id], json.dumps(sorted(done[row_id])), now_ms + wait), []).append(row_id)
+    written = 0
     with get_session() as db:
         result = _device_results(db, jobs, outcomes, now_ms=now_ms)
-        if finished:
-            db.exec(update(PushOutbox).where(PushOutbox.id.in_(finished))
-                    .values(sent_ms=now_ms, lease_ms=0, done_json=""))
-        for (done_json, lease_ms), ids in later.items():  # 같은 처지끼리 묶어 쓴다(운영 DB 왕복 80ms)
-            db.exec(update(PushOutbox).where(PushOutbox.id.in_(ids)).values(lease_ms=lease_ms, done_json=done_json))
+        for where in _owned(finished, attempts):
+            written += db.exec(update(PushOutbox).where(*where).values(sent_ms=now_ms, lease_ms=0, done_json="")).rowcount
+        for (tries, done_json, lease_ms), ids in later.items():  # 같은 처지끼리 묶어 쓴다(운영 DB 왕복 80ms)
+            written += db.exec(update(PushOutbox).where(PushOutbox.id.in_(ids), PushOutbox.attempts == tries,
+                                                        PushOutbox.sent_ms == 0)
+                               .values(lease_ms=lease_ms, done_json=done_json)).rowcount
         db.commit()
+    lost = len(claimed) - written
+    if lost:
+        log.warning("push dispatch outlived its lease; %s alerts were taken over by another pass", lost)
     gave_up = len(blocked.intersection(finished))
     if gave_up:
         log.warning("push gave up after %s attempts (%s alerts)", MAX_ATTEMPTS, gave_up)
-    return {"claimed": len(claimed), **result, "later": sum(len(ids) for ids in later.values())}
+    return {"claimed": len(claimed), **result, "later": sum(len(ids) for ids in later.values()), "lost": lost}
+
+
+def _owned(row_ids, attempts: dict[int, int]) -> list[tuple]:
+    """이 작업이 아직 맡고 있는 줄을 고르는 조건들. 꺼낼 때마다 attempts 가 오르므로, 맡은 시간이 지나 다른 작업이 다시
+    꺼낸 줄은 attempts 가 이미 달라 걸리지 않는다 — 늦게 끝난 옛 작업이 새 작업의 결과(받은 기기 · 다음 시각)를 덮지 않게."""
+    groups: dict[int, list[int]] = {}
+    for row_id in row_ids:
+        groups.setdefault(attempts[row_id], []).append(row_id)
+    return [(PushOutbox.id.in_(ids), PushOutbox.attempts == tries, PushOutbox.sent_ms == 0)
+            for tries, ids in sorted(groups.items())]
 
 
 def _cleanup(now_ms: int) -> None:

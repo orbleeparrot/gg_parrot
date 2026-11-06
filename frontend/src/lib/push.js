@@ -4,6 +4,9 @@
 // 그 계정으로 보내고 있으면 '켜짐'. 서버는 기기를 스스로 지울 수 있다(11번째 기기 · 끝난 구독 410 · 거절 반복).
 // 켠 계정을 기억해 두는 까닭 — 로그아웃 정리가 실패한 기기에서 다른 사람이 로그인했을 때, 앞 사람이 켠 구독을
 // 새 계정으로 옮겨 남의 기기에 알림이 가지 않게 한다(옮기지 않고 지운다).
+//
+// 구독을 바꾸는 일(켜기 · 끄기 · 동기화)은 한 탭 안에서 하나씩만 돈다(exclusive) — 기다리던 옛 작업이 나중 작업이
+// 만든 구독을 끊지 않게. 기다린 뒤에는 계정부터 다시 확인하고, 끊을 때는 지금 구독이 내가 본 그 구독인지 확인한다.
 import { api } from "../api.js";
 import { captureAccountGuard } from "./auth.js";
 import { currentDevice } from "./pwa.js";
@@ -12,6 +15,7 @@ const OWNER_KEY = "ggp_push_owner";
 const SYNC_KEY = "ggp_push_synced_at";
 const SYNC_EVERY_MS = 12 * 60 * 60 * 1000;
 const STATUS_FRESH_MS = 15_000;
+const timing = { ping: 1_500, finalPing: 3_000 };
 
 function storage() {
   try {
@@ -45,12 +49,14 @@ export function urlBase64ToUint8Array(text) {
   return Uint8Array.from(raw, (char) => char.charCodeAt(0));
 }
 
+// 서버 설정(켜졌는지 · 공개키). 못 읽었으면 failed 를 붙여 돌려준다 — 서버가 꺼 둔 것(enabled:false)과 달리
+// 화면이 앱으로 돌아올 때 · 연결이 돌아올 때 다시 읽는다(usePushState).
 let configPromise = null;
 export function loadPushConfig({ refresh = false } = {}) {
   if (!configPromise || refresh) {
     configPromise = api.pushConfig().catch(() => {
       configPromise = null; // 일시 실패면 다음에 다시 묻는다
-      return { enabled: false, public_key: "" };
+      return { enabled: false, public_key: "", failed: true };
     });
   }
   return configPromise;
@@ -72,6 +78,19 @@ export function forgetPushStatus() {
   statusMemo = null;
 }
 
+// 시험용 — 워커 응답 기다림을 줄인다.
+export function setPushTimingForTest(values = {}) {
+  Object.assign(timing, { ping: 1_500, finalPing: 3_000 }, values);
+}
+
+// 구독을 바꾸는 일을 한 줄로 세운다. 안에서 다시 exclusive 를 부르지 않는다(내부 도우미는 dropOwn 등을 쓴다).
+let chain = Promise.resolve();
+function exclusive(task) {
+  const run = chain.then(task, task);
+  chain = run.catch(() => {});
+  return run;
+}
+
 // supported | desktop(PC 알림은 데스크톱 실행기가 보낸다 — 웹 푸시까지 켜면 같은 체결이 두 번 울린다)
 // | needs-install(아이폰 사파리 탭 — 홈 화면 앱에서만 된다) | in-app | unsupported
 export function pushSupport(win = globalThis.window, device = currentDevice(win)) {
@@ -88,6 +107,16 @@ async function registration(win = globalThis.window) {
   } catch {
     return null;
   }
+}
+
+async function currentSubscription(win) {
+  return (await (await registration(win))?.pushManager?.getSubscription().catch(() => null)) || null;
+}
+
+// 내가 본 그 구독일 때만 끊는다 — 그사이 다른 작업(다른 탭 · 다른 계정)이 새로 만든 구독은 건드리지 않는다.
+async function dropOwn(win, endpoint) {
+  const now = await currentSubscription(win);
+  if (now && now.endpoint === endpoint) await now.unsubscribe().catch(() => {});
 }
 
 function withTimeout(promise, ms) {
@@ -119,6 +148,10 @@ function ask(worker, message, ms) {
   });
 }
 
+async function handlesPush(worker, ms) {
+  return Boolean((await ask(worker, { type: "ggp:ping" }, ms))?.push);
+}
+
 function settled(worker, states, ms) {
   return new Promise((resolve) => {
     const check = () => {
@@ -145,11 +178,12 @@ async function activated(worker) {
   if (answer?.skipping) await settled(worker, ["activated", "redundant"], 8_000);
 }
 
-// 구독을 걸 워커 등록. 지금 워커가 푸시를 처리하면(ping 에 답함) 그대로 쓰고 업데이트를 건드리지 않는다.
-// 푸시를 처리하지 못하는 옛 워커일 때만 새 워커를 찾아 올린다 — 옛 워커에 구독을 걸면 첫 알림을 놓친다.
+// 구독을 걸 워커 등록 — 활성 워커가 푸시를 처리할 때만 돌려준다(아니면 null). 지금 워커가 ping 에 답하면 업데이트를
+// 건드리지 않는다. 옛 워커(푸시 처리 없음)면 새 워커를 찾아 올려 보고, 그래도 활성 워커가 답하지 않으면(다른 창 때문에
+// 새 워커가 기다리는 중) 켜지 않는다 — 옛 워커에 구독을 걸면 알림이 와도 띄우지 못한다.
 async function pushRegistration(win) {
   const ready = await withTimeout(win.navigator.serviceWorker.ready, 10_000);
-  if (await ask(ready.active, { type: "ggp:ping" }, 1_500)) return ready;
+  if (await handlesPush(ready.active, timing.ping)) return ready;
   try {
     await ready.update();
   } catch {
@@ -157,92 +191,91 @@ async function pushRegistration(win) {
   }
   const pending = ready.installing || ready.waiting;
   if (pending) await activated(pending);
-  return ready;
+  return (await handlesPush(ready.active, timing.finalPing)) ? ready : null;
 }
 
 // 이 기기의 상태: on | off | denied | unconfigured | desktop | needs-install | in-app | unsupported
-// 브라우저 구독 · 켠 계정이 맞아도 서버가 그 기기를 지웠으면 '꺼짐' — 켠 계정 기록도 지워 다음 동기화가 브라우저 구독을 정리한다.
+// 읽기만 한다 — 브라우저 구독 · 켠 계정이 맞아도 서버가 그 기기를 지웠으면 '꺼짐'. 저장소는 건드리지 않는다
+// (늦게 온 옛 구독의 답이 그사이 켠 새 구독의 기록을 지우지 않게). 브라우저 구독 정리는 syncPush 가 한다.
 export async function readPushState({ userId, config, win = globalThis.window } = {}) {
   const support = pushSupport(win);
   if (support !== "supported") return support;
   if (!config?.enabled) return "unconfigured";
   const permission = win.Notification.permission;
   if (permission === "denied") return "denied";
-  const subscription = await (await registration(win))?.pushManager?.getSubscription().catch(() => null);
+  const subscription = await currentSubscription(win);
   if (!subscription || permission !== "granted") return "off";
   if (!userId || read(OWNER_KEY) !== String(userId)) return "off";
-  const has = await serverHas(userId, subscription.endpoint);
-  if (has === false) {
-    if (read(OWNER_KEY) === String(userId)) {
-      write(OWNER_KEY, "");
-      write(SYNC_KEY, "");
-    }
-    return "off";
-  }
-  return "on";
+  return (await serverHas(userId, subscription.endpoint)) === false ? "off" : "on";
 }
-
-let enabling = 0; // 켜는 중에는 동기화가 '남의 구독'으로 보고 새 구독을 끊지 않게
 
 // 켜기. 클릭 처리기 안에서 '바로' 불러야 한다 — 권한 창은 사용자 동작 직후에만 뜬다(특히 iOS).
 // 결과: on | denied | dismissed | unconfigured | unsupported | cancelled(켜는 동안 계정이 바뀜)
+// | update-pending(옛 워커가 남아 있고 다른 창 때문에 새 워커로 못 바꿈)
 export function enablePush({ userId, config, win = globalThis.window } = {}) {
   if (pushSupport(win) !== "supported") return Promise.resolve("unsupported");
   // 시작한 계정이 끝까지 그대로인지. 켜는 동안 다른 탭에서 로그아웃하고 B 로 로그인하면, 지금 토큰(B)으로 서버에 등록하고
-  // 기기에는 A 를 적어 B 가 켜지도 않은 알림을 받는다 — 바뀌면 그만두고, 그사이 만든 구독도 끊는다.
+  // 기기에는 A 를 적어 B 가 켜지도 않은 알림을 받는다 — 바뀌면 그만두고, 그사이 내가 만든 구독만 끊는다.
   const current = captureAccountGuard({ accountOnly: true });
   const Notice = win.Notification;
-  const permission = Notice.permission === "granted" ? Promise.resolve("granted") : Notice.requestPermission();
-  enabling += 1;
-  return (async () => {
-    const answer = await permission;
+  const permission = Notice.permission === "granted" ? Promise.resolve("granted") : Promise.resolve(Notice.requestPermission());
+  return permission.then((answer) => {
     if (answer !== "granted") return answer === "denied" ? "denied" : "dismissed";
     if (!config?.enabled || !config.public_key) return "unconfigured";
-    if (!current()) return "cancelled";
-    const ready = await pushRegistration(win);
-    // 남아 있던 구독은 새로 받는다 — 서버가 지운 구독(끝남 410 · 거절 반복)을 다시 쓰면 또 지워져 켜지지 않는다.
-    const stale = await ready.pushManager.getSubscription().catch(() => null);
-    if (stale) await stale.unsubscribe().catch(() => {});
-    if (!current()) return "cancelled";
-    const subscription = await ready.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: urlBase64ToUint8Array(config.public_key),
+    return exclusive(async () => {
+      if (!current()) return "cancelled";
+      const ready = await pushRegistration(win);
+      if (!current()) return "cancelled"; // 기다리는 동안 계정이 바뀌었다 — 아무 구독도 건드리지 않는다
+      if (!ready) return "update-pending";
+      // 남아 있던 구독은 새로 받는다 — 서버가 지운 구독(끝남 410 · 거절 반복)을 다시 쓰면 또 지워져 켜지지 않는다.
+      const stale = await ready.pushManager.getSubscription().catch(() => null);
+      if (!current()) return "cancelled";
+      if (stale) await stale.unsubscribe().catch(() => {});
+      const subscription = await ready.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(config.public_key),
+      });
+      const endpoint = subscription.endpoint;
+      const undo = async () => {
+        await dropOwn(win, endpoint);
+        if (read(OWNER_KEY) === String(userId)) {
+          write(OWNER_KEY, "");
+          write(SYNC_KEY, "");
+        }
+      };
+      if (!current()) {
+        await undo();
+        return "cancelled";
+      }
+      // 서버 등록 전에 먼저 적는다 — 다른 탭의 동기화가 '켠 계정 없는 구독'으로 보고 끊지 않게(실패하면 되돌린다).
+      write(OWNER_KEY, String(userId));
+      write(SYNC_KEY, String(Date.now()));
+      const body = subscription.toJSON();
+      try {
+        // 바로 앞에서 계정을 확인했고 그 사이 기다림이 없다 — 요청은 시작한 계정의 토큰으로 나간다.
+        await api.pushSubscribe({ endpoint: body.endpoint, keys: body.keys, platform: currentDevice(win).platform });
+      } catch (error) {
+        await undo();
+        throw error;
+      }
+      if (!current()) {
+        // 등록은 시작한 계정으로 됐지만 그 계정은 이 기기에서 나갔다 — 내 구독을 끊는다(서버 줄은 다음 발송 때 410 으로 지워진다).
+        await undo();
+        return "cancelled";
+      }
+      statusMemo = { key: `${userId}|${endpoint}`, at: Date.now(), promise: Promise.resolve(true) };
+      return "on";
     });
-    const drop = () => subscription.unsubscribe().catch(() => {});
-    if (!current()) {
-      await drop();
-      return "cancelled";
-    }
-    const body = subscription.toJSON();
-    try {
-      // 바로 앞에서 계정을 확인했고 그 사이 기다림이 없다 — 요청은 시작한 계정의 토큰으로 나간다.
-      await api.pushSubscribe({ endpoint: body.endpoint, keys: body.keys, platform: currentDevice(win).platform });
-    } catch (error) {
-      await drop();
-      throw error;
-    }
-    if (!current()) {
-      // 등록은 시작한 계정으로 됐지만 그 계정은 이 기기에서 나갔다 — 브라우저 구독을 끊는다(서버 줄은 다음 발송 때 410 으로 지워진다).
-      await drop();
-      return "cancelled";
-    }
-    write(OWNER_KEY, String(userId));
-    write(SYNC_KEY, String(Date.now()));
-    statusMemo = { key: `${userId}|${body.endpoint}`, at: Date.now(), promise: Promise.resolve(true) };
-    return "on";
-  })().finally(() => {
-    enabling -= 1;
   });
 }
 
-// 끄기 — 서버에서 지우고 브라우저 구독도 끊는다. 로그아웃 뒤(local)에는 서버에 묻지 않는다:
-// 끊긴 구독은 다음 발송 때 푸시 서비스가 410 으로 알려 서버가 지운다.
-export async function disablePush({ local = false, win = globalThis.window } = {}) {
+// 이 기기 구독을 끊는다(서버에 알리는 것은 local=false 일 때만).
+async function dropLocal({ local, win }) {
   write(OWNER_KEY, "");
   write(SYNC_KEY, "");
   statusMemo = null;
   if (pushSupport(win) !== "supported") return "off";
-  const subscription = await (await registration(win))?.pushManager?.getSubscription().catch(() => null);
+  const subscription = await currentSubscription(win);
   if (!subscription) return "off";
   if (!local) {
     try {
@@ -251,41 +284,50 @@ export async function disablePush({ local = false, win = globalThis.window } = {
       /* 서버가 못 받아도 브라우저 구독은 끊는다 */
     }
   }
-  await subscription.unsubscribe().catch(() => {});
+  await dropOwn(win, subscription.endpoint);
   return "off";
+}
+
+// 끄기 — 서버에서 지우고 브라우저 구독도 끊는다. 로그아웃 뒤(local)에는 서버에 묻지 않는다:
+// 끊긴 구독은 다음 발송 때 푸시 서비스가 410 으로 알려 서버가 지운다.
+export function disablePush({ local = false, win = globalThis.window } = {}) {
+  return exclusive(() => dropLocal({ local, win }));
 }
 
 // 앱을 열 때 · 앱으로 돌아올 때 — 다른 계정이 켠 구독은 끊고, 켜 둔 기기는 가끔(12시간) 서버에 다시 맞춘다.
 // 서버가 이미 지운 기기(11번째 기기로 밀림 · 끝난 구독)는 되살리지 않고 이 기기 구독도 끊는다 — 화면은 '꺼짐'이 되고,
 // 켜기를 누르면 새 구독으로 다시 등록한다(다른 기기를 다시 밀어내는 핑퐁을 만들지 않는다).
-export async function syncPush({ userId, win = globalThis.window, now = Date.now() } = {}) {
-  if (!userId || pushSupport(win) !== "supported") return "skip";
-  if (enabling) return "busy";
+export function syncPush({ userId, win = globalThis.window, now = Date.now() } = {}) {
+  if (!userId || pushSupport(win) !== "supported") return Promise.resolve("skip");
   const current = captureAccountGuard({ accountOnly: true });
-  const subscription = await (await registration(win))?.pushManager?.getSubscription().catch(() => null);
-  if (!current() || enabling) return "cancelled";
-  if (!subscription) {
-    if (read(OWNER_KEY)) write(OWNER_KEY, "");
-    return "none";
-  }
-  const owner = read(OWNER_KEY);
-  if (owner !== String(userId)) {
-    await disablePush({ local: true, win });
-    return "dropped";
-  }
-  if (win.Notification.permission !== "granted") return "skip";
-  if (now - Number(read(SYNC_KEY) || 0) < SYNC_EVERY_MS) return "fresh";
-  const has = await serverHas(userId, subscription.endpoint, { force: true, now });
-  if (!current() || enabling) return "cancelled";
-  if (has === null) return "skip"; // 서버에 못 물었다 — 다음에
-  if (!has) {
-    await disablePush({ local: true, win });
-    return "dropped";
-  }
-  const body = subscription.toJSON();
-  await api.pushSubscribe({ endpoint: body.endpoint, keys: body.keys, platform: currentDevice(win).platform });
-  write(SYNC_KEY, String(now));
-  return "synced";
+  return exclusive(async () => {
+    if (!current()) return "cancelled";
+    const subscription = await currentSubscription(win);
+    if (!current()) return "cancelled";
+    if (!subscription) {
+      if (read(OWNER_KEY)) write(OWNER_KEY, "");
+      return "none";
+    }
+    if (read(OWNER_KEY) !== String(userId)) {
+      await dropLocal({ local: true, win });
+      return "dropped";
+    }
+    if (win.Notification.permission !== "granted") return "skip";
+    if (now - Number(read(SYNC_KEY) || 0) < SYNC_EVERY_MS) return "fresh";
+    const has = await serverHas(userId, subscription.endpoint, { force: true, now });
+    if (!current()) return "cancelled";
+    if (has === null) return "skip"; // 서버에 못 물었다 — 다음에
+    // 물어보는 사이 다른 탭이 구독을 바꿨으면 이 답은 옛 구독 것이다 — 다음에 다시 맞춘다.
+    if ((await currentSubscription(win))?.endpoint !== subscription.endpoint) return "changed";
+    if (!has) {
+      await dropLocal({ local: true, win });
+      return "dropped";
+    }
+    const body = subscription.toJSON();
+    await api.pushSubscribe({ endpoint: body.endpoint, keys: body.keys, platform: currentDevice(win).platform });
+    write(SYNC_KEY, String(now));
+    return "synced";
+  });
 }
 
 // 앱으로 처음 열었을 때 한 번 묻는 조건 — 로그인했고, 앱(홈 화면)으로 열었고, 이 기기에서 꺼져 있고, 권한을 아직 안 물었고,

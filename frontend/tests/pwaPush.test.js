@@ -6,7 +6,8 @@ import { api } from "../src/api.js";
 import { clearAuth, setAuth } from "../src/lib/auth.js";
 import { detectBrowser, detectPlatform, offersAppInstall, promptInstall, installState, resetInstallStateForTest } from "../src/lib/pwa.js";
 import {
-  disablePush, enablePush, forgetPushStatus, openTarget, pushSupport, readPushState, syncPush, urlBase64ToUint8Array,
+  disablePush, enablePush, forgetPushStatus, loadPushConfig, openTarget, pushSupport, readPushState, setPushTimingForTest,
+  syncPush, urlBase64ToUint8Array,
 } from "../src/lib/push.js";
 import { enableToast, testToast } from "../src/hooks/usePushState.js";
 
@@ -62,20 +63,25 @@ function fakeStorage() {
   return { getItem: (k) => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: (k) => map.delete(k) };
 }
 
-// 서비스 워커 하나 — answers 에 적힌 말에만 답한다(옛 워커는 아무 말에도 답하지 않는다).
-function fakeWorker({ state = "activated", answers = {} } = {}) {
+// 서비스 워커 하나 — answers 에 적힌 말에만 답한다(옛 워커는 아무 말에도 답하지 않는다). ping 을 붙잡아 두려면 onPing.
+function fakeWorker({ state = "activated", answers = {}, onPing = null } = {}) {
   const listeners = new Set();
   const worker = {
-    state, asked: [],
+    state, asked: [], onActivate: null,
     addEventListener: (_, fn) => listeners.add(fn),
     removeEventListener: (_, fn) => listeners.delete(fn),
     postMessage(message, ports) {
       worker.asked.push(message.type);
+      if (message.type === "ggp:ping" && onPing) {
+        onPing(ports[0]);
+        return;
+      }
       const answer = answers[message.type];
       if (!answer) return;
       ports?.[0]?.postMessage(answer);
       if (answer.skipping) {
         worker.state = "activated";
+        worker.onActivate?.();
         listeners.forEach((fn) => fn());
       }
     },
@@ -84,8 +90,8 @@ function fakeWorker({ state = "activated", answers = {} } = {}) {
 }
 
 let endpoints = 0;
-function fakeBrowser({ userAgent = UA.android, permission = "default", answer = "granted", standalone = false, active = null,
-  waiting = null, beforeSubscribe = null } = {}) {
+function fakeBrowser({ userAgent = UA.android, permission = "default", answer = "granted", standalone = false,
+  active = fakeWorker({ answers: { "ggp:ping": { push: true } } }), waiting = null, beforeSubscribe = null } = {}) {
   const state = { subscription: null, unsubscribed: 0, permissionAsked: 0, updates: 0 };
   const makeSubscription = (key) => {
     const endpoint = `https://fcm.googleapis.com/fcm/send/${(endpoints += 1)}`;
@@ -110,6 +116,12 @@ function fakeBrowser({ userAgent = UA.android, permission = "default", answer = 
     },
   };
   const registrationObject = { pushManager, update: async () => { state.updates += 1; }, installing: null, waiting, active };
+  if (waiting) {
+    waiting.onActivate = () => { // 새 워커가 올라오면 등록의 active 가 바뀐다
+      registrationObject.active = waiting;
+      registrationObject.waiting = null;
+    };
+  }
   const Notification = {
     permission,
     requestPermission: () => { state.permissionAsked += 1; Notification.permission = answer; return Promise.resolve(answer); },
@@ -132,7 +144,11 @@ function signIn(t, id) {
   clearAuth();
   setAuth(`token-${id}`, { id });
   forgetPushStatus();
-  t.after(() => clearAuth());
+  setPushTimingForTest({ ping: 40, finalPing: 40 }); // 답하지 않는 옛 워커를 1.5초씩 기다리지 않게
+  t.after(() => {
+    clearAuth();
+    setPushTimingForTest();
+  });
 }
 
 test("아이폰 사파리 탭에서는 '홈 화면에 추가해야 된다', 카카오톡 안에서는 앱 안 브라우저", () => {
@@ -221,12 +237,12 @@ test("서버 등록 응답을 기다리는 동안 계정이 바뀌어도 — 기
 });
 
 // --- 리뷰 P2: 서버가 기기를 지웠을 때 -------------------------------------------------------
-test("서버가 이 기기를 지웠으면 '꺼짐' — 같이 읽어도 서버에는 한 번 묻고, 다음 동기화가 브라우저 구독도 정리한다", async (t) => {
+test("서버가 이 기기를 지웠으면 '꺼짐' — 같이 읽어도 서버에는 한 번 묻고, 다시 켜면 새 구독으로 등록한다", async (t) => {
   signIn(t, 7);
   const put = t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
   let subscribed = true;
   const status = t.mock.method(api, "pushStatus", async () => ({ subscribed }));
-  const { win, state } = fakeBrowser();
+  const { win } = fakeBrowser();
   assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on");
   assert.equal(status.mock.callCount(), 0, "방금 켠 기기는 서버에 다시 묻지 않는다");
@@ -235,12 +251,62 @@ test("서버가 이 기기를 지웠으면 '꺼짐' — 같이 읽어도 서버�
   const reads = await Promise.all([1, 2, 3].map(() => readPushState({ userId: 7, config: CONFIG, win })));
   assert.deepEqual(reads, ["off", "off", "off"]);
   assert.equal(status.mock.callCount(), 1, "설정 · 단추 · 첫 묻기가 같이 읽어도 서버에는 한 번");
-  assert.equal(await syncPush({ userId: 7, win }), "dropped", "12시간 안이어도 정리한다");
-  assert.equal(state.subscription, null);
+  assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), "7", "읽기는 저장소를 건드리지 않는다");
   // 다시 켜면 남은 구독을 다시 쓰지 않고 새 구독으로 등록한다
   assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
   assert.equal(put.mock.callCount(), 2);
   assert.notEqual(put.mock.calls[1].arguments[0].endpoint, put.mock.calls[0].arguments[0].endpoint);
+});
+
+test("옛 구독에 대한 늦은 '없음' 답이 그사이 켠 새 구독을 지우지 않는다", async (t) => {
+  signIn(t, 7);
+  t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  const { win, state } = fakeBrowser();
+  await enablePush({ userId: 7, config: CONFIG, win });
+  forgetPushStatus();
+  let reply;
+  let asked;
+  const reached = new Promise((resolve) => { asked = resolve; });
+  t.mock.method(api, "pushStatus", () => {
+    asked();
+    return new Promise((resolve) => { reply = resolve; });
+  });
+  const oldRead = readPushState({ userId: 7, config: CONFIG, win }); // 옛 구독 상태를 묻는 중
+  await reached;
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on"); // 다른 곳에서 새 구독으로 켰다
+  const fresh = state.subscription.endpoint;
+  reply({ subscribed: false }); // 옛 구독에 대한 답이 늦게 온다
+  assert.equal(await oldRead, "off", "그 답은 옛 구독 것 — 화면은 다음 읽기(순번)가 맞춘다");
+  assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), "7");
+  assert.equal(await syncPush({ userId: 7, win }), "fresh");
+  assert.equal(state.subscription?.endpoint, fresh, "새 구독은 그대로");
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on");
+});
+
+test("A 의 켜기가 워커를 기다리는 사이 B 로 로그인해 켜면 — A 는 아무 구독도 건드리지 않고 그만둔다", async (t) => {
+  signIn(t, 7);
+  const put = t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  let held;
+  let pings = 0;
+  const reached = new Promise((resolve) => { held = resolve; });
+  const active = fakeWorker({ onPing: (port) => {
+    pings += 1;
+    if (pings === 1) held(port); // A 의 첫 ping 을 붙잡아 둔다
+    else port.postMessage({ push: true });
+  } });
+  const { win, state } = fakeBrowser({ active });
+  const enableA = enablePush({ userId: 7, config: CONFIG, win });
+  const port = await reached;
+  clearAuth();
+  setAuth("token-8", { id: 8 });
+  const enableB = enablePush({ userId: 8, config: CONFIG, win });
+  port.postMessage({ push: true }); // A 가 다시 움직인다
+  assert.equal(await enableA, "cancelled");
+  assert.equal(await enableB, "on", "B 는 A 가 끝난 뒤 차례로 켠다");
+  assert.ok(state.subscription, "B 의 구독이 남아 있다");
+  assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), "8");
+  assert.equal(put.mock.callCount(), 1, "서버 등록은 B 한 번");
+  assert.equal(state.unsubscribed, 0, "A 가 끊은 구독이 없다");
 });
 
 test("12시간 재등록 때도 서버가 지운 기기는 되살리지 않는다 · 서버에 못 물으면 브라우저를 믿는다", async (t) => {
@@ -255,6 +321,7 @@ test("12시간 재등록 때도 서버가 지운 기기는 되살리지 않는�
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on", "못 물으면 그대로");
   assert.equal(await syncPush({ userId: 7, win, now: Date.now() + 13 * 3600_000 }), "skip");
   answer = async () => ({ subscribed: false });
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on", "못 물은 답(null)은 잠깐 같이 쓴다");
   assert.equal(await syncPush({ userId: 7, win, now: Date.now() + 13 * 3600_000 }), "dropped");
   assert.equal(put.mock.callCount(), 1, "다른 기기를 밀어내며 다시 등록하지 않는다");
   assert.equal(state.subscription, null);
@@ -271,17 +338,45 @@ test("지금 워커가 푸시를 처리하면 업데이트 · 교체를 건드�
   assert.deepEqual(waiting.asked, [], "기다리는 새 워커(새 배포)를 억지로 올리지 않는다");
 });
 
-test("옛 워커(푸시 처리 없음)면 새 워커에 올려 달라고 하고, 다른 창이 있어 거절하면 기다리지 않고 켠다", async (t) => {
+test("옛 워커(푸시 처리 없음)에 다른 창이 있어 새 워커로 못 바꾸면 — 켜지 않고 '다른 창을 닫고 다시'", async (t) => {
   signIn(t, 7);
-  t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  const put = t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
   const waiting = fakeWorker({ state: "installed", answers: { "ggp:skip-waiting": { skipping: false } } });
   const { win, state } = fakeBrowser({ active: fakeWorker(), waiting });
   const started = Date.now();
-  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "update-pending");
   assert.equal(state.updates, 1);
   assert.deepEqual(waiting.asked, ["ggp:skip-waiting"]);
-  assert.equal(waiting.state, "installed");
+  assert.equal(waiting.state, "installed", "다른 창의 옛 파일을 지키려 새 워커는 기다린다");
+  assert.equal(state.subscription, null, "알림을 띄우지 못하는 옛 워커에 구독을 걸지 않는다");
+  assert.equal(put.mock.callCount(), 0);
+  assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), null);
   assert.ok(Date.now() - started < 4_000, "거절하면 8초를 기다리지 않는다");
+  assert.equal(enableToast("update-pending").body, "열려 있는 다른 껄무새 창을 닫고 다시 켜 주세요.");
+});
+
+test("옛 워커라도 열린 창이 이것 하나면 새 워커로 바꾸고, 새 워커가 푸시를 처리하는 걸 확인한 뒤 켠다", async (t) => {
+  signIn(t, 7);
+  t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  const waiting = fakeWorker({ state: "installed", answers: { "ggp:skip-waiting": { skipping: true }, ...PUSHES } });
+  const { win, state } = fakeBrowser({ active: fakeWorker(), waiting });
+  assert.equal(await enablePush({ userId: 7, config: CONFIG, win }), "on");
+  assert.deepEqual(waiting.asked, ["ggp:skip-waiting", "ggp:ping"]);
+  assert.ok(state.subscription);
+});
+
+test("설정을 처음에 못 읽으면 '실패'로 표시하고, 다음에 부를 때 다시 읽는다", async (t) => {
+  let calls = 0;
+  t.mock.method(api, "pushConfig", async () => {
+    calls += 1;
+    if (calls === 1) throw new Error("offline");
+    return { enabled: true, public_key: "AQID" };
+  });
+  const first = await loadPushConfig({ refresh: true });
+  assert.deepEqual(first, { enabled: false, public_key: "", failed: true }, "서버가 꺼 둔 것(enabled:false)과 구분한다");
+  assert.deepEqual(await loadPushConfig(), { enabled: true, public_key: "AQID" });
+  assert.deepEqual(await loadPushConfig(), { enabled: true, public_key: "AQID" });
+  assert.equal(calls, 2, "읽은 뒤에는 같이 쓴다");
 });
 
 // --- 리뷰 P2: 시험 알림 결과 · 첫 묻기 -----------------------------------------------------
@@ -300,6 +395,7 @@ test("시험 알림 — 0건은 '보냈어요'가 아니다(잠깐 막힘 · 끊
 function workerHarness({ windows = [] } = {}) {
   const hooks = new Map();
   const opened = [];
+  const shown = [];
   let skipped = 0;
   const source = readFileSync(new URL("../build/serviceWorker.js", import.meta.url), "utf8")
     .replace("__CACHE_VERSION__", "fixture")
@@ -309,14 +405,14 @@ function workerHarness({ windows = [] } = {}) {
     setTimeout: (fn, ms) => setTimeout(fn, Math.min(ms, 100)),
     self: {
       location: { origin: "https://ggparrot.test" },
-      registration: {},
+      registration: { showNotification: async (title, options) => { shown.push({ title, ...options }); } },
       clients: { claim: async () => {}, matchAll: async () => windows, openWindow: async (url) => { opened.push(url); return {}; } },
       skipWaiting: async () => { skipped += 1; },
       addEventListener: (name, fn) => hooks.set(name, fn),
     },
   });
   return {
-    opened, skipped: () => skipped,
+    opened, shown, skipped: () => skipped,
     async fire(name, event) {
       const pending = [];
       hooks.get(name)({ ...event, waitUntil: (promise) => pending.push(promise) });
@@ -365,6 +461,16 @@ test("알림을 누르면 — 앱 화면은 그 자리에서 옮기고, 답이 �
   const h4 = workerHarness();
   await h4.fire("notificationclick", click("https://evil.example/x"));
   assert.deepEqual(h4.opened, ["/"], "다른 사이트 주소는 첫 화면으로");
+});
+
+test("알림에 일어난 시각을 찍는다 — 다시 보내기로 늦게 와도 매수 · 매도 순서를 헷갈리지 않게", async () => {
+  const h = workerHarness();
+  const push = (payload) => ({ data: { json: () => payload, text: () => JSON.stringify(payload) } });
+  await h.fire("push", push({ title: "LTC · 샀어요!", body: "100.00 USDT", url: "/agents?session=4", tag: "s4:fill:1", at: 1_762_400_000_000 }));
+  await h.fire("push", push({ title: "껄무새 앱 알림이 켜졌어요", url: "/agents" }));
+  assert.equal(h.shown[0].timestamp, 1_762_400_000_000);
+  assert.equal(h.shown[0].tag, "s4:fill:1");
+  assert.equal("timestamp" in h.shown[1], false, "시각이 없는 알림(시험 알림)은 받은 시각 그대로");
 });
 
 test("워커 — ping 에 답하고, 열린 창이 둘 이상이면 새 워커로 바로 바꾸지 않는다", async () => {

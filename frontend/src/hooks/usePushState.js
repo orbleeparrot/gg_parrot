@@ -19,13 +19,18 @@ export function usePushState() {
   const [busy, setBusy] = useState(false);
   const reads = useRef(0);
 
-  useEffect(() => {
-    let alive = true;
+  const alive = useRef(true);
+  const loadConfig = useCallback(() => {
     loadPushConfig().then((value) => {
-      if (alive) setConfig(value);
+      if (alive.current) setConfig(value);
     });
-    return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    alive.current = true;
+    loadConfig();
+    return () => { alive.current = false; };
+  }, [loadConfig]);
 
   const refresh = useCallback(() => {
     if (!config) return;
@@ -41,16 +46,20 @@ export function usePushState() {
 
   useEffect(() => {
     refresh();
+    // 처음 설정을 못 읽었으면(오프라인 등) 앱으로 돌아올 때 · 연결이 돌아올 때 설정부터 다시 읽는다 — 서버가 꺼 둔 것과 다르다.
+    const again = () => (config?.failed ? loadConfig() : refresh());
     const onVisible = () => {
-      if (document.visibilityState === "visible") refresh(); // 브라우저 설정에서 알림을 막거나 풀고 돌아왔을 때 · 서버가 기기를 지웠을 때
+      if (document.visibilityState === "visible") again(); // 브라우저 설정에서 알림을 막거나 풀고 돌아왔을 때 · 서버가 기기를 지웠을 때
     };
     window.addEventListener(CHANGED, refresh);
+    window.addEventListener("online", again);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.removeEventListener(CHANGED, refresh);
+      window.removeEventListener("online", again);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+  }, [refresh, config, loadConfig]);
 
   // 클릭 처리기에서 '바로' 불러야 권한 창이 뜬다 — 그래서 async 함수로 감싸지 않고 enablePush 를 먼저 부른다.
   const enable = useCallback(() => {
@@ -109,6 +118,10 @@ export function enableToast(result) {
   if (result === "on") return { tone: "done", label: "알림", title: "앱 알림을 켰어요" };
   if (result === "denied") return { tone: "error", label: "알림", title: "알림이 막혀 있어요", body: "설정 › 앱 알림에서 푸는 방법을 볼 수 있어요." };
   if (result === "dismissed" || result === "signed-out" || result === "cancelled") return null;
+  if (result === "update-pending") {
+    // 옛 버전 워커가 아직 일하고, 다른 창이 열려 있어 새 버전으로 못 바꿨다 — 그 상태로 켜면 알림이 와도 띄우지 못한다.
+    return { tone: "error", label: "알림", title: "앱 업데이트 뒤에 켤 수 있어요", body: "열려 있는 다른 껄무새 창을 닫고 다시 켜 주세요." };
+  }
   return { tone: "error", label: "실패", title: "앱 알림을 켜지 못했어요", body: "잠시 뒤에 다시 시도해 주세요." };
 }
 

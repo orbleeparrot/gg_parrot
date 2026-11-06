@@ -119,3 +119,23 @@ def test_stop_report_from_an_old_runner_leaves_net_values_unknown():
     view = runner.get_owned_session(user.id, sid)
     assert view["final_unrealized_net_pct"] is None and view["realized_net"] is None
     assert view["fees_included"] is False and abs(view["final_return_pct"] - 900.0 / 83_000 * 100) < 1e-3
+
+
+def test_position_invested_is_what_is_in_the_position_now_not_the_session_max():
+    """마틴게일처럼 나눠 사면 세션 중 최대 금액(invested_usdt)과 지금 포지션의 투입금이 크게 다르다(2026-10-20)."""
+    user, sid = _session(symbol="KRW-GTC")
+    runner.heartbeat(user, sid, {"in_position": True, "position_qty": 55.0, "entry_price": 463.4, "last_price": 470.0,
+                                 "unrealized_pct": 1.4, "realized_pnl": 0.0, "invested": 25497.7})
+    runner.heartbeat(user, sid, {"in_position": False, "position_qty": 0, "entry_price": 0, "last_price": 480.0,
+                                 "unrealized_pct": 0.0, "realized_pnl": 900.0, "invested": 0.0})
+    view = runner.get_owned_session(user.id, sid)
+    assert view["position_invested"] is None, "무포지션이면 없음"
+    runner.heartbeat(user, sid, {"in_position": True, "position_qty": 22.0, "entry_price": 463.5, "last_price": 470.0,
+                                 "unrealized_pct": 1.4, "realized_pnl": 900.0, "invested": 10199.1})
+    view = runner.get_owned_session(user.id, sid)
+    assert view["position_invested"] == 10199.1
+    assert abs(view["invested_usdt"] - 55.0 * 463.4) < 1e-6, "총수익률 분모는 세션 중 최대 금액 그대로"
+    # 옛 실행기는 보내지 않는다 — None(웹이 수량×평단으로)
+    runner.heartbeat(user, sid, {"in_position": True, "position_qty": 22.0, "entry_price": 463.5, "last_price": 470.0,
+                                 "unrealized_pct": 1.4, "realized_pnl": 900.0})
+    assert runner.get_owned_session(user.id, sid)["position_invested"] is None

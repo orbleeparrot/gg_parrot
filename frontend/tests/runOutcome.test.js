@@ -44,13 +44,13 @@ test("stopping the macro while in position keeps the position visible and warns"
   assert.equal(outcome.pnl.label, "총 실현손익 · 수수료 전");
 });
 
-test("투입금 대비 총수익률은 서버가 수수료 반영 여부를 알려 준 대로 이름에 밝힌다", () => {
+test("최대 투입금 대비 총수익률은 서버가 수수료 반영 여부를 알려 준 대로 이름에 밝힌다", () => {
   const invested = { ...base, invested_usdt: 1000, return_pct: 12.1, realized_pnl: 128.4, realized_net: 121.0 };
   const net = describeRunOutcome({ ...invested, fees_included: true });
-  assert.equal(net.pnl.label, "투입금 대비 총수익률");
+  assert.equal(net.pnl.label, "최대 투입금 대비 총수익률");
   assert.equal(net.pnl.money, "+121.00 USDT");
   const old = describeRunOutcome({ ...invested, realized_net: null, return_pct: 12.84, fees_included: false });
-  assert.equal(old.pnl.label, "투입금 대비 총수익률 · 수수료 전");
+  assert.equal(old.pnl.label, "최대 투입금 대비 총수익률 · 수수료 전");
   assert.equal(old.pnl.money, "+128.40 USDT");
 });
 
@@ -156,10 +156,10 @@ test("결과 행에 실행기 버전·출처와 청산 기준이 남는다", () 
 test("total return over invested capital leads the result when the server provides it", () => {
   const outcome = describeRunOutcome({ ...base, realized_pnl: 1.2, invested_usdt: 40, return_pct: 3.0 });
   assert.equal(outcome.pnl.text, "+3.00%");
-  assert.equal(outcome.pnl.sub, "+1.20 USDT · 투입 40 USDT");
+  assert.equal(outcome.pnl.sub, "+1.20 USDT · 최대 투입 40 USDT");
   assert.equal(outcome.pnl.tone, "up");
   const legacy = describeRunOutcome({ ...base, realized_pnl: 1.2, invested_usdt: 0, return_pct: null });
   assert.equal(legacy.pnl.text, "+1.20 USDT");
   assert.equal(legacy.pnl.sub, "");
-  assert.ok(outcome.rows.some((r) => r.label === "투입금" && r.value === "40 USDT"));
+  assert.ok(outcome.rows.some((r) => r.label === "최대 투입금" && r.value === "40 USDT"));
 });

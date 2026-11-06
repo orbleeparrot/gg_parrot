@@ -41,8 +41,8 @@ const krw = {
 
 test("종료 결과 — 원화 세션의 투입금·손익이 원화로 나온다", () => {
   const outcome = describeRunOutcome(krw);
-  assert.equal(outcome.rows.find((row) => row.label === "투입금").value, "100,000 KRW");
-  assert.equal(outcome.pnl.sub, "+4,200 KRW · 투입 100,000 KRW");
+  assert.equal(outcome.rows.find((row) => row.label === "최대 투입금").value, "100,000 KRW");
+  assert.equal(outcome.pnl.sub, "+4,200 KRW · 최대 투입 100,000 KRW");
   const legacy = describeRunOutcome({ ...krw, invested_usdt: 0, return_pct: null });
   assert.equal(legacy.pnl.text, "+4,200 KRW");
   for (const text of [outcome.pnl.sub, legacy.pnl.text, ...outcome.rows.map((row) => row.value)]) assert.doesNotMatch(String(text), /USDT/);
@@ -50,24 +50,25 @@ test("종료 결과 — 원화 세션의 투입금·손익이 원화로 나온�
 
 test("종료 결과 — USDT 세션은 그대로 USDT 다", () => {
   const outcome = describeRunOutcome({ ...krw, symbol: "BTCUSDT", realized_pnl: 4.2, invested_usdt: 100 });
-  assert.equal(outcome.rows.find((row) => row.label === "투입금").value, "100 USDT");
-  assert.equal(outcome.pnl.sub, "+4.20 USDT · 투입 100 USDT");
+  assert.equal(outcome.rows.find((row) => row.label === "최대 투입금").value, "100 USDT");
+  assert.equal(outcome.pnl.sub, "+4.20 USDT · 최대 투입 100 USDT");
 });
 
 test("포지션 스트립의 큰 숫자 보조 문구도 세션 통화를 따른다", () => {
   const flat = headlineReturn({ symbol: "KRW-BTC", in_position: false, realized_pnl: 4200, invested_usdt: 100000, return_pct: 4.2 });
-  assert.equal(flat.note, "실현 +4,200 KRW · 투입 100,000 KRW");
+  assert.equal(flat.note, "실현 +4,200 KRW · 최대 투입 100,000 KRW");
   const usdt = headlineReturn({ symbol: "BTCUSDT", in_position: false, realized_pnl: 0.8, invested_usdt: 40, return_pct: 2 });
-  assert.equal(usdt.note, "실현 +0.80 USDT · 투입 40 USDT");
+  assert.equal(usdt.note, "실현 +0.80 USDT · 최대 투입 40 USDT");
 });
 
 // 소스에 글자가 있느냐가 아니라 화면에 나오는 글을 본다 — 컴포넌트를 실제로 그려서 확인한다.
 const live = {
   session_id: 7, symbol: "KRW-BTC", market: "spot", leverage: 1, position_side: "long", testnet: true,
   status: "running", connected: true, realized_pnl: 4200, invested_usdt: 100000, return_pct: 4.2,
-  unrealized_pct: 0, in_position: false, started_at: new Date().toISOString(),
+  unrealized_pct: 0, in_position: true, position_qty: 1, entry_price: 100000, last_price: 100000,
+  position_invested: 100000, started_at: new Date().toISOString(),
 };
-const done = { ...live, status: "stopped", stop_mode: "close_and_stop", started_kst: "10/06 09:00:00", stopped_kst: "10/06 10:00:00",
+const done = { ...live, status: "stopped", in_position: false, position_qty: 0, entry_price: 0, position_invested: null, stop_mode: "close_and_stop", started_kst: "10/06 09:00:00", stopped_kst: "10/06 10:00:00",
   started_at: "2026-10-06T00:00:00Z", stopped_at: "2026-10-06T01:00:00Z", macro: null };
 
 test("포지션 스트립이 그린 글 — 원화 세션은 KRW, USDT 세션은 USDT", async () => {
@@ -79,7 +80,7 @@ test("포지션 스트립이 그린 글 — 원화 세션은 KRW, USDT 세션은
   assert.match(krwText, /투입금 100,000 KRW/);
   assert.match(krwText, /실현손익 · 누적 \+4,200 KRW/);
   assert.doesNotMatch(krwText, /USDT/);
-  const usdt = { ...live, symbol: "BTCUSDT", realized_pnl: 4.2, invested_usdt: 100 };
+  const usdt = { ...live, symbol: "BTCUSDT", realized_pnl: 4.2, invested_usdt: 100, entry_price: 100, last_price: 100, position_invested: 100 };
   const usdtText = textOf(await renderComponent("src/components/PositionStrip.jsx", { session: usdt, macro: null, defaultDetailsOpen: true }));
   assert.match(usdtText, /투입금 100 USDT/);
   assert.match(usdtText, /실현손익 · 누적 \+4.20 USDT/);

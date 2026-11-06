@@ -149,7 +149,8 @@ export function describeRunOutcome(session) {
   const hasReturn = Number(s.invested_usdt) > 0 && s.return_pct !== null && s.return_pct !== undefined;
   const rows = [
     { label: "실행 시간", value: elapsed ? `${elapsed} · ${span}` : span || "—", numeric: true },
-    { label: "투입금", value: hasReturn ? formatQuoteAmount(s.invested_usdt, s.symbol) : "—", numeric: true },
+    // 세션 중 가장 많이 들어갔던 돈 — 총수익률의 분모(지금 포지션의 '투입금'과 구분).
+    { label: "최대 투입금", value: hasReturn ? formatQuoteAmount(s.invested_usdt, s.symbol) : "—", numeric: true },
     { label: `평단${positionLabel}`, value: positionEntry > 0 ? PRICE.format(positionEntry) : "—", numeric: true },
     { label: `수량${positionLabel}`, value: positionQty > 0 ? `${QTY.format(positionQty)} ${baseAsset(s.symbol)}`.trim() : "—", numeric: true },
     { label: "마지막 평가손익", value: resultPnl ? `${formatSignedPct(resultPct)}${resultPnl.feesIncluded ? "" : ` · ${GROSS_TAG}`}` : "—", numeric: true, tone: resultPct !== null ? toneOf(resultPct) : "" },
@@ -181,8 +182,8 @@ export function describeRunOutcome(session) {
       ? { value: null, text: "집계 중", tone: "flat", sub: "", label: "총 실현손익" }
       : hasReturn
         ? { value: Number(s.return_pct), text: formatSignedPct(s.return_pct), tone: toneOf(s.return_pct),
-            label: `투입금 대비 총수익률${returnTag}`,
-            sub: `${formatSignedMoney(realized.money, s.symbol)} · 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}`,
+            label: `최대 투입금 대비 총수익률${returnTag}`,
+            sub: `${formatSignedMoney(realized.money, s.symbol)} · 최대 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}`,
             // 결과 화면이 번 돈 · 투입금을 따로 크게 그린다.
             money: formatSignedMoney(realized.money, s.symbol), moneyTone: toneOf(realized.money),
             invested: formatQuoteAmount(s.invested_usdt, s.symbol) }

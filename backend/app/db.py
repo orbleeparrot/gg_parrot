@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from functools import partial
 from typing import Iterator, Optional
 
-from sqlalchemy import BigInteger, event, Index, Integer
+from sqlalchemy import BigInteger, event, Index, Integer, text as sql_text
 from sqlalchemy.exc import DBAPIError
 
 # epoch 밀리초를 담는 컬럼은 반드시 BIGINT 여야 한다. SQLite 의 INTEGER 는
@@ -760,6 +760,10 @@ class PushDelivery(SQLModel, table=True):
     __table_args__ = (
         Index("ux_pushdelivery_event_sub", "event_id", "subscription_id", "sub_version", unique=True),
         Index("ix_pushdelivery_state_next", "state", "next_ms"),
+        # 아직 안 끝난 전송만 담는 부분 인덱스 — 엔드포인트마다 차례 20건을 끝난 기록 · 밀린 줄 전체를 훑지 않고 찾는다.
+        Index("ix_pushdelivery_live", "subscription_id", "id",
+              postgresql_where=sql_text("state IN ('pending', 'sending')"),
+              sqlite_where=sql_text("state IN ('pending', 'sending')")),
         Index("ix_pushdelivery_sub", "subscription_id"),
     )
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -1777,6 +1781,11 @@ _PG_ADDED_COLUMNS = {
         "setup_progress_at": "TEXT DEFAULT ''",
     },
 }
+# 부분 인덱스(조건이 쿼리 조건에 들어맞아야 쓰인다) — 마이그레이션과 같은 정의.
+_PG_PARTIAL_INDEXES = {
+    # 앱 알림 — 엔드포인트별 차례 찾기(push_alerts.dispatch 의 LATERAL). 마이그레이션 20261109180000.
+    "ix_pushdelivery_live": ("pushdelivery", "subscription_id, id", "state IN ('pending', 'sending')"),
+}
 _PG_INDEXES = {
     "ix_trendarticle_feed": ("trendarticle", "region, content_type, published_ms, id"),
     "ix_runsessionevent_session_id_id": ("runsessionevent", "session_id, id"),
@@ -1886,6 +1895,9 @@ def _pg_migration_statements(state: dict) -> list[str]:
     for name, (table, columns) in _PG_UNIQUE_INDEXES.items():
         if table in state["tables"] and name not in state["indexes"]:
             statements.append(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
+    for name, (table, columns, where) in _PG_PARTIAL_INDEXES.items():
+        if table in state["tables"] and name not in state["indexes"]:
+            statements.append(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns}) WHERE {where}")
     for table in _PG_PRIVATE_CACHE_TABLES:
         if table not in state["tables"]:
             continue

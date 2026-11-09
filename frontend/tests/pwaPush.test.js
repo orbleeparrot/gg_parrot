@@ -603,6 +603,30 @@ test("남은 '등록 중' 기록을 확정하려다 서버에 못 물으면 — 
   assert.equal(readRecord().version, 9);
 });
 
+test("서버에 못 물은 답은 캐시하지 않는다 — 연결이 돌아온 직후 확인은 바로 서버에 다시 묻는다 · 옮기기는 한 번만 묻는다", async (t) => {
+  signIn(t, 7);
+  const server = fakeServer(t);
+  const { win } = fakeBrowser();
+  await enablePush({ userId: 7, config: CONFIG, win });
+  forgetPushStatus();
+  const real = api.pushStatus;
+  t.mock.method(api, "pushStatus", async () => { throw new Error("offline"); });
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "unknown");
+  t.mock.method(api, "pushStatus", real);
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on", "15초 안이어도 실패는 다시 묻는다");
+  // 이전 형식 옮기기 — 같은 주소 · 세대를 서버에 한 번만 묻는다
+  signIn(t, 7);
+  const again = fakeServer(t);
+  const fresh = fakeBrowser({ permission: "granted" });
+  const subscription = await fresh.win.navigator.serviceWorker.ready.then((reg) => reg.pushManager.subscribe({ applicationServerKey: new Uint8Array(1) }));
+  again.rows.set(subscription.endpoint, { user: 7, version: 12 });
+  globalThis.localStorage.setItem("ggp_push_owner", "7");
+  globalThis.localStorage.setItem("ggp_push_owner_endpoint", subscription.endpoint);
+  assert.equal(await syncPush({ userId: 7, win: fresh.win }), "migrated");
+  assert.equal(api.pushStatus.mock.callCount(), 1, "상태 확인 한 번");
+  assert.ok(server);
+});
+
 test("서버 세대가 바뀌었으면(같은 계정) 기록을 서버에 맞춘다", async (t) => {
   signIn(t, 7);
   const server = fakeServer(t);

@@ -761,12 +761,12 @@ def test_the_first_send_is_checked_too(vapid_on, monkeypatch):
     sub = _on(a)
     base = _base()
     _event(_user_id(a), "fill:first-send", base)
-    real = push_alerts._cleanup
+    real = push_alerts._may_send
 
-    def switch_after_claim(now_ms):
-        real(now_ms)
+    def switch_after_claim(*args, **kwargs):
         _on(b, sub)  # 맡는 트랜잭션은 끝났고, 아직 아무것도 보내지 않았다
-    monkeypatch.setattr(push_alerts, "_cleanup", switch_after_claim)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(push_alerts, "_may_send", switch_after_claim)
     service = Service()
     result = push_alerts.dispatch(now_ms=base, send=service)
     assert service.log == [], "취소된 A 의 알림을 B 의 기기로 보내지 않는다"
@@ -780,13 +780,13 @@ def test_time_counts_from_before_the_claim(vapid_on, monkeypatch, send_clock):
     sub = _on(token)
     base = _base()
     event = _event(user_id, "fill:stalled-claim", base)
-    real = push_alerts._cleanup
+    real = push_alerts._may_send
     stall = {"s": 301}
 
-    def frozen(now_ms):
-        real(now_ms)
+    def frozen(*args, **kwargs):  # 맡은 뒤 첫 발송 직전에 프로세스가 멈춘다
         send_clock["s"] += stall["s"]
-    monkeypatch.setattr(push_alerts, "_cleanup", frozen)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(push_alerts, "_may_send", frozen)
     service = Service()
     push_alerts.dispatch(now_ms=base, send=service)
     assert service.log == [], "맡은 시간이 이미 지났다 — 첫 HTTP 도 보내지 않는다"
@@ -841,6 +841,77 @@ def test_an_endpoint_with_nothing_assigned_is_released_at_once(vapid_on, monkeyp
     with get_session() as db:
         assert db.exec(select(func.count()).select_from(PushSubscription).where(
             PushSubscription.send_token != "")).one() == 0, "맡은 것이 없으면 권한을 바로 돌려준다"
+
+
+def test_a_big_expired_backlog_never_blocks_new_alerts(vapid_on, monkeypatch):
+    """오래 멈췄다 켜져 만료 전송이 잔뜩 쌓여도 — 정리는 한 번에 CLEANUP_BATCH 건씩 따로 하고, 새 알림은 그대로 나간다.
+    정리가 실패해도 마찬가지(리뷰 재현: 만료 7만 건이 IN 파라미터 상한 65,535 를 넘겨 발송까지 매번 실패)."""
+    monkeypatch.setattr(push_alerts, "CLEANUP_BATCH", 40)
+    monkeypatch.setattr(push_alerts, "ID_CHUNK", 7)  # 집계 IN 목록도 잘게 — 큰 목록과 같은 결과인지
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    with get_session() as db:
+        sub_row = db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).one()
+        old = push_alerts._queue(db, user_id, [(sub_row.id, sub_row.version, sub_row.endpoint)], [
+            {"user_id": user_id, "dedupe_key": f"old:{index}", "created_ms": base - 2 * 3_600_000,
+             "expires_ms": base - 3_600_000, "sent_ms": 0, "result": "", "payload_json": "{}"} for index in range(130)],
+            now_ms=base - 2 * 3_600_000)
+        db.commit()
+    fresh = _event(user_id, "fill:after-backlog", base)
+    real = push_alerts._expire
+    monkeypatch.setattr(push_alerts, "_expire", lambda now_ms, **kw: (_ for _ in ()).throw(RuntimeError("sweep failed")))
+    service = Service()
+    push_alerts.dispatch(now_ms=base, send=service)
+    assert service.sent_to(sub) == [fresh], "정리가 실패해도 새 알림은 나간다"
+    monkeypatch.setattr(push_alerts, "_expire", real)
+    assert push_alerts._expire(base) == 40, "한 번에 CLEANUP_BATCH 건만"
+    while push_alerts._expire(base):
+        pass
+    with get_session() as db:
+        results = set(db.exec(select(PushOutbox.result).where(PushOutbox.id.in_(old))).all())
+        live = db.exec(select(func.count()).select_from(PushDelivery).where(
+            PushDelivery.event_id.in_(old), PushDelivery.state.in_(push_alerts.LIVE))).one()
+    assert results == {"expired"} and live == 0, "잘게 나눠도 모든 이벤트를 끝낸다"
+
+
+def test_push_db_use_stays_within_its_share_of_the_pool(vapid_on, monkeypatch):
+    """발송 스레드(HTTP)는 8개여도 푸시가 동시에 쥐는 DB 연결은 PUSH_DB_CONCURRENCY 개까지 — 일반 API 와 같은 연결 풀을
+    쓰므로 매 HTTP 직전 권한 확인이 몰려도 API 몫을 남긴다."""
+    import threading as threading_mod
+    monkeypatch.setattr(push_alerts, "_db_gate", threading_mod.BoundedSemaphore(2))
+    holding = {"now": 0, "max": 0}
+    guard = threading_mod.Lock()
+    real = push_alerts.get_session
+
+    class Counted:
+        def __enter__(self):
+            with guard:
+                holding["now"] += 1
+                holding["max"] = max(holding["max"], holding["now"])
+            self.inner = real()
+            return self.inner.__enter__()
+
+        def __exit__(self, *exc):
+            result = self.inner.__exit__(*exc)
+            with guard:
+                holding["now"] -= 1
+            return result
+    monkeypatch.setattr(push_alerts, "get_session", lambda: Counted())
+    token = _signup()
+    user_id = _user_id(token)
+    subs = [_on(token) for _ in range(6)]
+    base = _base()
+    for index in range(3):
+        _event(user_id, f"fill:pool-{index}", base)
+
+    def slow(subscription, data, **kwargs):
+        time.sleep(0.01)
+        return web_push.SENT
+    result = push_alerts.dispatch(now_ms=base, send=slow)
+    assert result["sent"] == 18 and len(subs) == 6
+    assert holding["max"] <= 2, f"푸시 DB 동시 사용 {holding['max']}개"
 
 
 def test_a_success_never_clears_a_newer_wait(vapid_on):
@@ -990,6 +1061,7 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
                           ("pushsubscription", "send_token"), ("pushsubscription", "send_lease_ms"),
                           ("pushoutbox", "expires_ms"), ("pushoutbox", "result")):
         state["columns"].pop((table, column))
+    state["indexes"].discard("ix_pushdelivery_live")
     statements = db_mod._pg_migration_statements(state)
     assert [s for s in statements if "push" in s] == [
         "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS expires_ms BIGINT NOT NULL DEFAULT 0",
@@ -998,6 +1070,8 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_token VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_lease_ms BIGINT NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS ix_pushdelivery_live ON pushdelivery (subscription_id, id) "
+        "WHERE state IN ('pending', 'sending')",
     ]
 
 

@@ -447,7 +447,7 @@ def test_postgres_additive_schema_orders_columns_before_indexes_and_preserves_pr
         columns.update({(table, column): "bigint" for column in names})
     state = {"tables": {table.name: table.name in db_mod._PG_PRIVATE_CACHE_TABLES
                         for table in db_mod.SQLModel.metadata.tables.values()},
-             "columns": columns, "indexes": set(db_mod._PG_INDEXES) | set(db_mod._PG_UNIQUE_INDEXES),
+             "columns": columns, "indexes": set(db_mod._PG_INDEXES) | set(db_mod._PG_UNIQUE_INDEXES) | set(db_mod._PG_PARTIAL_INDEXES),
              "grants": set()}
     for column in ("event_key", "details_json"):
         state["columns"].pop(("runsessionevent", column))

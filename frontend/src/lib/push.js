@@ -97,15 +97,21 @@ export function loadPushConfig({ refresh = false } = {}) {
 }
 
 // 서버가 이 기기(엔드포인트)를 이 계정으로 보내고 있는지와 그 세대 — { subscribed, version } | null(못 물음).
-// 같은 순간 여러 곳이 읽으면 잠깐(STATUS_FRESH_MS) 같은 답을 나눠 쓴다.
+// 같은 순간 여러 곳이 읽으면 잠깐(STATUS_FRESH_MS) 같은 답을 나눠 쓴다. 못 물은 답(null)은 나눠 쓰지 않는다 —
+// 연결이 돌아온 직후의 확인이 옛 실패를 다시 쓰지 않고 바로 서버에 묻게.
 let statusMemo = null;
 function serverStatus(userId, endpoint, { force = false, now = Date.now() } = {}) {
   const key = `${userId}|${endpoint}`;
   if (!force && statusMemo?.key === key && now - statusMemo.at < STATUS_FRESH_MS) return statusMemo.promise;
-  const promise = api.pushStatus(endpoint).then(
-    (body) => ({ subscribed: Boolean(body?.subscribed), version: Number(body?.version) || 0 }), () => null);
-  statusMemo = { key, at: now, promise };
-  return promise;
+  const memo = { key, at: now, promise: null };
+  memo.promise = api.pushStatus(endpoint).then(
+    (body) => ({ subscribed: Boolean(body?.subscribed), version: Number(body?.version) || 0 }),
+    () => {
+      if (statusMemo === memo) statusMemo = null;
+      return null;
+    });
+  statusMemo = memo;
+  return memo.promise;
 }
 
 export function forgetPushStatus() {
@@ -407,7 +413,8 @@ export function syncPush({ userId, win = globalThis.window, now = Date.now() } =
     }
     if (win.Notification.permission !== "granted") return "skip";
     const due = moved === "migrated" || now - Number(record.syncedAt || 0) >= SYNC_EVERY_MS;
-    const server = await serverStatus(userId, subscription.endpoint, { force: due, now });
+    // 방금 옮기며 서버에 물었으면 그 답을 다시 쓴다(같은 주소 · 세대를 두 번 묻지 않게).
+    const server = await serverStatus(userId, subscription.endpoint, { force: due && moved !== "migrated", now });
     if (server === null) return "unverified"; // 서버에 못 물었다 — 다음 기회에
     const latest = await currentSubscription(win);
     // 마지막 기다림 바로 뒤 — 여기서부터 서버에 쓰기까지 기다림이 없다(계정이 바뀌었으면 B 의 토큰으로 A 의 구독을 등록하게 된다).

@@ -118,7 +118,7 @@ def current_schema():
         "tables": {table.name: table.name in db._PG_PRIVATE_CACHE_TABLES
                    for table in db.SQLModel.metadata.tables.values()},
         "columns": columns,
-        "indexes": set(db._PG_INDEXES) | set(db._PG_UNIQUE_INDEXES),
+        "indexes": set(db._PG_INDEXES) | set(db._PG_UNIQUE_INDEXES) | set(db._PG_PARTIAL_INDEXES),
         "grants": set(),
     }
 

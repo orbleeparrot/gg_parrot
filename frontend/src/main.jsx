@@ -7,10 +7,13 @@ import { reloadOnceForNewBuild } from "./lib/chunkReload.js";
 import { toastHost } from "./lib/toastHost.js";
 import { reportClientError } from "./lib/errorReport.js";
 import { captureInstallPrompt } from "./lib/pwa.js";
+import { openAppInstallFromLink } from "./lib/installDialog.js";
 import "./index.css";
 
 // 안드로이드 · 크롬의 '바로 설치' 이벤트는 화면보다 먼저 올 수 있다 — 렌더 전에 받아 둔다(lib/pwa.js).
 captureInstallPrompt();
+// PC 화면의 QR(?install=1)로 휴대폰에서 들어오면 설치 안내를 바로 연다.
+openAppInstallFromLink();
 
 // 토스트 자리(status 영역)를 먼저 만들어 둔다 — 토스트와 함께 생기면 화면 읽기 프로그램이 첫 토스트를 놓친다.
 toastHost();

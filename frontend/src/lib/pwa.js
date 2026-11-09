@@ -38,9 +38,11 @@ export function currentDevice(win = globalThis.window) {
   return { platform: detectPlatform(env), browser: detectBrowser(env), standalone: isStandalone(win) };
 }
 
-// 앱 설치 안내를 보일 기기 — 휴대폰 · 태블릿에서 아직 앱으로 열지 않았을 때. PC 는 데스크톱 실행기가 앱 · 알림을 맡는다.
+// 앱 설치 안내를 보일 화면 — 아직 앱으로 열지 않았으면 어디서나. 휴대폰 · 태블릿은 그 기기에 설치하고, PC 는 화면의
+// QR 을 휴대폰으로 찍어 휴대폰에 설치한다(11/09 — 사용자는 PC 화면을 보며 휴대폰으로 찍는다). PC 자체에 설치하는
+// 안내는 두지 않는다(PC 알림은 데스크톱 실행기가 맡는다, 11/06).
 export function offersAppInstall(device = currentDevice()) {
-  return device.platform !== "desktop" && !device.standalone;
+  return !device.standalone;
 }
 
 // --- 바로 설치 -----------------------------------------------------------------

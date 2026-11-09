@@ -1,5 +1,6 @@
 // 앱(PWA) 설치 안내 — 지금 보던 화면 위에 넓은 화면은 가운데 대화상자, 휴대폰은 아래 시트(시안 B안, 11/06 확정).
-// 휴대폰만 — PC 는 데스크톱 실행기가 앱 · 알림을 맡는다. 안드로이드는 브라우저가 설치 창을 띄울 수 있으면 '바로 설치' 버튼 하나.
+// 설치는 휴대폰에 — PC 는 Android · iPhone 칸과 01 단계 QR 로 휴대폰에 설치하게 한다(11/09 시안 A). 안드로이드 휴대폰은
+// 브라우저가 설치 창을 띄울 수 있으면 '바로 설치' 버튼 하나.
 // 안내 내용은 lib/pwaGuide.js 가 정하고 여기서는 그리기만 한다.
 import { useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
@@ -19,11 +20,13 @@ import { DEVICES, installGuide, iosVersion } from "../lib/pwaGuide.js";
 import "./AppInstallDialog.css";
 
 const GLYPHS = { "dots-v": DotsThreeVerticalIcon, "dots-h": DotsThreeIcon, share: ExportIcon, add: PlusSquareIcon, menu: ListIcon };
+const QR_HOST = "gg-parrot.vercel.app"; // public/app-install-qr.svg 가 여는 주소(?install=1)
 const GLYPH_LABELS = { "dots-v": "⋮", "dots-h": "⋯", share: "공유", add: "홈 화면에 추가", menu: "메뉴" };
 
 function Parts({ parts }) {
   return parts.map((part, index) => {
     if (typeof part === "string") return part;
+    if (part.br) return <br key={index} />;
     if (part.b) return <b key={index} className="app-install-ui">{part.b}</b>;
     const Glyph = GLYPHS[part.icon];
     return (
@@ -105,7 +108,13 @@ function InstallSheet({ onClose }) {
                   <li key={item.title}>
                     <span className="app-install-n" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
                     <h3>{item.title}</h3>
-                    <p><Parts parts={item.text} /></p>
+                    {item.qr ? (
+                      <div className="app-install-qr">
+                        <img src="/app-install-qr.svg" width="120" height="120" draggable="false"
+                          alt={`QR 코드 — 휴대폰으로 ${QR_HOST} 열기`} />
+                        <p><Parts parts={item.text} /></p>
+                      </div>
+                    ) : <p><Parts parts={item.text} /></p>}
                     {item.hint ? <p className="app-install-hint"><Parts parts={item.hint} /></p> : null}
                   </li>
                 ))}

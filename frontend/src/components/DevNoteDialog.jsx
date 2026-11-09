@@ -8,6 +8,7 @@ import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 import { api } from "../api.js";
 import { CURRENT_NOTE, dismissDevNote, shouldShowDevNote, todayKst } from "../lib/devNotes.js";
+import { useAppInstallOpen } from "../lib/installDialog.js";
 import { Icon } from "./icons.jsx";
 import "./DevNoteDialog.css";
 
@@ -58,6 +59,8 @@ export function DevNoteBanner({ note, onClose, onHideToday }) {
 
 export default function DevNoteDialog() {
   const [note, setNote] = useState(null);
+  // 설치 안내가 떠 있으면(QR 로 막 들어옴 등) 그 위를 덮지 않고, 닫은 뒤에 보여 준다.
+  const installing = useAppInstallOpen();
 
   useEffect(() => {
     let alive = true;
@@ -73,7 +76,7 @@ export default function DevNoteDialog() {
     return () => { alive = false; controller.abort(); };
   }, []);
 
-  if (!note) return null;
+  if (!note || installing) return null;
   const close = (hideToday = false) => {
     const { local, session } = storages();
     dismissDevNote({ local, session, todayKst: todayKst(), hideToday, note });

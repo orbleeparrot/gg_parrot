@@ -42,6 +42,13 @@
 .app-install-steps h3 { margin: 0 0 2px; font-size: 17px; line-height: 26px; font-weight: 800; letter-spacing: -0.01em; color: rgb(var(--c-slate-900)); }
 .app-install-steps p { margin: 0; font-size: 15px; line-height: 1.75; color: rgb(var(--c-slate-900)); word-break: keep-all; }
 .app-install-steps p.app-install-hint { margin-top: 2px; font-size: 13.5px; line-height: 1.6; color: rgb(var(--c-slate-500)); }
+/* PC 01 단계 — 휴대폰으로 찍을 QR(11/09 시안 A). 다크 테마에서도 흰 바탕 그대로(찍히게). */
+.app-install-qr { display: flex; align-items: center; gap: 14px; margin-top: 6px; }
+.app-install-qr img {
+  width: 120px; height: 120px; flex: 0 0 120px; box-sizing: border-box; padding: 6px;
+  border: 1px solid rgb(var(--c-slate-200)); border-radius: 12px; background: #ffffff;
+  pointer-events: none; user-select: none;
+}
 .app-install-ui { font-weight: 700; color: rgb(var(--c-slate-900)); }
 .app-install-hint .app-install-ui { font-weight: 600; }
 .app-install-key {

@@ -7,6 +7,7 @@ import { clearAuth, getToken, setAuth } from "../src/lib/auth.js";
 import { detectBrowser, detectPlatform, offersAppInstall, promptInstall, installState, resetInstallStateForTest } from "../src/lib/pwa.js";
 import * as push from "../src/lib/push.js";
 import { createPushController } from "../src/lib/pushController.js";
+import { closeAppInstall, openAppInstallFromLink } from "../src/lib/installDialog.js";
 import { enableToast, testToast } from "../src/hooks/usePushState.js";
 
 const {
@@ -956,7 +957,7 @@ test("워커 — ping 에 답하고, 열린 창이 둘 이상이면 새 워커�
 import { installGuide, iosVersion } from "../src/lib/pwaGuide.js";
 import { shouldAskPush } from "../src/lib/push.js";
 
-const text = (parts) => parts.map((part) => (typeof part === "string" ? part : part.b || `[${part.icon}]`)).join("");
+const text = (parts) => parts.map((part) => (typeof part === "string" ? part : part.br ? " " : part.b || `[${part.icon}]`)).join("");
 
 test("안드로이드는 설치 창을 띄울 수 있으면 버튼 하나, 못 띄우면 크롬 · 삼성 인터넷 3단계", () => {
   assert.deepEqual(installGuide({ tab: "android", platform: "android", browser: "chrome", canPrompt: true }),
@@ -967,17 +968,57 @@ test("안드로이드는 설치 창을 띄울 수 있으면 버튼 하나, 못 �
   assert.equal(chrome.steps[0].hint, null);
   const samsung = installGuide({ tab: "android", platform: "android", browser: "samsung", canPrompt: false });
   assert.deepEqual(samsung.steps.map((s) => s.title), ["메뉴", "현재 페이지 추가", "홈 화면"]);
-  const fromPc = installGuide({ tab: "android", platform: "desktop", browser: "chrome", canPrompt: true, host: "gg-parrot.vercel.app" });
-  assert.equal(fromPc.button, null, "PC 에서 안드로이드 안내를 볼 때는 버튼이 없다");
-  assert.equal(text(fromPc.steps[0].hint), "휴대폰 크롬에서 gg-parrot.vercel.app 을 먼저 열어요.");
+  const tablet = installGuide({ tab: "android", platform: "ios", browser: "safari", canPrompt: false, host: "gg-parrot.vercel.app" });
+  assert.equal(text(tablet.steps[0].hint), "휴대폰 크롬에서 gg-parrot.vercel.app 을 먼저 열어요.", "다른 휴대폰 안내는 주소를 먼저 열게");
 });
 
-test("PC 는 앱 설치 안내 · 앱 알림이 없다 — 데스크톱 실행기가 알림을 보낸다", () => {
+test("PC 머리글에도 '앱 설치' — QR 을 휴대폰으로 찍어 휴대폰에 설치한다(11/09 시안 A) · 앱 알림은 실행기가", () => {
   const pc = { navigator: { userAgent: UA.windowsEdge, platform: "Win32", maxTouchPoints: 0 }, matchMedia: () => ({ matches: false }) };
-  assert.equal(pushSupport(pc), "desktop");
-  assert.equal(offersAppInstall({ platform: "desktop", standalone: false }), false);
+  assert.equal(pushSupport(pc), "desktop", "PC 알림은 데스크톱 실행기가 보낸다");
+  assert.equal(offersAppInstall({ platform: "desktop", standalone: false }), true, "PC 화면을 보며 휴대폰으로 찍는다");
   assert.equal(offersAppInstall({ platform: "ios", standalone: false }), true, "아이패드(터치 되는 맥)도 휴대폰과 같이");
   assert.equal(offersAppInstall({ platform: "android", standalone: true }), false, "이미 앱으로 열었으면 없다");
+  assert.equal(offersAppInstall({ platform: "desktop", standalone: true }), false);
+  for (const tab of ["android", "ios"]) {
+    const guide = installGuide({ tab, platform: "desktop", browser: "chrome", canPrompt: true });
+    assert.equal(guide.button, null, "PC 에는 '바로 설치' 가 없다(PC 자체 설치 안내는 두지 않는다)");
+    assert.equal(guide.steps.length, 3);
+    assert.equal(guide.steps[0].title, "휴대폰으로 QR 찍기");
+    assert.equal(guide.steps[0].qr, true, "01 단계에 QR 그림");
+    assert.equal(text(guide.steps[0].text), "휴대폰 카메라로 찍으면 껄무새가 열려요.");
+    assert.ok(guide.steps.slice(1).every((item) => !item.qr));
+  }
+  assert.deepEqual(installGuide({ tab: "android", platform: "desktop", browser: "chrome" }).steps.map((s) => s.title),
+    ["휴대폰으로 QR 찍기", "⋮ 누르기", "앱 설치"]);
+  const ios = installGuide({ tab: "ios", platform: "desktop", browser: "chrome" });
+  assert.deepEqual(ios.steps.map((s) => s.title), ["휴대폰으로 QR 찍기", "⋯ 누르고 공유", "홈 화면에 추가"]);
+  assert.equal(text(ios.steps[2].hint), "웹 앱으로 열기가 켜진 채로", "아이폰 메뉴 이름을 줄이지 않는다");
+  assert.equal(ios.note, "push");
+  const qr = readFileSync(new URL("../public/app-install-qr.svg", import.meta.url), "utf8");
+  assert.match(qr, /https:\/\/gg-parrot\.vercel\.app\/\?install=1/, "QR 이 여는 주소를 파일에 적어 둔다");
+  assert.match(qr, /<svg[^>]*viewBox="0 0 31 31"/);
+});
+
+test("QR 로 들어오면(?install=1) 설치 안내를 바로 열고 주소에서 표시를 지운다 — 앱으로 열었으면 열지 않는다", () => {
+  const visit = (href) => {
+    const calls = [];
+    const win = { location: { href }, history: { state: { key: "k" }, replaceState: (...args) => calls.push(args) } };
+    return { win, calls };
+  };
+  const phone = visit("https://gg-parrot.vercel.app/?install=1#top");
+  assert.equal(openAppInstallFromLink(phone.win, () => true), true);
+  assert.deepEqual(phone.calls, [[{ key: "k" }, "", "/#top"]], "다른 주소 · 상태는 그대로, install 만 지운다");
+  closeAppInstall();
+  const kept = visit("https://gg-parrot.vercel.app/agents?tab=1&install=1");
+  openAppInstallFromLink(kept.win, () => true);
+  assert.equal(kept.calls[0][2], "/agents?tab=1");
+  closeAppInstall();
+  const installed = visit("https://gg-parrot.vercel.app/?install=1");
+  assert.equal(openAppInstallFromLink(installed.win, () => false), false, "이미 앱으로 열었으면 열지 않는다");
+  assert.equal(installed.calls.length, 1, "그래도 표시는 지운다");
+  const plain = visit("https://gg-parrot.vercel.app/?install=0");
+  assert.equal(openAppInstallFromLink(plain.win, () => true), false);
+  assert.equal(plain.calls.length, 0, "표시가 없으면 주소를 건드리지 않는다");
 });
 
 test("아이폰은 사파리 26 이상 ⋯ › 공유, 그 아래는 공유 버튼, 아이폰 크롬은 주소창 공유 — 끝에 알림 안내", () => {

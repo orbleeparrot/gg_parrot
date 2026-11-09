@@ -38,7 +38,7 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
               </NavLink>
               {/* 실행기에 넣을 회원 키 — 설치 안내 바로 옆에서 꺼내 쓴다. */}
               <HeaderMemberKey key={token || "guest"} />
-              {/* 앱(PWA) 설치 안내 — 넓은 화면의 태블릿(아이패드 등)만. PC 는 실행기, 앱으로 열었으면 두지 않는다. */}
+              {/* 앱(PWA) 설치 안내 — PC 는 QR 로 휴대폰에(11/09), 태블릿은 그 기기에. 앱으로 열었으면 두지 않는다. */}
               {offersAppInstall() ? (
                 <button type="button" onClick={openAppInstall} className="header-control header-resource t-small" aria-label="앱 설치" aria-haspopup="dialog">
                   <DeviceMobileIcon />

@@ -1,117 +1,23 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { useAuth } from "../lib/auth.js";
-import {
-  PUSH_STORAGE_PREFIX, disablePush, enablePush, forgetPushStatus, loadPushConfig, readPushState, sendTestPush,
-} from "../lib/push.js";
+import { pushController } from "../lib/pushController.js";
 
-// 이 기기의 앱 알림 상태 — 설정 탭 · 내 에이전트 종 단추 · 첫 실행 묻기가 함께 쓴다.
-// 한 곳에서 켜고 끄면 CHANGED 로 같은 창의 다른 곳도, storage 이벤트로 다른 창(태블릿 여러 창)도 다시 읽는다.
-// state: loading | on | off | denied | unconfigured | desktop | needs-install | in-app | unsupported
-const CHANGED = "ggp:push-changed";
-
-function changed() {
-  window.dispatchEvent(new Event(CHANGED));
-}
-
+// 이 기기의 앱 알림 상태 — 설정 탭 · 내 에이전트 종 단추 · 첫 실행 묻기가 함께 쓴다. 상태는 pushController 하나가 갖고,
+// 여기서는 구독만 한다(화면마다 따로 판단하지 않는다).
+// state: loading | on | off | denied | unconfigured | unknown(확인 못 함) | desktop | needs-install | in-app | unsupported
 export function usePushState() {
   const { token, user } = useAuth();
   const userId = token && user?.id != null ? String(user.id) : "";
-  const [config, setConfig] = useState(null);
-  const [state, setState] = useState("loading");
-  const [busy, setBusy] = useState(false);
-  const reads = useRef(0);
-
-  const alive = useRef(true);
-  const loadConfig = useCallback(() => {
-    loadPushConfig().then((value) => {
-      if (alive.current) setConfig(value);
-    });
-  }, []);
-
   useEffect(() => {
-    alive.current = true;
-    loadConfig();
-    return () => { alive.current = false; };
-  }, [loadConfig]);
-
-  const refresh = useCallback(() => {
-    if (!config) return;
-    // 서버에 묻는 동안 계정이 바뀌거나 다시 읽으면 먼저 시작한 답은 버린다(늦게 온 옛 답이 새 상태를 덮지 않게).
-    const seq = reads.current + 1;
-    reads.current = seq;
-    readPushState({ userId, config })
-      .catch(() => "unsupported")
-      .then((value) => {
-        if (reads.current === seq) setState(value);
-      });
-  }, [config, userId]);
-
-  useEffect(() => {
-    refresh();
-    // 처음 설정을 못 읽었으면(오프라인 등) 앱으로 돌아올 때 · 연결이 돌아올 때 설정부터 다시 읽는다 — 서버가 꺼 둔 것과 다르다.
-    const again = () => (config?.failed ? loadConfig() : refresh());
-    const onVisible = () => {
-      if (document.visibilityState === "visible") again(); // 브라우저 설정에서 알림을 막거나 풀고 돌아왔을 때 · 서버가 기기를 지웠을 때
-    };
-    // 다른 창이 켜거나 끄면 켠 계정 기록(localStorage)이 바뀐다 — 보이는 채로 나란히 열린 창도 바로 맞춘다.
-    const onStorage = (event) => {
-      if (event.key === null || event.key?.startsWith(PUSH_STORAGE_PREFIX)) refresh();
-    };
-    window.addEventListener(CHANGED, refresh);
-    window.addEventListener("online", again);
-    window.addEventListener("storage", onStorage);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.removeEventListener(CHANGED, refresh);
-      window.removeEventListener("online", again);
-      window.removeEventListener("storage", onStorage);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [refresh, config, loadConfig]);
-
-  // 클릭 처리기에서 '바로' 불러야 권한 창이 뜬다 — 그래서 async 함수로 감싸지 않고 enablePush 를 먼저 부른다.
-  const enable = useCallback(() => {
-    if (!userId) return Promise.resolve("signed-out");
-    setBusy(true);
-    return enablePush({ userId, config })
-      .catch(() => "error")
-      .then((result) => {
-        changed();
-        return result;
-      })
-      .finally(() => setBusy(false));
-  }, [config, userId]);
-
-  const disable = useCallback(() => {
-    setBusy(true);
-    return disablePush()
-      .catch(() => "error")
-      .then((result) => {
-        changed();
-        return result;
-      })
-      .finally(() => setBusy(false));
-  }, []);
-
-  // 다 못 갔으면(끝난 구독은 서버가 지운다) 서버에 다시 물어 스위치를 맞춘다.
-  const test = useCallback(() => {
-    setBusy(true);
-    return sendTestPush()
-      .then((result) => {
-        if (!(Number(result?.sent) >= Number(result?.devices) && Number(result?.devices) > 0)) {
-          forgetPushStatus();
-          changed();
-        }
-        return result;
-      }, (error) => {
-        forgetPushStatus();
-        changed();
-        throw error;
-      })
-      .finally(() => setBusy(false));
-  }, []);
-
-  return { state, busy, enable, disable, test, signedIn: Boolean(userId) };
+    pushController.setUser(userId);
+  }, [userId]);
+  const snapshot = useSyncExternalStore(pushController.subscribe, pushController.snapshot, pushController.snapshot);
+  // 계정이 막 바뀐 순간 — 앞 계정의 상태를 보여 주지 않는다.
+  const state = snapshot.userId === userId ? snapshot.state : "loading";
+  return {
+    state, busy: snapshot.busy, signedIn: Boolean(userId),
+    enable: pushController.enable, disable: pushController.disable, test: pushController.test,
+  };
 }
 
 // 권한을 막았을 때 푸는 길 — 기기마다 다르다(아이폰 홈 화면 앱은 iOS 설정).

@@ -27,6 +27,7 @@ declare
     'papersession',
     'papertrade',
     'pointledger',
+    'pushdelivery',
     'pushoutbox',
     'pushsubscription',
     'runnerkey',

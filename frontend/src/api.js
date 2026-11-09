@@ -235,7 +235,8 @@ export const api = {
   // 앱(PWA) 알림 — 이 기기 등록 · 해제 · 확인, 시험 알림(lib/push.js)
   pushConfig: (options = {}) => req("/api/push/config", { timeoutMs: 8_000, ...options }),
   pushSubscribe: (subscription) => req("/api/me/push/subscription", { method: "PUT", body: JSON.stringify(subscription), timeoutMs: 10_000 }),
-  pushUnsubscribe: (endpoint) => req("/api/me/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint }), timeoutMs: 8_000 }),
+  // expected_version: 기기 기록에 있는 세대 — 서버는 그 세대일 때만 지운다(그사이 다른 계정이 이 기기로 켰으면 그대로).
+  pushUnsubscribe: (endpoint, expectedVersion) => req("/api/me/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint, ...(expectedVersion != null ? { expected_version: expectedVersion } : {}) }), timeoutMs: 8_000 }),
   pushStatus: (endpoint) => req("/api/me/push/status", { method: "POST", body: JSON.stringify({ endpoint }), timeoutMs: 8_000 }),
   pushTest: () => req("/api/me/push/test", { method: "POST", timeoutMs: 15_000 }),
   uploadAvatar: (image) => {

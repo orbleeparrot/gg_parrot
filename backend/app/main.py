@@ -984,10 +984,13 @@ class PushSubscriptionIn(BaseModel):
     endpoint: str = Field(default="", max_length=push_alerts_mod.MAX_ENDPOINT)
     keys: PushKeysIn = Field(default_factory=PushKeysIn)
     platform: str = Field(default="", max_length=20)
+    # 앱이 아는 이 기기의 세대 — 재등록 때 보낸다. 서버의 세대가 다르면(다른 계정이 가져감 · 서버가 지움) 409.
+    expected_version: Optional[int] = Field(default=None, ge=0)
 
 
 class PushEndpointIn(BaseModel):
     endpoint: str = Field(default="", max_length=push_alerts_mod.MAX_ENDPOINT)
+    expected_version: Optional[int] = Field(default=None, ge=0)
 
 
 @app.get("/api/push/config")
@@ -998,12 +1001,13 @@ def push_config() -> dict:
 
 @app.put("/api/me/push/subscription")
 def me_push_subscribe(req: PushSubscriptionIn, user: User = Depends(auth_mod.current_user)) -> dict:
-    return push_alerts_mod.subscribe(user.id, req.endpoint, req.keys.p256dh, req.keys.auth, req.platform)
+    return push_alerts_mod.subscribe(user.id, req.endpoint, req.keys.p256dh, req.keys.auth, req.platform,
+                                     expected_version=req.expected_version)
 
 
 @app.post("/api/me/push/unsubscribe")
 def me_push_unsubscribe(req: PushEndpointIn, user: User = Depends(auth_mod.current_user)) -> dict:
-    return push_alerts_mod.unsubscribe(user.id, req.endpoint)
+    return push_alerts_mod.unsubscribe(user.id, req.endpoint, expected_version=req.expected_version)
 
 
 @app.post("/api/me/push/status")

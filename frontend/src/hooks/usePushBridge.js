@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../lib/auth.js";
-import { disablePush, openTarget, syncPush } from "../lib/push.js";
+import { openTarget } from "../lib/push.js";
+import { pushController } from "../lib/pushController.js";
 
 // 앱 알림과 화면 사이 — ① 알림을 누르면 열린 앱에서 그 화면으로 옮기고(옮겼다고 워커에 답한다 — 답이 없으면 워커가
-// 창을 그 주소로 새로 연다: 오프라인 안내 화면 · 옛 화면), ② 로그인할 때 · 앱으로 돌아올 때 이 기기 등록을 맞추고,
-// ③ 로그아웃하면 이 기기 구독을 끊는다(같은 기기의 다음 사람에게 앞 사람의 소식이 가지 않게).
+// 창을 그 주소로 새로 연다: 오프라인 안내 화면 · 옛 화면), ② 로그인할 때 · 앱으로 돌아올 때 이 기기 기록을 서버와 맞추고,
+// ③ 로그아웃하면 이 기기 구독을 끊는다(같은 기기의 다음 사람에게 앞 사람의 소식이 가지 않게). 상태는 pushController 가 갖는다.
 export function usePushBridge() {
   const navigate = useNavigate();
   const { token, user } = useAuth();
@@ -32,10 +33,11 @@ export function usePushBridge() {
   useEffect(() => {
     const before = previous.current;
     previous.current = userId;
+    pushController.setUser(userId);
     if (userId) {
-      syncPush({ userId }).catch(() => {});
+      pushController.sync();
     } else if (before) {
-      disablePush({ local: true }).catch(() => {});
+      pushController.logout();
     }
   }, [userId]);
 
@@ -43,7 +45,7 @@ export function usePushBridge() {
   useEffect(() => {
     if (!userId) return undefined;
     const onVisible = () => {
-      if (document.visibilityState === "visible") syncPush({ userId }).catch(() => {});
+      if (document.visibilityState === "visible") pushController.sync();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);

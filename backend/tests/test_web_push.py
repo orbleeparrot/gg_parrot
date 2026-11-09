@@ -1,8 +1,11 @@
-"""앱(PWA) 알림 — 암호화(RFC 8291 예시) · VAPID · 구독 API · 중계 소식 → 대기열 → 보내기."""
+"""앱(PWA) 알림 — 암호화(RFC 8291 예시) · VAPID · 구독 세대 · 중계 소식 → 알림 이벤트 → 기기별 전송."""
 from __future__ import annotations
 
+import itertools
 import json
 import os
+import random
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -12,12 +15,14 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import func
 from sqlmodel import select
 
 from app import agent_commentary as ac
 from app import push_alerts, web_push
-from app.db import PushOutbox, PushSubscription, get_session
+from app.db import PushDelivery, PushOutbox, PushSubscription, get_session
 from app.main import app
 from tests.test_runner import _auth, _signup
 from tests.test_runner_signals_api import _key, _stop
@@ -151,31 +156,67 @@ def test_push_is_off_without_a_key(monkeypatch):
     assert r.status_code == 503
 
 
+def _user_id(token: str) -> int:
+    return client.get("/api/auth/me", headers=_auth(token)).json()["user"]["id"]
+
+
+def _on(token: str, sub: dict | None = None, **extra) -> dict:
+    """이 기기를 켠다(앱의 켜기와 같은 요청) — 받은 세대를 sub['version'] 에 둔다."""
+    sub = sub or device()
+    r = client.put("/api/me/push/subscription", json=public_sub(sub) | extra, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    sub["version"] = r.json()["version"]
+    return sub
+
+
+def _status(token: str, sub: dict) -> dict:
+    return client.post("/api/me/push/status", json={"endpoint": sub["endpoint"]}, headers=_auth(token)).json()
+
+
 def test_subscribe_status_and_unsubscribe(vapid_on):
     config = client.get("/api/push/config").json()
     assert config["enabled"] and len(web_push.b64u_decode(config["public_key"])) == 65
     token = _signup()
     sub = device()
     assert client.put("/api/me/push/subscription", json=public_sub(sub)).status_code == 401
-    r = client.put("/api/me/push/subscription", json=public_sub(sub) | {"platform": "android"}, headers=_auth(token))
-    assert r.status_code == 200 and r.json() == {"subscribed": True}
-    assert client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token)).status_code == 200
+    _on(token, sub, platform="android")
+    first = sub["version"]
+    assert first > 0
+    assert _on(token, sub)["version"] == first, "같은 계정이 다시 켜면 세대는 그대로"
     with get_session() as db:
         rows = db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).all()
         assert len(rows) == 1, "같은 기기는 한 줄"
-    status = client.post("/api/me/push/status", json={"endpoint": sub["endpoint"]}, headers=_auth(token)).json()
-    assert status == {"subscribed": True}
+    assert _status(token, sub) == {"subscribed": True, "version": first}
     other = _signup()
-    assert client.post("/api/me/push/status", json={"endpoint": sub["endpoint"]}, headers=_auth(other)).json() == {
-        "subscribed": False}
-    # 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮긴다 — 앞 계정의 소식이 이 기기에 오지 않는다.
-    assert client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(other)).status_code == 200
-    assert client.post("/api/me/push/status", json={"endpoint": sub["endpoint"]}, headers=_auth(token)).json() == {
-        "subscribed": False}
+    assert _status(other, sub) == {"subscribed": False, "version": 0}
+    # 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮기고 세대를 올린다 — 앞 계정의 소식이 이 기기에 오지 않는다.
+    assert _on(other, sub)["version"] > first
+    assert _status(token, sub)["subscribed"] is False
     assert client.post("/api/me/push/unsubscribe", json={"endpoint": sub["endpoint"]}, headers=_auth(other)).json() == {
         "subscribed": False}
     with get_session() as db:
         assert db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).first() is None
+
+
+def test_old_requests_cannot_change_a_newer_generation(vapid_on):
+    """규칙 2 — 앱이 기대한 세대가 아니면 서버가 거절한다: 다른 계정이 가져간 기기를 옛 재등록이 덮지 않고, 서버가 지운
+    기기를 재등록이 되살리지 않고, 늦게 온 옛 해제가 새로 켠 것을 지우지 않는다."""
+    a, b = _signup(), _signup()
+    sub = _on(a)
+    first = sub["version"]
+    sync = public_sub(sub) | {"expected_version": first}
+    assert client.put("/api/me/push/subscription", json=sync, headers=_auth(a)).status_code == 200, "제 세대면 고친다"
+    _on(b, sub)  # 같은 기기에서 B 가 켰다
+    assert client.put("/api/me/push/subscription", json=sync, headers=_auth(a)).status_code == 409
+    assert _status(b, sub)["subscribed"] is True and _status(a, sub)["subscribed"] is False
+    _on(a, sub)  # 다시 A — 세대가 또 오른다
+    late_off = {"endpoint": sub["endpoint"], "expected_version": first}
+    assert client.post("/api/me/push/unsubscribe", json=late_off, headers=_auth(a)).status_code == 200
+    assert _status(a, sub) == {"subscribed": True, "version": sub["version"]}, "옛 세대의 해제는 새 세대를 지우지 않는다"
+    client.post("/api/me/push/unsubscribe", json={"endpoint": sub["endpoint"]}, headers=_auth(a))
+    resync = public_sub(sub) | {"expected_version": sub["version"]}
+    assert client.put("/api/me/push/subscription", json=resync, headers=_auth(a)).status_code == 409, \
+        "서버가 지운 기기를 재등록이 되살리지 않는다"
 
 
 def test_bad_subscriptions_are_refused(vapid_on):
@@ -209,11 +250,7 @@ def test_an_account_keeps_at_most_ten_devices(vapid_on):
     assert kept == set(endpoints[2:]), "가장 오래 안 쓴 두 대가 빠진다"
 
 
-def _user_id(token: str) -> int:
-    return client.get("/api/auth/me", headers=_auth(token)).json()["user"]["id"]
-
-
-# --- 중계 소식 → 대기열 → 보내기 -----------------------------------------------------
+# --- 중계 소식 → 알림 이벤트 → 기기별 전송 ------------------------------------------------
 MACRO = {"symbol": "LTCUSDT", "exchange": "binance", "rule_type": "A", "position_side": "long", "market": "spot",
          "leverage": 1, "candle_interval": "1h", "period": {"preset": "3m"},
          "params": {"take_profit_pct": 5, "initial_capital": 1000}, "risk": {}}
@@ -244,18 +281,71 @@ def _rows(user_id: int) -> list[PushOutbox]:
         return list(db.exec(select(PushOutbox).where(PushOutbox.user_id == user_id).order_by(PushOutbox.id)).all())
 
 
+def _deliveries(user_id: int) -> list[PushDelivery]:
+    with get_session() as db:
+        return list(db.exec(select(PushDelivery).where(PushDelivery.user_id == user_id).order_by(PushDelivery.id)).all())
+
+
 def _posts(rows):
     return [row for row in rows if row.dedupe_key.startswith("post:")]
 
 
+class Service:
+    """푸시 서비스 흉내 — 엔드포인트마다 정해 둔 답을 차례로(없으면 받음). 보낸 기록을 남긴다."""
+
+    def __init__(self, answers: dict | None = None):
+        self.answers = {key: list(value) for key, value in (answers or {}).items()}
+        self.log = []
+        self.lock = threading.Lock()
+
+    def __call__(self, subscription, data, *, ttl, urgency, **kwargs):
+        payload = json.loads(data)
+        with self.lock:
+            self.log.append({"endpoint": subscription["endpoint"], "event": payload.get("event"), "ttl": ttl,
+                             "payload": payload, "urgency": urgency})
+            queue = self.answers.get(subscription["endpoint"])
+            answer = queue.pop(0) if queue else web_push.SENT
+        return answer() if callable(answer) else answer
+
+    def sent_to(self, sub: dict) -> list:
+        return [item["event"] for item in self.log if item["endpoint"] == sub["endpoint"]]
+
+
+_bases = itertools.count(1)
+
+
+def _base() -> int:
+    """시험마다 따로 쓰는 먼 시각 — 앞 시험이 남긴 전송은 이 시각엔 이미 만료라 서로 섞이지 않는다."""
+    return 10**13 + next(_bases) * 10**10
+
+
+def _event(user_id: int, key: str, now_ms: int) -> int:
+    facts = {"id": 77, "user_id": user_id, "base": "BTC", "status": "running"}
+    say = {"key": key, "kind": "fill", "hl": "샀어요!", "at_ms": now_ms, "nums": "100.00 USDT"}
+    with get_session() as db:
+        assert push_alerts.enqueue_says(db, facts, [say], now_ms=now_ms) == 1
+        db.commit()
+        return db.exec(select(PushOutbox.id).where(PushOutbox.user_id == user_id,
+                                                   PushOutbox.dedupe_key == f"s77:{key}")).one()
+
+
+def _delivery(event_id: int, sub: dict) -> PushDelivery:
+    with get_session() as db:
+        return db.exec(select(PushDelivery).where(PushDelivery.event_id == event_id,
+                                                  PushDelivery.endpoint == sub["endpoint"])).one()
+
+
+def _event_row(event_id: int) -> PushOutbox:
+    with get_session() as db:
+        return db.get(PushOutbox, event_id)
+
+
 def test_agent_commentary_reaches_every_device_once(vapid_on):
-    """중계 말풍선 전부(시작 · 매수 · 기사 · 종료 …)가 알림으로 — 기사는 계정마다 한 번, 그 밖은 세션마다."""
+    """중계 말풍선 전부(시작 · 매수 · 기사 · 종료 …)가 알림 이벤트로, 켜 둔 기기마다 전송 한 줄씩 — 기사는 계정마다 한 번."""
     token = _signup()
     user_id = _user_id(token)
     key = _key(token)
-    phone, laptop = device(), device()
-    for sub in (phone, laptop):
-        assert client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token)).status_code == 200
+    phone, laptop = _on(token), _on(token)
     first, second = _start(key), _start(key)  # 같은 코인(LTC)을 두 세션이 돌린다
     try:
         r = client.post("/api/runner/heartbeat", json={"session_id": first, "last_price": 100.0, "in_position": True,
@@ -268,6 +358,7 @@ def test_agent_commentary_reaches_every_device_once(vapid_on):
         keys = {row.dedupe_key for row in _rows(user_id)}
         assert {f"s{first}:start", f"s{second}:start"} <= keys
         fill = next(row for row in _rows(user_id) if row.dedupe_key.startswith(f"s{first}:fill"))
+        assert fill.expires_ms == fill.created_ms + push_alerts.EVENT_TTL_MS, "만료 시각은 쌓을 때 고정"
         fill_payload = json.loads(fill.payload_json)
         assert fill_payload.pop("at") > 0, "일어난 시각을 싣는다(늦게 도착해도 알림에 실제 시각)"
         assert fill_payload == {"title": "LTC · 샀어요!",
@@ -280,23 +371,23 @@ def test_agent_commentary_reaches_every_device_once(vapid_on):
         payload = json.loads(posts[0].payload_json)
         assert payload["title"].split(" · ", 1) in (["LTC", "관련 기사가 나왔어요"], ["LTC", "이런 기사가 떴어요"])
         assert payload["body"].startswith("라이트코인 ETF 심사 연기\n라이트코인 현물 ETF 심사가 다음 주로 미뤄졌다.")
-        assert payload["url"] in (f"/agents?session={first}", f"/agents?session={second}")
-        queued = len(_rows(user_id))
+        events = _rows(user_id)
+        assert len(_deliveries(user_id)) == len(events) * 2, "이벤트마다 켜 둔 기기 두 대"
 
-        delivered = []
-
-        def fake_send(subscription, data, **kwargs):
-            delivered.append((subscription["endpoint"], data, kwargs))
-            return web_push.GONE if subscription["endpoint"] == laptop["endpoint"] else web_push.SENT
-        result = push_alerts.dispatch(now_ms=now + 3_000, send=fake_send)
-        assert result["claimed"] == queued and result["jobs"] == queued * 2
-        assert result["sent"] == 1 and result["gone"] == 1, "기기 수로 센다 — 전화는 받고 노트북 구독은 끝남"
-        assert {endpoint for endpoint, _, _ in delivered} == {phone["endpoint"], laptop["endpoint"]}
-        assert payload in [json.loads(data) for _, data, _ in delivered] and delivered[0][2]["urgency"] == "high"
-        assert push_alerts.dispatch(now_ms=now + 4_000, send=fake_send) == {"claimed": 0}, "한 번 꺼낸 알림은 다시 안 간다"
+        service = Service({laptop["endpoint"]: [web_push.GONE]})
+        result = push_alerts.dispatch(now_ms=now + 3_000, send=service)
+        assert result["claimed"] == len(events) * 2
+        assert result["sent"] == len(events) and result["gone"] == 1, "노트북은 첫 전송에서 끝난 구독 — 나머지는 취소"
+        assert sorted(service.sent_to(phone)) == sorted(row.id for row in events)
+        assert len(service.sent_to(laptop)) == 1, "끝난 구독(410) 뒤의 전송은 보내지 않는다"
+        sent = next(item for item in service.log if item["event"] == posts[0].id and item["endpoint"] == phone["endpoint"])
+        assert {k: v for k, v in sent["payload"].items() if k != "event"} == payload and sent["urgency"] == "high"
+        assert push_alerts.dispatch(now_ms=now + 4_000, send=service) == {"claimed": 0}, "끝난 전송은 다시 안 간다"
         with get_session() as db:
             left = db.exec(select(PushSubscription.endpoint).where(PushSubscription.user_id == user_id)).all()
         assert left == [phone["endpoint"]], "끝난 구독(410)은 지운다"
+        assert {row.result for row in _rows(user_id)} == {"delivered"}
+        assert {d.state for d in _deliveries(user_id) if d.endpoint == laptop["endpoint"]} <= {"failed", "cancelled"}
     finally:
         _stop(key, first)
         _stop(key, second)
@@ -334,87 +425,61 @@ def test_accounts_without_a_device_queue_nothing(vapid_on):
         _stop(key, sid)
 
 
-def test_repeated_rejections_drop_the_device_and_test_push_goes_out(vapid_on):
+# --- 규칙 1: 기기 하나의 실패가 다른 기기의 기회를 쓰지 않는다 ------------------------------------
+def test_one_device_failing_never_spends_another_devices_tries(vapid_on):
     token = _signup()
     user_id = _user_id(token)
-    sub = device()
-    client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
-    for attempt in range(push_alerts.FAIL_LIMIT):
-        with get_session() as db:
-            devices = push_alerts._subscriptions_for(db, {user_id})
-        outcome = push_alerts._deliver([(user_id, {"title": "t"})], devices,
-                                       now_ms=attempt, send=lambda *a, **k: web_push.FAILED)
-        assert outcome["failed"] == 1
-    with get_session() as db:
-        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is None
-    assert client.post("/api/me/push/test", headers=_auth(token)).status_code == 404
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    sent = []
-    result = push_alerts.send_test(user_id, now_ms=10**13, send=lambda s, d, **k: sent.append(d) or web_push.SENT)
-    assert result == {"sent": 1, "devices": 1, "retry": 0} and json.loads(sent[0])["url"] == "/agents"
-    with pytest.raises(Exception):
-        push_alerts.send_test(user_id, now_ms=10**13 + 1_000, send=lambda *a, **k: web_push.SENT)
+    broken, slow = _on(token), _on(token)
+    base = _base()
+    event = _event(user_id, "fill:independent", base)
+    # 고장 난 기기는 늘 막히고, 다른 기기는 처음에 '15분 기다려' 뒤 받는다.
+    service = Service({broken["endpoint"]: [web_push.RETRY] * 10, slow["endpoint"]: [web_push._retry(900)]})
+    at = base
+    for _ in range(12):
+        push_alerts.dispatch(now_ms=at, send=service)
+        at += 120_000
+    assert _delivery(event, broken).state == "gave_up" and _delivery(event, broken).attempts == push_alerts.MAX_ATTEMPTS
+    assert _delivery(event, slow).state == "accepted" and _delivery(event, slow).attempts == 2, \
+        "고장 난 기기가 시도를 다 써도 다른 기기는 제 차례에 받는다"
+    assert _event_row(event).result == "delivered"
 
 
-def test_test_push_tells_a_blocked_service_from_a_dead_device(vapid_on):
-    """시험 알림이 0건이면 화면이 '보냈어요'라고 하지 않게 — 잠깐 막힘(retry)과 끝난 구독을 가려 준다."""
+def test_a_device_turned_on_later_does_not_get_earlier_alerts(vapid_on):
+    """규칙 4 — 대상 기기는 쌓을 때 정한다."""
     token = _signup()
     user_id = _user_id(token)
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    now = 10**13
-    assert push_alerts.send_test(user_id, now_ms=now, send=lambda *a, **k: web_push.RETRY) == {
-        "sent": 0, "devices": 1, "retry": 1}
-    assert push_alerts.send_test(user_id, now_ms=now + 10_000, send=lambda *a, **k: web_push.GONE) == {
-        "sent": 0, "devices": 1, "retry": 0}
-    with get_session() as db:
-        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is None, \
-            "끝난 구독(410)은 지운다 — 화면은 상태를 다시 읽어 '꺼짐'으로"
+    phone = _on(token)
+    base = _base()
+    event = _event(user_id, "fill:before-tablet", base)
+    tablet = _on(token)
+    service = Service()
+    push_alerts.dispatch(now_ms=base + 1_000, send=service)
+    assert service.sent_to(phone) == [event] and service.sent_to(tablet) == []
 
 
-# --- 보내다 막히거나 죽었을 때 -----------------------------------------------------------
-FAR = 10**13  # 다른 시험이 남긴 대기열(지금 시각)과 섞이지 않게 먼 시각에서 돈다
+def test_switching_accounts_cancels_the_old_accounts_pending_alerts(vapid_on):
+    """규칙 4 — 같은 기기를 다른 계정이 가져가면 앞 계정 앞으로 남은 전송은 취소된다(새 주인에게 가지 않는다)."""
+    a, b = _signup(), _signup()
+    sub = _on(a)
+    base = _base()
+    old = _event(_user_id(a), "fill:a-only", base)
+    push_alerts.dispatch(now_ms=base, send=Service({sub["endpoint"]: [web_push.RETRY]}))  # 다시 보내기 대기
+    _on(b, sub)
+    assert _delivery(old, sub).state == "cancelled"
+    new = _event(_user_id(b), "fill:b", base + 10_000)
+    service = Service()
+    push_alerts.dispatch(now_ms=base + 120_000, send=service)
+    assert service.sent_to(sub) == [new], "B 의 기기에 A 의 알림이 가지 않는다"
+    assert _event_row(old).result == "cancelled"
 
 
-def _queue(user_id: int, key: str, now_ms: int) -> None:
-    facts = {"id": 77, "user_id": user_id, "base": "BTC", "status": "running"}
-    say = {"key": key, "kind": "fill", "hl": "샀어요!", "at_ms": now_ms, "nums": "100.00 USDT"}
-    with get_session() as db:
-        assert push_alerts.enqueue_says(db, facts, [say], now_ms=now_ms) == 1
-        db.commit()
-
-
-def test_a_blocked_device_gets_the_alert_later_and_only_that_device(vapid_on):
-    """429 · 5xx · 연결 실패는 그 기기에만 다시 보낸다 — 이미 받은 기기에 두 번 가지 않는다."""
-    token = _signup()
-    user_id = _user_id(token)
-    phone, laptop = device(), device()
-    for sub in (phone, laptop):
-        client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
-    _queue(user_id, "fill:blocked", FAR)
-    answers = {phone["endpoint"]: [web_push.RETRY, web_push.SENT], laptop["endpoint"]: [web_push.SENT]}
-    calls = []
-
-    def fake_send(subscription, data, **kwargs):
-        calls.append(subscription["endpoint"])
-        return answers[subscription["endpoint"]].pop(0)
-    first = push_alerts.dispatch(now_ms=FAR + 1_000, send=fake_send)
-    assert (first["claimed"], first["sent"], first["retry"], first["later"]) == (1, 1, 1, 1)
-    row = _rows(user_id)[0]
-    assert row.sent_ms == 0 and row.attempts == 1, "막힌 기기가 남았으니 아직 끝나지 않았다"
-    assert push_alerts.dispatch(now_ms=FAR + 2_000, send=fake_send) == {"claimed": 0}, "기다리는 동안은 꺼내지 않는다"
-    second = push_alerts.dispatch(now_ms=FAR + 1_000 + push_alerts.RETRY_WAIT_MS[0], send=fake_send)
-    assert (second["claimed"], second["jobs"], second["sent"]) == (1, 1, 1), "받은 노트북은 건너뛰고 전화에만"
-    assert sorted(calls) == sorted([phone["endpoint"], phone["endpoint"], laptop["endpoint"]])
-    assert _rows(user_id)[0].sent_ms == FAR + 1_000 + push_alerts.RETRY_WAIT_MS[0]
-    assert push_alerts.dispatch(now_ms=FAR + 10 * 60_000, send=fake_send) == {"claimed": 0}
-
-
+# --- 규칙 2: 늦게 끝난 옛 바퀴 · 죽은 바퀴 -----------------------------------------------------------
 def test_a_crash_while_sending_does_not_lose_the_alert(vapid_on):
-    """꺼낸 뒤 보내기 전에 프로세스가 죽어도 — 맡은 시간이 지나면 다시 꺼내 보낸다."""
     token = _signup()
     user_id = _user_id(token)
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    _queue(user_id, "fill:crash", FAR)
+    sub = _on(token)
+    base = _base()
+    event = _event(user_id, "fill:crash", base)
 
     class Crash(BaseException):
         pass
@@ -422,42 +487,22 @@ def test_a_crash_while_sending_does_not_lose_the_alert(vapid_on):
     def dying(*args, **kwargs):
         raise Crash()
     with pytest.raises(Crash):
-        push_alerts.dispatch(now_ms=FAR + 1_000, send=dying)
-    sent = []
-    ok = lambda subscription, data, **kwargs: sent.append(data) or web_push.SENT  # noqa: E731
-    assert push_alerts.dispatch(now_ms=FAR + 2_000, send=ok) == {"claimed": 0}, "맡은 동안 다른 바퀴가 겹쳐 보내지 않는다"
-    result = push_alerts.dispatch(now_ms=FAR + 1_000 + push_alerts.LEASE_MS, send=ok)
-    assert (result["claimed"], result["sent"]) == (1, 1) and len(sent) == 1
-    assert _rows(user_id)[0].sent_ms > 0
+        push_alerts.dispatch(now_ms=base + 1_000, send=dying)
+    service = Service()
+    assert push_alerts.dispatch(now_ms=base + 2_000, send=service) == {"claimed": 0}, "맡은 동안 다른 바퀴가 겹쳐 보내지 않는다"
+    result = push_alerts.dispatch(now_ms=base + 1_000 + push_alerts.LEASE_MS, send=service)
+    assert (result["claimed"], result["sent"]) == (1, 1) and service.sent_to(sub) == [event]
+    assert _event_row(event).result == "delivered"
 
 
-def test_a_device_that_stays_blocked_is_given_up_after_a_few_tries(vapid_on):
+def test_a_late_pass_cannot_overwrite_the_pass_that_took_over(vapid_on):
+    """보내다 맡은 시간이 지나 다른 바퀴가 다시 맡아 끝냈으면, 늦게 끝난 옛 바퀴의 결과는 쓰지 않는다(토큰이 다르다)."""
     token = _signup()
     user_id = _user_id(token)
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    _queue(user_id, "fill:down", FAR)
-    at = FAR
-    for attempt in range(1, push_alerts.MAX_ATTEMPTS + 1):
-        assert push_alerts.dispatch(now_ms=at, send=lambda *a, **k: web_push.RETRY)["claimed"] == 1, attempt
-        at += push_alerts.RETRY_WAIT_MS[min(attempt, len(push_alerts.RETRY_WAIT_MS)) - 1]
-    row = _rows(user_id)[0]
-    assert row.sent_ms > 0 and row.attempts == push_alerts.MAX_ATTEMPTS, "시도를 다 쓰면 끝낸다"
-    assert push_alerts.dispatch(now_ms=at + 60_000, send=lambda *a, **k: web_push.RETRY) == {"claimed": 0}
-    with get_session() as db:
-        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is not None, \
-            "잠깐 막힘은 기기를 지우지 않는다"
-
-
-def test_a_late_worker_cannot_overwrite_the_pass_that_took_over(vapid_on):
-    """보내다 맡은 시간이 지나 다른 바퀴가 다시 꺼내 끝냈으면, 늦게 끝난 옛 바퀴는 그 결과(받은 기기 · 다음 시각)를 덮지 않는다."""
-    import threading
-    token = _signup()
-    user_id = _user_id(token)
-    phone, laptop = device(), device()
-    for sub in (phone, laptop):
-        client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
-    _queue(user_id, "fill:fence", FAR)
-    took_over = FAR + 1_000 + push_alerts.LEASE_MS
+    phone, laptop = _on(token), _on(token)
+    base = _base()
+    event = _event(user_id, "fill:fence", base)
+    took_over = base + 1_000 + push_alerts.LEASE_MS
     second = []
     lock = threading.Lock()
 
@@ -465,22 +510,153 @@ def test_a_late_worker_cannot_overwrite_the_pass_that_took_over(vapid_on):
         return web_push.SENT if subscription["endpoint"] == phone["endpoint"] else web_push.RETRY
 
     def old_pass(subscription, data, **kwargs):
-        with lock:  # 옛 바퀴가 보내는 동안 맡은 시간이 지나고, 새 바퀴가 다시 꺼내 전화에는 보낸다
-            if not second:
-                second.append(push_alerts.dispatch(now_ms=took_over, send=new_pass))
+        with lock:
+            run = not second
+            second.append(1)
+        if run:  # 옛 바퀴가 보내는 동안 맡은 시간이 지나고, 새 바퀴가 다시 맡는다
+            second.append(push_alerts.dispatch(now_ms=took_over, send=new_pass))
         return web_push.RETRY
-    old = push_alerts.dispatch(now_ms=FAR + 1_000, send=old_pass)
-    assert second[0]["claimed"] == 1 and second[0]["sent"] == 1
-    assert old["lost"] == 1, "옛 바퀴의 결과는 쓰지 않는다"
-    row = _rows(user_id)[0]
-    assert row.attempts == 2 and json.loads(row.done_json) != [], "새 바퀴가 적은 '전화는 받음'이 남는다"
-    assert row.lease_ms == took_over + push_alerts.RETRY_WAIT_MS[1], "다음 시각도 새 바퀴 것"
-    calls = []
-    retry = push_alerts.dispatch(now_ms=row.lease_ms, send=lambda s, d, **k: calls.append(s["endpoint"]) or web_push.SENT)
-    assert retry["claimed"] == 1 and calls == [laptop["endpoint"]], "받은 전화에는 다시 보내지 않는다"
+    old = push_alerts.dispatch(now_ms=base + 1_000, send=old_pass)
+    assert old["lost"] == 2, "옛 바퀴의 결과는 쓰지 않는다"
+    assert _delivery(event, phone).state == "accepted", "새 바퀴가 적은 '전화는 받음'이 남는다"
+    retry = _delivery(event, laptop)
+    assert retry.state == "pending" and retry.next_ms == took_over + push_alerts.RETRY_WAIT_MS[1], "다음 시각도 새 바퀴 것"
+    service = Service()
+    push_alerts.dispatch(now_ms=retry.next_ms, send=service)
+    assert service.sent_to(laptop) == [event] and service.sent_to(phone) == [], "받은 전화에는 다시 보내지 않는다"
 
 
-def test_retry_after_from_the_push_service_is_respected(vapid_on):
+def test_a_late_410_for_an_old_generation_does_not_remove_the_new_one(vapid_on):
+    """SQLite 는 지운 id 를 다시 쓴다 — 같은 id 를 받은 새 세대가 옛 세대의 410 으로 지워지지 않게(id · 세대 · 주소가 다 맞을 때만)."""
+    token = _signup()
+    old = _on(token)
+    with get_session() as db:
+        row = db.exec(select(PushSubscription).where(PushSubscription.endpoint == old["endpoint"])).one()
+        key = (row.id, row.version, row.endpoint)
+        new = device()
+        row.endpoint, row.p256dh, row.auth, row.version = new["endpoint"], new["keys"]["p256dh"], new["keys"]["auth"], row.version + 1
+        db.add(row)
+        db.commit()
+    with get_session() as db:
+        push_alerts._device_results(db, accepted={}, holds={}, failed={}, gone={key: True}, now_ms=1)
+        db.commit()
+    assert _status(token, new)["subscribed"] is True
+
+
+# --- 규칙 3: 엔드포인트 대기와 만료 시각 ------------------------------------------------------------
+def test_an_endpoint_is_sent_one_at_a_time_and_stops_when_asked_to_wait(vapid_on):
+    """같은 엔드포인트는 차례로 — 첫 응답이 '10분 기다려'면 같은 바퀴의 뒤 전송도 보내지 않는다(시도로 세지 않는다)."""
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    first, second = _event(user_id, "fill:one", base), _event(user_id, "fill:two", base)
+    service = Service({sub["endpoint"]: [web_push._retry(600)]})
+    result = push_alerts.dispatch(now_ms=base, send=service)
+    assert service.sent_to(sub) == [first] and result["held"] == 1
+    assert _delivery(second, sub).attempts == 0 and _delivery(second, sub).next_ms == base + 600_000
+    assert push_alerts.dispatch(now_ms=base + 599_000, send=service) == {"claimed": 0}, "대기 전에는 맡지도 않는다"
+    push_alerts.dispatch(now_ms=base + 600_000, send=service)
+    assert service.sent_to(sub) == [first, first, second], "대기가 끝나면 쌓인 차례대로"
+
+
+def test_a_new_alert_and_a_test_push_both_wait_for_the_device(vapid_on):
+    """대기는 엔드포인트에 — 그사이 새로 쌓인 알림도, 시험 알림도 그 시각 전에는 보내지 않는다(RFC 8030 §8.4)."""
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    _event(user_id, "fill:first", base)
+    push_alerts.dispatch(now_ms=base, send=Service({sub["endpoint"]: [web_push._retry(600)]}))
+    later = _event(user_id, "fill:second", base + 1_000)
+    service = Service()
+    assert push_alerts.dispatch(now_ms=base + 1_000, send=service) == {"claimed": 0}
+    assert push_alerts.send_test(user_id, now_ms=base + 2_000, send=service) == {"sent": 0, "devices": 1, "retry": 1}
+    assert service.log == [], "새 알림 · 시험 알림 모두 보내지 않았다"
+    assert _delivery(later, sub).attempts == 0
+    push_alerts.dispatch(now_ms=base + 600_000, send=service)
+    assert len(service.sent_to(sub)) == 2, "대기가 끝나면 첫 알림 · 새 알림"
+    with get_session() as db:
+        test_states = db.exec(select(PushDelivery.state).join(PushOutbox, PushOutbox.id == PushDelivery.event_id).where(
+            PushOutbox.user_id == user_id, PushOutbox.dedupe_key.startswith("test:"))).all()
+    assert test_states == ["expired"], "시험 알림(5분)은 10분 대기가 끝나기 전에 만료 — 늦게 울리지 않는다"
+
+
+def test_a_wait_is_written_the_moment_it_arrives(vapid_on, monkeypatch):
+    """한 바퀴가 기기 A 에서 '기다려'를 받고 다른 기기로 보내는 사이 — 다른 바퀴가 A 에 새 알림을 보내지 않는다
+    (대기를 바퀴 끝이 아니라 받는 즉시 적는다)."""
+    monkeypatch.setattr(push_alerts, "SEND_THREADS", 1)
+    token = _signup()
+    user_id = _user_id(token)
+    first, second = _on(token), _on(token)
+    base = _base()
+    _event(user_id, "fill:wait-now", base)
+    inner = Service()
+
+    def outer(subscription, data, **kwargs):
+        if subscription["endpoint"] == first["endpoint"]:
+            return web_push._retry(600)
+        # 두 번째 기기로 보내는 동안 새 알림이 쌓이고 다른 바퀴가 돈다
+        _event(user_id, "fill:wait-now-2", base)
+        push_alerts.dispatch(now_ms=base, send=inner)
+        return web_push.SENT
+    push_alerts.dispatch(now_ms=base, send=outer)
+    assert inner.sent_to(first) == [], "다른 바퀴도 A 의 대기를 안다"
+    assert len(inner.sent_to(second)) == 1
+
+
+def test_a_success_never_clears_a_newer_wait(vapid_on):
+    """대기는 더 늦은 값으로만 — 늦게 온 '받음'이 그 뒤에 받은 '기다려'를 지우지 않는다."""
+    token = _signup()
+    sub = _on(token)
+    with get_session() as db:
+        row = db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).one()
+        key = (row.id, row.version, row.endpoint)
+    with get_session() as db:
+        push_alerts._device_results(db, accepted={}, holds={key: 5_000}, failed={}, gone={}, now_ms=1)
+        push_alerts._device_results(db, accepted={key: 2}, holds={key: 3_000}, failed={}, gone={}, now_ms=2)
+        db.commit()
+    with get_session() as db:
+        assert db.get(PushSubscription, key[0]).next_send_ms == 5_000
+
+
+def test_waits_count_from_the_response_not_the_start_of_a_slow_batch(vapid_on, send_clock):
+    """큰 묶음을 보내는 데 500초가 걸린 뒤 600초 기다리라는 답을 받으면 — 그 답을 받은 때부터 600초."""
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    event = _event(user_id, "fill:slow-batch", base)
+
+    def slow(*args, **kwargs):
+        send_clock["s"] += 500
+        return web_push._retry(600)
+    push_alerts.dispatch(now_ms=base, send=slow)
+    with get_session() as db:
+        held = db.exec(select(PushSubscription.next_send_ms).where(PushSubscription.endpoint == sub["endpoint"])).one()
+    assert held == base + 1_100_000 and _delivery(event, sub).next_ms == base + 1_100_000
+    assert push_alerts.dispatch(now_ms=base + 700_000, send=Service()) == {"claimed": 0}, "답을 받고 100초 만에 다시 보내지 않는다"
+
+
+def test_the_lifetime_is_fixed_and_the_ttl_is_what_is_left(vapid_on):
+    """만료 시각은 쌓을 때 고정 — 다시 보내기가 수명을 늘리지 않고, 푸시 서비스에는 남은 시간만 TTL 로 준다."""
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    event = _event(user_id, "fill:lifetime", base)
+    service = Service({sub["endpoint"]: [web_push._retry(1500), web_push._retry(1500), web_push._retry(1500)]})
+    at = base
+    for _ in range(5):
+        push_alerts.dispatch(now_ms=at, send=service)
+        at += 1_500_000
+    ttls = [item["ttl"] for item in service.log]
+    assert ttls == [3600, 2100, 600], "다시 보낼 때마다 남은 시간만(35분 · 10분)"
+    assert _delivery(event, sub).state == "expired", "네 번째 시각이 만료 뒤라 보내지 않고 끝낸다"
+    assert _event_row(event).result == "expired"
+
+
+def test_retry_after_from_the_push_service_is_read(vapid_on):
     class Fake:
         def __init__(self, status, headers):
             self.status, self.headers = status, headers
@@ -495,96 +671,40 @@ def test_retry_after_from_the_push_service_is_respected(vapid_on):
     assert web_push.retry_after_seconds("99999") == web_push.MAX_RETRY_AFTER_S
     assert web_push.retry_after_seconds("soon") == 0
 
+
+# --- 시험 알림 · 거절 반복 -----------------------------------------------------------------------
+def test_the_test_push_goes_the_same_way_and_tells_results_apart(vapid_on):
     token = _signup()
     user_id = _user_id(token)
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    _queue(user_id, "fill:slow-down", FAR)
-    busy = web_push._retry(600)
-    assert push_alerts.dispatch(now_ms=FAR, send=lambda *a, **k: busy)["later"] == 1
-    assert push_alerts.dispatch(now_ms=FAR + push_alerts.RETRY_WAIT_MS[0], send=lambda *a, **k: web_push.SENT) == {
-        "claimed": 0}, "푸시 서비스가 10분 기다리라고 했으면 30초 뒤에 다시 보내 시도를 쓰지 않는다"
-    assert push_alerts.dispatch(now_ms=FAR + 600_000, send=lambda *a, **k: web_push.SENT)["sent"] == 1
+    assert client.post("/api/me/push/test", headers=_auth(token)).status_code == 404
+    sub = _on(token)
+    base = _base()
+    service = Service()
+    assert push_alerts.send_test(user_id, now_ms=base, send=service) == {"sent": 1, "devices": 1, "retry": 0}
+    assert service.log[0]["payload"]["url"] == "/agents" and service.log[0]["ttl"] == push_alerts.TEST_TTL_MS // 1000
+    with pytest.raises(Exception):
+        push_alerts.send_test(user_id, now_ms=base + 1_000, send=service)
+    assert push_alerts.send_test(user_id, now_ms=base + 20_000, send=lambda *a, **k: web_push.RETRY) == {
+        "sent": 0, "devices": 1, "retry": 1}
+    assert push_alerts.send_test(user_id, now_ms=base + 200_000, send=lambda *a, **k: web_push.GONE) == {
+        "sent": 0, "devices": 1, "retry": 0}
+    assert _status(token, sub)["subscribed"] is False, "끝난 구독(410)은 지운다 — 화면은 다시 읽어 '꺼짐'으로"
 
 
-def test_waits_count_from_the_response_not_the_start_of_a_slow_batch(vapid_on, send_clock):
-    """큰 묶음을 보내는 데 500초가 걸린 뒤 600초 기다리라는 답을 받으면 — 그 답을 받은 때부터 600초."""
+def test_repeated_rejections_drop_the_device(vapid_on):
     token = _signup()
     user_id = _user_id(token)
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    _queue(user_id, "fill:slow-batch", FAR)
-
-    def slow(*args, **kwargs):
-        send_clock["s"] += 500
-        return web_push._retry(600)
-    assert push_alerts.dispatch(now_ms=FAR, send=slow)["later"] == 1
-    with get_session() as db:
-        held = db.exec(select(PushSubscription.next_send_ms).where(PushSubscription.user_id == user_id)).one()
-    assert held == FAR + 1_100_000 and _rows(user_id)[0].lease_ms == FAR + 1_100_000
-    assert push_alerts.dispatch(now_ms=FAR + 700_000, send=lambda *a, **k: web_push.SENT) == {"claimed": 0}, \
-        "답을 받고 100초 만에 다시 보내지 않는다"
+    sub = _on(token)
+    base = _base()
+    events = [_event(user_id, f"fill:reject-{index}", base) for index in range(push_alerts.FAIL_LIMIT + 2)]
+    push_alerts.dispatch(now_ms=base, send=lambda *a, **k: web_push.FAILED)
+    assert _status(token, sub)["subscribed"] is False, "연달아 거절되면 지운다"
+    assert {_delivery(event, sub).state for event in events} <= {"failed", "cancelled"}
 
 
-def test_one_devices_retry_after_does_not_hold_back_the_others(vapid_on):
-    """기기 하나가 한 시간 기다리라고 해도 다른 기기는 제 박자(30초 뒤)에 받는다."""
-    token = _signup()
-    user_id = _user_id(token)
-    slow, quick = device(), device()
-    for sub in (slow, quick):
-        client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
-    _queue(user_id, "fill:mixed-wait", FAR)
-    answers = {slow["endpoint"]: web_push._retry(3700), quick["endpoint"]: web_push.RETRY}
-    assert push_alerts.dispatch(now_ms=FAR, send=lambda s, d, **k: answers[s["endpoint"]])["later"] == 1
-    calls = []
-    retry = push_alerts.dispatch(now_ms=FAR + push_alerts.RETRY_WAIT_MS[0],
-                                 send=lambda s, d, **k: calls.append(s["endpoint"]) or web_push.SENT)
-    assert retry["claimed"] == 1 and calls == [quick["endpoint"]], "기다리라는 기기는 건너뛰고 다른 기기는 받는다"
-    row = _rows(user_id)[0]
-    assert row.sent_ms > 0 and row.result == "expired", "남은 기기는 한 시간 안에 받을 수 없어 끝낸다(까닭을 남긴다)"
-
-
-def test_a_new_alert_also_waits_for_a_device_that_asked_to_wait(vapid_on):
-    """기다리라는 기기에 새 알림이 쌓여도 그 시각 전에는 보내지 않는다(RFC 8030 §8.4) — 그 바퀴는 시도로 세지 않는다."""
-    token = _signup()
-    user_id = _user_id(token)
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    _queue(user_id, "fill:first", FAR)
-    assert push_alerts.dispatch(now_ms=FAR, send=lambda *a, **k: web_push._retry(600))["later"] == 1
-    _queue(user_id, "fill:second", FAR + 1_000)
-    calls = []
-    second = push_alerts.dispatch(now_ms=FAR + 1_000, send=lambda *a, **k: calls.append(1) or web_push.SENT)
-    assert second["claimed"] == 1 and calls == [], "1초 뒤 새 알림도 그 기기에는 보내지 않는다"
-    fresh = next(row for row in _rows(user_id) if row.dedupe_key.endswith("fill:second"))
-    assert fresh.lease_ms == FAR + 600_000 and fresh.attempts == 0
-    both = push_alerts.dispatch(now_ms=FAR + 600_000, send=lambda *a, **k: calls.append(1) or web_push.SENT)
-    assert both["claimed"] == 2 and len(calls) == 2
-    assert {row.result for row in _rows(user_id)} == {"delivered"}
-
-
-def test_a_late_410_for_an_old_subscription_does_not_remove_a_new_one_with_the_same_id(vapid_on):
-    """SQLite 는 지운 id 를 다시 쓴다 — 보내는 사이 껐다 켜 같은 id 를 받은 새 구독이 옛 구독의 410 으로 지워지지 않게."""
-    token = _signup()
-    user_id = _user_id(token)
-    old = device()
-    client.put("/api/me/push/subscription", json=public_sub(old), headers=_auth(token))
-    with get_session() as db:
-        snapshot = push_alerts._subscriptions_for(db, {user_id})
-    new = device()
-
-    def resubscribe_then_gone(subscription, data, **kwargs):
-        # 옛 구독으로 보내는 사이 사용자가 껐다 켰다 — 새 구독이 같은 id 를 받는 경우를 그대로 만든다.
-        with get_session() as db:
-            row = db.get(PushSubscription, subscription["id"])
-            row.endpoint, row.p256dh, row.auth = new["endpoint"], new["keys"]["p256dh"], new["keys"]["auth"]
-            db.add(row)
-            db.commit()
-        return web_push.GONE
-    push_alerts._deliver([(user_id, {"title": "t"})], snapshot, now_ms=FAR, send=resubscribe_then_gone)
-    status = client.post("/api/me/push/status", json={"endpoint": new["endpoint"]}, headers=_auth(token)).json()
-    assert status == {"subscribed": True}, "같은 id 라도 엔드포인트가 다르면 옛 결과를 적용하지 않는다"
-
-
-def test_an_older_queue_table_gains_the_new_columns_on_boot(tmp_path, monkeypatch, vapid_on):
-    """이전 버전(6칸) 대기열 표가 있는 DB — 기동 보정이 칸을 더해 쌓기 · 보내기가 그대로 돈다."""
+# --- 업그레이드 · 탈퇴 ---------------------------------------------------------------------------
+def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
+    """이전 표(구독에 세대 · 대기 없음, 이벤트에 만료 없음)가 있는 DB — 기동 보정이 칸을 더하고 기기별 전송 표를 만든다."""
     from sqlalchemy import create_engine, inspect
     from app import db as db_mod
     engine = create_engine(f"sqlite:///{tmp_path / 'older-push.db'}")
@@ -592,39 +712,213 @@ def test_an_older_queue_table_gains_the_new_columns_on_boot(tmp_path, monkeypatc
     with engine.begin() as conn:
         conn.exec_driver_sql("""CREATE TABLE pushoutbox (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
             dedupe_key VARCHAR NOT NULL, payload_json VARCHAR NOT NULL DEFAULT '', created_ms BIGINT NOT NULL DEFAULT 0,
-            sent_ms BIGINT NOT NULL DEFAULT 0)""")
-        conn.exec_driver_sql("INSERT INTO pushoutbox VALUES (1, 41, 's1:start', '{\"title\":\"t\"}', 1000, 0)")
+            sent_ms BIGINT NOT NULL DEFAULT 0, lease_ms BIGINT NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
+            done_json VARCHAR NOT NULL DEFAULT '')""")
+        conn.exec_driver_sql("""CREATE TABLE pushsubscription (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+            endpoint VARCHAR NOT NULL, p256dh VARCHAR NOT NULL, auth VARCHAR NOT NULL, platform VARCHAR NOT NULL DEFAULT '',
+            created_ms BIGINT NOT NULL DEFAULT 0, updated_ms BIGINT NOT NULL DEFAULT 0, last_ok_ms BIGINT NOT NULL DEFAULT 0,
+            fail_count INTEGER NOT NULL DEFAULT 0)""")
+        conn.exec_driver_sql("CREATE UNIQUE INDEX ux_pushoutbox_user_key ON pushoutbox (user_id, dedupe_key)")
+        conn.exec_driver_sql("CREATE UNIQUE INDEX ux_pushsubscription_endpoint ON pushsubscription (endpoint)")
+        kept = device()
+        conn.exec_driver_sql("INSERT INTO pushsubscription (id, user_id, endpoint, p256dh, auth) VALUES (1, 41, ?, ?, ?)",
+                             (kept["endpoint"], kept["keys"]["p256dh"], kept["keys"]["auth"]))
     try:
         db_mod.init_db()
         db_mod.init_db()
-        assert {"lease_ms", "attempts", "done_json"} <= {col["name"] for col in inspect(engine).get_columns("pushoutbox")}
-        result = push_alerts.dispatch(now_ms=2_000, send=lambda *a, **k: web_push.SENT)
-        assert result["claimed"] == 1, "옛 줄도 꺼내 끝낸다"
+        assert {"version", "next_send_ms"} <= {col["name"] for col in inspect(engine).get_columns("pushsubscription")}
+        assert "expires_ms" in {col["name"] for col in inspect(engine).get_columns("pushoutbox")}
+        assert "pushdelivery" in inspect(engine).get_table_names()
+        assert push_alerts.status(41, kept["endpoint"]) == {"subscribed": True, "version": 0}, "켜 둔 기기는 그대로"
+        base = _base()
+        _event(41, "fill:after-upgrade", base)
+        service = Service()
+        push_alerts.dispatch(now_ms=base, send=service)
+        assert len(service.sent_to(kept)) == 1, "업그레이드 뒤에도 보낸다"
     finally:
         engine.dispose()
-    # 운영(Postgres) 기동 보정도 같은 세 칸을 더한다 — 마이그레이션 20261106130000 과 같은 정의.
+    # 운영(Postgres) 기동 보정도 같은 칸을 더한다 — 마이그레이션과 같은 정의.
     from tests.test_db_startup_migrations import current_schema
     state = current_schema()
-    for column in ("lease_ms", "attempts", "done_json"):
-        state["columns"].pop(("pushoutbox", column))
+    for table, column in (("pushsubscription", "version"), ("pushsubscription", "next_send_ms"),
+                          ("pushoutbox", "expires_ms"), ("pushoutbox", "result")):
+        state["columns"].pop((table, column))
     statements = db_mod._pg_migration_statements(state)
-    assert [s for s in statements if "pushoutbox" in s] == [
-        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS lease_ms BIGINT NOT NULL DEFAULT 0",
-        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS attempts INTEGER NOT NULL DEFAULT 0",
-        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS done_json VARCHAR NOT NULL DEFAULT ''",
+    assert [s for s in statements if "push" in s] == [
+        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS expires_ms BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS result VARCHAR NOT NULL DEFAULT ''",
+        "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS next_send_ms BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0",
     ]
 
 
 def test_leaving_the_service_removes_devices_and_history(vapid_on):
     token = _signup()
     user_id = _user_id(token)
-    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
-    with get_session() as db:
-        db.add(PushOutbox(user_id=user_id, dedupe_key="post:x", payload_json="{}", created_ms=1, sent_ms=1))
-        db.commit()
+    _on(token)
+    _event(user_id, "fill:leaving", _base())
     r = client.request("DELETE", "/api/me/account", headers=_auth(token),
                        json={"confirmation": "탈퇴", "password": "password123"})
     assert r.status_code == 200, r.text
     with get_session() as db:
-        assert db.exec(select(PushSubscription).where(PushSubscription.user_id == user_id)).first() is None
-        assert db.exec(select(PushOutbox).where(PushOutbox.user_id == user_id)).first() is None
+        for model in (PushSubscription, PushOutbox, PushDelivery):
+            assert db.exec(select(model).where(model.user_id == user_id)).first() is None, model.__name__
+
+
+# --- 한꺼번에: 계정 전환 · 두 바퀴 · 429 · 죽음 · 시험 알림을 섞어도 규칙이 지켜지는지 -------------------------
+@pytest.mark.parametrize("seed", [3, 11, 29])
+def test_rules_hold_when_everything_happens_at_once(vapid_on, send_clock, monkeypatch, seed):
+    """무작위로 섞은 60 걸음 뒤 보낸 기록 전체로 확인한다.
+    1. 기기 하나의 실패가 다른 기기의 시도를 쓰지 않는다(전송마다 시도 ≤ MAX_ATTEMPTS).
+    2. 끝난 전송은 되살아나지 않고, 계정이 바뀐 기기에는 앞 계정의 알림이 가지 않는다.
+    3. 모든 발송이 엔드포인트 대기 · 만료 시각을 지키고 TTL 은 남은 시간이다.
+    5. 시간이 흐르면 모든 전송 · 이벤트가 끝난다(죽은 바퀴가 남긴 것도)."""
+    monkeypatch.setattr(push_alerts, "SEND_THREADS", 1)  # 같은 seed 면 같은 순서
+    rng = random.Random(seed)
+    users = [_user_id(token) for token in (_signup(), _signup())]
+    t0 = _base()
+    now = lambda: t0 + int(send_clock["s"] * 1000)  # noqa: E731 — 바퀴 안의 경과까지 한 시계로
+    owners: dict[str, tuple] = {}     # 엔드포인트 → (계정, 세대)
+    subs: dict[str, dict] = {}
+    moved: dict[str, list] = {}       # 엔드포인트 → [(시각, 새 계정)]
+    holds: dict[str, int] = {}        # 엔드포인트 → 푸시 서비스가 기다리라고 한 시각
+    events: dict[int, dict] = {}      # 이벤트 → {user, expires, recipients}
+    log = []
+    extra = {"resends": 0}
+    terminal: dict[int, str] = {}
+
+    def register(user, sub=None):
+        sub = sub or device()
+        result = push_alerts.subscribe(user, sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"], now_ms=now())
+        if sub["endpoint"] in owners and owners[sub["endpoint"]][0] != user:
+            moved.setdefault(sub["endpoint"], []).append((now(), user))
+        owners[sub["endpoint"]] = (user, result["version"])
+        subs[sub["endpoint"]] = sub
+
+    def answer():
+        roll = rng.random()
+        if roll < 0.6:
+            return web_push.SENT
+        if roll < 0.75:
+            return web_push.RETRY
+        if roll < 0.87:
+            return web_push._retry(rng.choice([30, 120, 900, 2400]))
+        if roll < 0.94:
+            return web_push.FAILED
+        return web_push.GONE
+
+    def request(subscription, data, ttl):
+        """보낸 순간을 적고 푸시 서비스의 답을 고른다."""
+        event = json.loads(data)["event"]
+        endpoint = subscription["endpoint"]
+        log.append({"endpoint": endpoint, "event": event, "ttl": ttl, "at": now(), "hold": holds.get(endpoint, 0)})
+        return answer()
+
+    def receive(subscription, outcome):
+        """답이 앱에 닿은 순간 — Retry-After 는 받은 때부터 센다(RFC 8030 §8.4)."""
+        endpoint = subscription["endpoint"]
+        if outcome == web_push.RETRY and getattr(outcome, "retry_after_s", 0):
+            holds[endpoint] = max(holds.get(endpoint, 0), now() + outcome.retry_after_s * 1000)
+        if outcome == web_push.GONE:
+            owners.pop(endpoint, None)
+        return outcome
+
+    def service(subscription, data, *, ttl, urgency, **kwargs):
+        return receive(subscription, request(subscription, data, ttl))
+
+    for user in users:
+        register(user)
+        register(user)
+    for step in range(60):
+        send_clock["s"] += rng.choice([5, 30, 90, 240, 600])
+        action = rng.random()
+        if action < 0.3:
+            user = rng.choice(users)
+            recipients = {e for e, (u, _) in owners.items() if u == user}
+            facts = {"id": 77, "user_id": user, "base": "BTC", "status": "running"}
+            say = {"key": f"fill:sim{seed}-{step}", "kind": "fill", "hl": "샀어요!", "at_ms": now(), "nums": "1"}
+            with get_session() as db:
+                queued = push_alerts.enqueue_says(db, facts, [say], now_ms=now())
+                db.commit()
+                event = db.exec(select(PushOutbox.id).where(PushOutbox.user_id == user, PushOutbox.dedupe_key ==
+                                                            f"s77:fill:sim{seed}-{step}")).first()
+            assert (event is not None) == bool(queued) == bool(recipients), "기기가 없으면 쌓지 않는다"
+            if event is not None:
+                events[event] = {"user": user, "created": now(), "expires": now() + push_alerts.EVENT_TTL_MS,
+                                 "recipients": recipients}
+        elif action < 0.6:
+            push_alerts.dispatch(now_ms=now(), send=service)
+        elif action < 0.68:  # 두 바퀴 — 옛 바퀴가 첫 전송 중에 멈춘 사이 맡은 시간이 지나 새 바퀴가 돈다
+            fired = []
+
+            def stalled(subscription, data, *, ttl, **kwargs):
+                outcome = request(subscription, data, ttl)
+                if not fired:  # 첫 답이 늦게 닿는다(바퀴가 멈춤) — 그사이 맡은 시간이 지나 새 바퀴가 돈다
+                    fired.append(1)
+                    send_clock["s"] += push_alerts.LEASE_MS / 1000 + 1
+                    push_alerts.dispatch(now_ms=now(), send=service)
+                    extra["resends"] += 1
+                return receive(subscription, outcome)
+            push_alerts.dispatch(now_ms=now(), send=stalled)
+        elif action < 0.74:  # 바퀴가 보내다 죽는다
+            class Crash(BaseException):
+                pass
+
+            def dying(*args, **kwargs):
+                raise Crash()
+            try:
+                push_alerts.dispatch(now_ms=now(), send=dying)
+            except Crash:
+                extra["resends"] += 1
+        elif action < 0.84:  # 같은 기기를 다른 계정이 가져간다
+            if owners:
+                endpoint = rng.choice(sorted(owners))
+                register(rng.choice(users), subs[endpoint])
+        elif action < 0.92:
+            register(rng.choice(users))
+        else:
+            user = rng.choice(users)
+            recipients = {e for e, (u, _) in owners.items() if u == user}
+            created = now()
+            try:
+                result = push_alerts.send_test(user, now_ms=created, send=service)
+            except HTTPException:
+                continue
+            with get_session() as db:
+                test_event = db.exec(select(PushOutbox.id).where(PushOutbox.user_id == user)
+                                     .order_by(PushOutbox.id.desc())).first()
+            events[test_event] = {"user": user, "created": created, "expires": created + push_alerts.TEST_TTL_MS,
+                                  "recipients": recipients}
+            assert result["devices"] == len(recipients) >= result["sent"]
+        with get_session() as db:
+            for delivery_id, state in db.exec(select(PushDelivery.id, PushDelivery.state).where(
+                    PushDelivery.user_id.in_(users))).all():
+                if delivery_id in terminal:
+                    assert state == terminal[delivery_id], f"끝난 전송이 되살아났다: {delivery_id} {terminal[delivery_id]}→{state}"
+                elif state not in push_alerts.LIVE:
+                    terminal[delivery_id] = state
+
+    send_clock["s"] += 3 * 3600  # 모든 수명이 지나도록
+    push_alerts.dispatch(now_ms=now(), send=service)
+    with get_session() as db:
+        left = db.exec(select(PushDelivery.state).where(PushDelivery.user_id.in_(users),
+                                                        PushDelivery.state.in_(push_alerts.LIVE))).all()
+        assert left == [], "시간이 흐르면 모든 전송이 끝난다"
+        unfinished = db.exec(select(PushOutbox.id).where(PushOutbox.user_id.in_(users), PushOutbox.sent_ms == 0)).all()
+        assert unfinished == [], "모든 이벤트에 끝난 까닭이 적힌다"
+        attempts = db.exec(select(func.max(PushDelivery.attempts)).where(PushDelivery.user_id.in_(users))).one()
+    assert (attempts or 0) <= push_alerts.MAX_ATTEMPTS, "규칙 1 — 전송마다 제 시도만 센다"
+    sends = {}
+    for item in log:
+        info = events.get(item["event"])
+        assert info is not None, item
+        assert item["at"] >= item["hold"], f"규칙 3 — 기다리라고 한 시각 전에 보냈다: {item}"
+        assert item["at"] < info["expires"] and item["ttl"] == (info["expires"] - item["at"]) // 1000 >= 1, \
+            f"규칙 3 — 만료 뒤 · 남은 시간보다 긴 TTL: {item}"
+        assert item["endpoint"] in info["recipients"], f"규칙 4 — 쌓을 때 정한 기기만: {item}"
+        for moved_at, _ in moved.get(item["endpoint"], []):
+            assert not (info["created"] < moved_at <= item["at"]), \
+                f"규칙 2 — 쌓은 뒤 다른 계정으로 넘어간 기기에 그 알림이 갔다: {item}"
+        key = (item["event"], item["endpoint"])
+        sends[key] = sends.get(key, 0) + 1
+    assert max(sends.values(), default=0) <= push_alerts.MAX_ATTEMPTS + extra["resends"]

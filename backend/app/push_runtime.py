@@ -1,8 +1,8 @@
 """앱 알림을 웹 프로세스 안에서 보낸다 — 쌓인 알림을 꺼내 기기마다 전한다.
 
 중계가 소식을 쌓고 커밋하면 ``request_dispatch`` 가 바로 깨운다. 깨움을 놓쳐도(다른 프로세스가 쌓은 것 등)
-``scan_seconds`` 마다 한 번 확인한다 — 잠깐 막혀 미뤄 둔 알림(push_alerts.RETRY_WAIT_MS)도 이 확인 때 다시 나간다.
-두 프로세스가 겹쳐 돌아도 꺼낼 때 lease_ms 로 맡으므로 한 프로세스만 보낸다.
+``scan_seconds`` 마다 한 번 확인한다 — 잠깐 막혀 미뤄 둔 기기별 전송(push_alerts.RETRY_WAIT_MS)도 이 확인 때 다시 나간다.
+두 프로세스가 겹쳐 돌아도 전송마다 바퀴의 토큰으로 맡으므로 한 프로세스만 보낸다.
 VAPID 키가 없으면 돌지 않는다.
 """
 from __future__ import annotations

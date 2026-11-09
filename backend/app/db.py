@@ -697,7 +697,8 @@ class AgentCommentaryState(SQLModel, table=True):
 class PushSubscription(SQLModel, table=True):
     """앱(PWA) 알림을 받을 기기 하나 — 브라우저 PushManager 구독(web_push · push_alerts).
 
-    엔드포인트는 기기 · 브라우저마다 하나라 유일하다. 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮긴다.
+    엔드포인트는 기기 · 브라우저마다 하나라 유일하다. 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮기고 ``version`` 을
+    올린다 — 옛 버전 앞으로 쌓인 전송(PushDelivery)은 취소되고, 옛 버전을 기대한 요청(앱의 재등록 · 해제)은 서버가 거절한다.
     """
 
     __table_args__ = (Index("ux_pushsubscription_endpoint", "endpoint", unique=True),)
@@ -711,20 +712,20 @@ class PushSubscription(SQLModel, table=True):
     updated_ms: int = Field(default=0, sa_type=BigInteger)
     last_ok_ms: int = Field(default=0, sa_type=BigInteger)
     fail_count: int = 0
-    # 푸시 서비스가 Retry-After 로 '그때까지 보내지 마'라고 한 시각(응답을 받은 시각 기준). 기기마다 따로 —
-    # 한 기기의 대기가 같은 알림의 다른 기기를 늦추지 않고, 그사이 새로 쌓인 알림도 이 기기에는 이 시각까지 기다린다.
+    # 푸시 서비스가 Retry-After 로 '그때까지 보내지 마'라고 한 시각(응답을 받은 시각 기준). 엔드포인트마다 —
+    # 이 기기로 가는 모든 전송(새 알림 · 시험 알림 포함)이 기다린다. 더 늦은 값으로만 바뀌고, 받음 응답이 지우지 않는다.
     next_send_ms: int = Field(default=0, sa_type=BigInteger)
+    # 이 엔드포인트가 지금 계정에 묶인 세대. 만들 때 그 시각(ms)으로 시작해 계정이 바뀔 때마다 오른다 — SQLite 가 지운
+    # id 를 다시 써도 세대가 겹치지 않는다.
+    version: int = Field(default=0, sa_type=BigInteger)
 
 
 class PushOutbox(SQLModel, table=True):
-    """보낼(보낸) 앱 알림 한 건. 중계가 말풍선과 같은 트랜잭션에 넣고, push_runtime 이 꺼내 보낸다.
+    """알림 이벤트 하나 — 누구에게 무슨 일이 일어났는지. 중계가 말풍선과 같은 트랜잭션에 넣는다.
 
-    ``dedupe_key`` 가 계정마다 유일하다 — 같은 코인을 두 세션이 돌려도 같은 기사는 한 번만 울린다. 보낸 행은
-    며칠 남겨 중복을 막다가 지운다(push_alerts.KEEP_MS).
-
-    꺼낸 프로세스는 ``lease_ms`` 까지 맡는다. 보내고 나서야 ``sent_ms`` 를 채우므로, 보내다 죽으면 맡은 시간이 지나
-    다른 바퀴가 다시 꺼낸다. 잠깐 막힌 기기(429 · 5xx · 연결 실패)는 ``lease_ms`` 를 다음 시도 시각으로 미뤄 그 기기에만
-    다시 보낸다 — 이미 끝낸 기기는 ``done_json`` 에 적어 두 번 보내지 않는다.
+    ``dedupe_key`` 가 계정마다 유일하다 — 같은 코인을 두 세션이 돌려도 같은 기사는 한 번만 울린다. ``expires_ms`` 는
+    쌓을 때 고정한다(다시 보내기가 수명을 늘리지 않는다). 기기마다 보내는 일은 PushDelivery 에 따로 있고, 모든 기기의
+    전송이 끝나면 ``sent_ms`` 와 ``result`` 를 채운다. 며칠 남겨 중복을 막다가 지운다(push_alerts.KEEP_MS).
     """
 
     __table_args__ = (
@@ -736,13 +737,41 @@ class PushOutbox(SQLModel, table=True):
     dedupe_key: str
     payload_json: str = ""
     created_ms: int = Field(default=0, sa_type=BigInteger)
-    sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 다 못 보냄. 모든 기기를 끝내거나 시도를 다 쓴 시각
-    lease_ms: int = Field(default=0, sa_type=BigInteger)  # 이 시각 전에는 꺼내지 않는다(보내는 중 · 다시 보내기 대기)
-    attempts: int = 0  # 실제로 보낸 바퀴 수(기기 대기로 아무 데도 안 보낸 바퀴는 세지 않는다)
-    done_json: str = ""  # 이미 끝낸 기기(구독 id) 목록 — 다시 보낼 때 건너뛴다
-    # 끝난 까닭 — delivered(모든 기기 처리) · gave_up(시도를 다 씀) · expired(한 시간 안에 못 보냄) · no_device · broken.
-    # '알림이 안 왔다'는 문의를 가를 때 본다(push_alerts._cleanup 이 한 시간마다 집계를 남긴다).
+    expires_ms: int = Field(default=0, sa_type=BigInteger)  # 이 시각이 지나면 어느 기기에도 보내지 않는다
+    sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 끝나지 않은 기기가 있다. 모든 기기가 끝난 시각
+    # 끝난 까닭(기기별 결과를 모아) — delivered(한 대라도 받음) · gave_up · expired · failed · cancelled.
     result: str = ""
+
+
+class PushDelivery(SQLModel, table=True):
+    """알림 하나를 구독 하나(그 세대)에 보내는 일. 시도 · 다음 시각 · 상태를 기기마다 따로 둔다.
+
+    상태: pending(보낼 차례 · 다시 보내기 대기) → sending(어떤 바퀴가 ``claim_token`` 으로 맡음) → accepted(푸시 서비스가
+    받음) | failed(영구 거절 · 끝난 구독) | gave_up(시도를 다 씀) | expired(만료 시각이 지남) | cancelled(구독 해지 · 계정 바뀜).
+    결과는 자기 토큰으로 맡고 있는 줄에만 쓴다 — 늦게 끝난 옛 바퀴가 새 바퀴의 결과를 덮지 않게.
+    대상 기기는 쌓을 때 정한다 — 나중에 켠 기기 · 다른 계정에 지난 알림을 배정하지 않는다.
+    """
+
+    __table_args__ = (
+        Index("ux_pushdelivery_event_sub", "event_id", "subscription_id", "sub_version", unique=True),
+        Index("ix_pushdelivery_state_next", "state", "next_ms"),
+        Index("ix_pushdelivery_sub", "subscription_id"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    event_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    subscription_id: int
+    sub_version: int = Field(default=0, sa_type=BigInteger)
+    endpoint: str = ""  # 쌓을 때의 엔드포인트 — 같은 id 의 다른 구독에 보내지 않게
+    state: str = "pending"
+    attempts: int = 0  # 실제로 보낸 횟수(같은 엔드포인트의 앞 전송이 막혀 이번에 못 보낸 것은 세지 않는다)
+    next_ms: int = Field(default=0, sa_type=BigInteger)
+    lease_ms: int = Field(default=0, sa_type=BigInteger)
+    claim_token: str = ""
+    expires_ms: int = Field(default=0, sa_type=BigInteger)
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    finished_ms: int = Field(default=0, sa_type=BigInteger)
+    last_outcome: str = ""  # 마지막 응답(sent · retry · gone · failed) — 문의 때 본다
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -1527,14 +1556,15 @@ def _migrate() -> None:
             "last_error": "ALTER TABLE dailychallenge ADD COLUMN last_error TEXT DEFAULT ''",
         },
         # 앱 알림 대기열 — 보낸 뒤에야 sent_ms(2026-11-06). 이전 6칸 표가 있는 DB 에 칸을 더한다.
+        # 앱 알림 — 이벤트 · 기기별 전송 · 구독 세대로 나눔(2026-11-09). 이전 표가 있는 DB 에 칸을 더한다.
+        # (lease_ms · attempts · done_json 은 기기별 전송 표로 옮겨 이벤트 표에서는 쓰지 않는다.)
         "pushoutbox": {
-            "lease_ms": "ALTER TABLE pushoutbox ADD COLUMN lease_ms INTEGER NOT NULL DEFAULT 0",
-            "attempts": "ALTER TABLE pushoutbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
-            "done_json": "ALTER TABLE pushoutbox ADD COLUMN done_json TEXT NOT NULL DEFAULT ''",
+            "expires_ms": "ALTER TABLE pushoutbox ADD COLUMN expires_ms INTEGER NOT NULL DEFAULT 0",
             "result": "ALTER TABLE pushoutbox ADD COLUMN result TEXT NOT NULL DEFAULT ''",
         },
         "pushsubscription": {
             "next_send_ms": "ALTER TABLE pushsubscription ADD COLUMN next_send_ms INTEGER NOT NULL DEFAULT 0",
+            "version": "ALTER TABLE pushsubscription ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
         },
     }
     added.setdefault("runnerlaunchticket", {}).update({
@@ -1619,11 +1649,10 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
-    # 앱 알림 대기열을 '보낸 뒤에야 sent_ms' 로(2026-11-06, 마이그레이션 20261106130000) · 끝난 까닭과
-    # 기기별 Retry-After 대기(2026-11-09, 20261109100000). 마이그레이션과 같은 정의.
-    "pushoutbox": {"lease_ms": "BIGINT NOT NULL DEFAULT 0", "attempts": "INTEGER NOT NULL DEFAULT 0",
-                   "done_json": "VARCHAR NOT NULL DEFAULT ''", "result": "VARCHAR NOT NULL DEFAULT ''"},
-    "pushsubscription": {"next_send_ms": "BIGINT NOT NULL DEFAULT 0"},
+    # 앱 알림 — 끝난 까닭 · 엔드포인트 대기(20261109100000) · 이벤트 만료 시각 · 구독 세대(20261109120000).
+    # 기기별 전송은 새 표(pushdelivery)라 create_all 이 만든다. 마이그레이션과 같은 정의.
+    "pushoutbox": {"expires_ms": "BIGINT NOT NULL DEFAULT 0", "result": "VARCHAR NOT NULL DEFAULT ''"},
+    "pushsubscription": {"next_send_ms": "BIGINT NOT NULL DEFAULT 0", "version": "BIGINT NOT NULL DEFAULT 0"},
     # 코인동향 소식 목록 SQL 쪽 나누기(2026-10-18) — 번역 대기 글 숨김 · 검색어 거르기. 마이그레이션 20261018000000 과 같은 정의.
     "trendarticle": {"visible": "BOOLEAN NOT NULL DEFAULT TRUE", "search_text": "VARCHAR NOT NULL DEFAULT ''"},
     "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''",
@@ -1774,7 +1803,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
     "devnote", "newsheadlinearchive", "clienterror",
     "agentutterance", "agentcommentarystate",
-    "pushsubscription", "pushoutbox",
+    "pushsubscription", "pushoutbox", "pushdelivery",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3

@@ -71,6 +71,9 @@ export default function AppAlertsSettings() {
     hint = push.state === "in-app" ? "앱 안 브라우저에서는 켤 수 없어요" : "홈 화면에 추가한 껄무새에서 켤 수 있어요";
   } else if (push.state === "unconfigured") {
     hint = "지금은 앱 알림을 켤 수 없어요";
+  } else if (push.state === "unknown") {
+    // 서버에 못 물었다(오프라인 등) — '꺼짐'으로 보이지 않게 따로. 앱으로 돌아오거나 연결되면 다시 확인한다.
+    hint = "알림 상태를 확인하지 못했어요";
   } else {
     hint = "이 브라우저는 앱 알림을 지원하지 않아요";
   }

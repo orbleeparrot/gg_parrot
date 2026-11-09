@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 
 from . import auth, avatars
 from .db import (BoardComment, BoardPost, ChatMessage, ChatReadState, DailyQuestClaim,
-                 LeaderboardEntry, NotificationMessage, NotificationReceipt, PushOutbox, PushSubscription, RunnerKey,
+                 LeaderboardEntry, NotificationMessage, NotificationReceipt, PushDelivery, PushOutbox, PushSubscription, RunnerKey,
                  RunnerLaunchTicket, RunSession, RunSessionEvent, User, UserMacro, get_session)
 from . import points
 from .security import hash_password, verify_password
@@ -121,7 +121,7 @@ def close_account_rows(db: Session, user: User) -> None:
     avatars.set_avatar_in_session(db, user_id, None)
     for model in (ChatReadState, RunnerLaunchTicket, RunnerKey, RunSessionEvent,
                   RunSession, DailyQuestClaim, UserMacro, NotificationMessage, NotificationReceipt,
-                  PushSubscription, PushOutbox):
+                  PushSubscription, PushOutbox, PushDelivery):
         db.exec(delete(model).where(model.user_id == user_id))
     db.exec(update(ChatMessage).where(ChatMessage.user_id == user_id).values(username="탈퇴한 회원"))
     db.exec(update(BoardPost).where(BoardPost.author_user_id == user_id).values(author_name="탈퇴한 회원"))

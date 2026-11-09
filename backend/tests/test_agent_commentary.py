@@ -122,17 +122,33 @@ def test_loss_and_gain_bands_speak_once_per_band_and_rearm_for_a_new_position():
     assert gain[0]["hl"] == "익절 안 하고 버티는 당신은 강심장!" and gain[0]["nums_tone"] == "up"
 
 
+def test_profit_and_loss_bands_match_the_desktop_runner():
+    """손익 구간은 데스크톱 실행기 알림과 같다 — 손실 · 수익 모두 2 · 5 · 10 · 15 · 20 · 30 · 50%(앱 알림도 이 말풍선을 따른다)."""
+    assert ac.LOSS_BANDS == ac.GAIN_BANDS == (2, 5, 10, 15, 20, 30, 50)
+    holding = dict(in_position=True, entry_price=100.0, position_qty=1.0, sl_pct=8.0, tp_pct=None)
+    first, state = ac.decide(started_state(), facts(**holding, last_price=97.9, unrealized_pct=-2.1), now_ms=NOW)
+    assert [s["kind"] for s in first] == ["loss"] and first[0]["hl"] == "어어? -2% 넘었어요"
+    assert {"t": "다음엔 -5%에서 말할게요"} in first[0]["subs"]
+    still, _ = ac.decide(state, facts(**holding, last_price=98.1, unrealized_pct=-1.9), now_ms=NOW + MIN)
+    assert still == [], "-2% 안쪽으로 돌아와도 같은 구간을 다시 말하지 않는다"
+    up, state = ac.decide(started_state(), facts(**holding, last_price=102.1, unrealized_pct=2.1), now_ms=NOW)
+    assert [s["kind"] for s in up] == ["gain"] and "+2%" in up[0]["hl"]
+    fifteen, _ = ac.decide(state, facts(**holding, last_price=115.5, unrealized_pct=15.5), now_ms=NOW + MIN)
+    assert [s["kind"] for s in fifteen] == ["gain"] and "+15%" in fifteen[0]["hl"], "실행기처럼 +15% 구간도 있다"
+
+
 def test_stop_loss_distance_replaces_the_question_when_a_stop_exists():
     says, _ = ac.decide(started_state(), facts(in_position=True, entry_price=100.0, position_qty=1.0, last_price=96.8,
                                                unrealized_pct=-3.2, sl_pct=5.0), now_ms=NOW)
-    assert says[0]["hl"] == "어어? -3% 넘었어요"
+    assert says[0]["hl"] == "어어? -2% 넘었어요"
     assert {"t": "손절선(-5%)까지 1.8% 남았어요"} in says[0]["subs"]
 
 
 def test_price_move_needs_three_percent_and_waits_fifteen_minutes():
     candles = bars([0.6] * 20, closes=[201.0] * 20)
     holding = dict(in_position=True, entry_price=201.0, position_qty=1.0, unrealized_pct=3.48)
-    held = started_state() | {"pos_key": "f1", "pos_open_ms": NOW - 60 * MIN}
+    # +2% 구간은 이미 말했다 — 같은 순간엔 구간 말풍선이 움직임 말풍선보다 먼저다(같은 이야기를 두 번 하지 않는다).
+    held = started_state() | {"pos_key": "f1", "pos_open_ms": NOW - 60 * MIN, "gain_band": 2}
     says, state = ac.decide(held, facts(**holding, last_price=208.0), candles=candles, now_ms=NOW + 2 * MIN)
     move = [s for s in says if s["kind"] == "move"][0]
     assert move["face"] == "signal" and move["nums"] == "208원" and "+3.5%" in move["hl"]

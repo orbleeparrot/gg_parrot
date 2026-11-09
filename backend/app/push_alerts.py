@@ -52,6 +52,7 @@ RETRY_WAIT_MS = (30_000, 60_000, 120_000, 300_000)  # n 번째 시도가 막혔�
 SEND_THREADS = 8                    # 서로 다른 엔드포인트끼리만 동시에
 SEND_WAVE_MS = 10_000               # 보내기 한 번이 최대 이만큼(web_push.send 시간 제한) 걸린다고 본다
 STALE_SAY_MS = 30 * 60_000          # 일어난 지 30분 넘은 일(처음 보는 세션의 옛 체결 등)은 채팅에만 — 늦은 알림은 헷갈린다
+CHAT_ONLY_KINDS = {"quiet"}         # '조용~하네요'(45분 동안 별일 없음)는 채팅에만 — 알림으로 울릴 소식이 아니다(11/09 사용자 결정)
 PLATFORMS = {"android", "ios", "desktop"}
 
 PENDING, SENDING, ACCEPTED, FAILED, GAVE_UP, EXPIRED, CANCELLED = (
@@ -256,9 +257,9 @@ def enqueue_says(db, facts: dict, says: list[dict], *, now_ms: int) -> int:
     """새 중계 말풍선을 알림으로 쌓는다(커밋은 호출자). 쌓은 이벤트 수.
 
     알림을 켠 기기가 없는 계정은 아무것도 쌓지 않는다. 기사 · 커뮤니티 글은 실행 중인 세션 것만 — 끝나는
-    바퀴에 나온 글은 '투자 중인 코인' 소식이 아니다. 체결 · 종료처럼 끝나는 바퀴의 일은 보낸다.
+    바퀴에 나온 글은 '투자 중인 코인' 소식이 아니다. 체결 · 종료처럼 끝나는 바퀴의 일은 보낸다. '조용~하네요'는 채팅에만.
     """
-    chosen = [say for say in says if say.get("key") and say.get("hl")
+    chosen = [say for say in says if say.get("key") and say.get("hl") and say.get("kind") not in CHAT_ONLY_KINDS
               and now_ms - int(say.get("at_ms") or now_ms) <= STALE_SAY_MS
               and (say.get("kind") != "post" or (facts.get("status") == "running" and isinstance(say.get("post"), dict)))]
     if not chosen or not web_push.enabled():

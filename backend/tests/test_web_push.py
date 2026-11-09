@@ -412,6 +412,21 @@ def test_old_happenings_stay_in_the_chat_only(vapid_on):
         "url": "/agents?session=5", "tag": "s5:loss:5", "at": now}
 
 
+def test_the_quiet_bubble_stays_in_the_chat(vapid_on):
+    """'조용~하네요'(45분 동안 별일 없음)는 채팅에만 — 앱 알림으로 쌓지 않는다."""
+    token = _signup()
+    user_id = _user_id(token)
+    _on(token)
+    base = _base()
+    facts = {"id": 78, "user_id": user_id, "base": "BTC", "status": "running"}
+    quiet = {"key": "quiet:1", "kind": "quiet", "hl": "조용~하네요. 숨 고르는 중이에요", "at_ms": base, "nums": "1 ~ 2 · 45분"}
+    band = {"key": "loss:e100:2", "kind": "loss", "hl": "어어? -2% 넘었어요", "at_ms": base, "nums": "-2.1%"}
+    with get_session() as db:
+        assert push_alerts.enqueue_says(db, facts, [quiet, band], now_ms=base) == 1
+        db.commit()
+    assert [row.dedupe_key for row in _rows(user_id)] == ["s78:loss:e100:2"]
+
+
 def test_accounts_without_a_device_queue_nothing(vapid_on):
     token = _signup()
     key = _key(token)

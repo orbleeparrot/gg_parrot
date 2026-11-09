@@ -31,8 +31,10 @@ log = logging.getLogger(__name__)
 STATE_VERSION = 1
 UTTERANCE_CAP = 400          # 세션당 말풍선 상한(오래된 것부터 지운다)
 FILL_BACKLOG = 20            # 처음 볼 때 지난 체결은 최근 이만큼만 말한다
-LOSS_BANDS = (3, 5, 10, 15, 20, 30, 50)
-GAIN_BANDS = (5, 10, 20, 30, 50)
+# 손익 구간 — 데스크톱 실행기(0.20.15~) 알림과 같은 기준(±2 · 5 · 10 · 15 · 20 · 30 · 50%, 2026-11-09 사용자 결정).
+# 채팅 말풍선과 앱 알림이 이 구간을 함께 쓴다.
+LOSS_BANDS = (2, 5, 10, 15, 20, 30, 50)
+GAIN_BANDS = (2, 5, 10, 15, 20, 30, 50)
 MOVE_PCT = 3.0               # 5~10분 사이 이만큼 움직이면 한마디
 MOVE_COOLDOWN_MS = 15 * 60_000
 REBUY_WINDOW_MS = 120_000
@@ -521,9 +523,9 @@ def _say_bands(state: dict, facts: dict, now_ms: int) -> list[dict]:
             subs.append(_sub(f"손절선(-{facts['sl_pct']:g}%)까지 {facts['sl_pct'] - abs(pct):.1f}% 남았어요"))
         if deeper:
             subs.append(_sub(f"다음엔 -{deeper[0]}%에서 말할게요"))
-        if loss == 3:
+        if loss == LOSS_BANDS[0]:
             hl = ("어어? 손절 기준이 없는데, 이대로 괜찮으세요?" if facts["sl_pct"] is None
-                  else "어어? -3% 넘었어요")
+                  else f"어어? -{loss}% 넘었어요")
             face, tone = "warning", "warn"
         elif loss == 5:
             face, tone, hl = "critical", "risk", "-5%도 넘었어요. 차분히 볼게요"

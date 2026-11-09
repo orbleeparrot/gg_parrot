@@ -390,28 +390,29 @@ def test_pnl_alerts_fire_once_per_band_and_reset_when_the_position_closes():
     def pnl_alerts():
         return [it for it in _personal(token)["items"] if it["kind"] == "agent" and it["data"].get("event") == "pnl"]
 
-    beat(0.4); beat(1.2); beat(2.9); beat(1.1)
-    assert pnl_alerts() == [], "구간(±3%) 안에서 오르내리면 조용하다 — 예전처럼 1%p 급변마다 알리지 않는다"
-    beat(3.2)
+    beat(0.4); beat(1.2); beat(1.9); beat(1.1)
+    assert pnl_alerts() == [], "구간(±2%) 안에서 오르내리면 조용하다 — 예전처럼 1%p 급변마다 알리지 않는다"
+    beat(2.2)
     alerts = pnl_alerts()
     # 옛 실행기(수수료 반영 값 없음)는 평단 대비 가격 — 제목에 그렇다고 밝힌다.
-    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +3.20%(수수료 전)" and alerts[0]["data"]["direction"] == "up"
+    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +2.20%(수수료 전)" and alerts[0]["data"]["direction"] == "up"
     assert alerts[0]["data"]["fees_included"] is False
-    assert alerts[0]["body"].startswith("수익이 +3%를 넘었어요") and alerts[0]["session_id"] == sid
-    assert alerts[0]["data"]["band"] == 3.0
-    beat(2.8); beat(3.4); beat(4.9)
+    assert alerts[0]["body"].startswith("수익이 +2%를 넘었어요") and alerts[0]["session_id"] == sid
+    assert alerts[0]["data"]["band"] == 2.0, "구간은 데스크톱 실행기와 같다(±2%부터)"
+    beat(1.8); beat(2.4); beat(4.9)
     assert len(pnl_alerts()) == 1, "같은 구간을 경계에서 오가도 다시 알리지 않는다"
     beat(5.1)
     assert len(pnl_alerts()) == 2 and pnl_alerts()[0]["data"]["band"] == 5.0
-    beat(-3.3)  # 반대쪽 구간은 새로 센다
+    beat(-2.3)  # 반대쪽 구간은 새로 센다
     alerts = pnl_alerts()
-    assert len(alerts) == 3 and alerts[0]["data"]["direction"] == "down" and "손실이 -3%를 넘었어요" in alerts[0]["body"]
-    beat(-4.0); beat(-3.1)
+    assert len(alerts) == 3 and alerts[0]["data"]["direction"] == "down" and "손실이 -2%를 넘었어요" in alerts[0]["body"]
+    beat(-4.0); beat(-2.1)
     assert len(pnl_alerts()) == 3
     beat(0.0, in_position=False)  # 포지션 닫힘 → 처음부터 다시
-    beat(-3.5)
-    assert len(pnl_alerts()) == 4 and pnl_alerts()[0]["data"]["band"] == -3.0
-    assert runner_mod._pnl_band(-12.0) == -10.0 and runner_mod._pnl_band(2.99) == 0.0
+    beat(-2.5)
+    assert len(pnl_alerts()) == 4 and pnl_alerts()[0]["data"]["band"] == -2.0
+    assert runner_mod.PNL_ALERT_BANDS == (2.0, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0)
+    assert runner_mod._pnl_band(-12.0) == -10.0 and runner_mod._pnl_band(-16.0) == -15.0 and runner_mod._pnl_band(1.99) == 0.0
     beat(-2.4)
     # 종료 보고 때 마지막 포지션이 결과 화면용으로 남는다
     r = client.post("/api/runner/stopped", json={"session_id": sid, "status": "stopped", "note": "청산 완료 후 종료"}, headers=key)
@@ -441,9 +442,9 @@ def test_pnl_alerts_follow_the_runners_fee_inclusive_pnl():
     def pnl_alerts():
         return [it for it in _personal(token)["items"] if it["kind"] == "agent" and it["data"].get("event") == "pnl"]
 
-    beat(3.1, 2.9)
-    assert pnl_alerts() == [], "가격은 +3% 를 넘었어도 수수료를 빼면 아직 +2.9% — 실행기 화면도 +2.9%"
-    beat(3.25, 3.05)
+    beat(2.1, 1.9)
+    assert pnl_alerts() == [], "가격은 +2% 를 넘었어도 수수료를 빼면 아직 +1.9% — 실행기 화면도 +1.9%"
+    beat(2.25, 2.05)
     alerts = pnl_alerts()
-    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +3.05%"
-    assert alerts[0]["data"]["fees_included"] is True and alerts[0]["data"]["pct"] == 3.05
+    assert len(alerts) == 1 and alerts[0]["title"] == "LTCUSDT 평가손익 +2.05%"
+    assert alerts[0]["data"]["fees_included"] is True and alerts[0]["data"]["pct"] == 2.05

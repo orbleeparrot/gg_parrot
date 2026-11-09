@@ -11,9 +11,13 @@ import { api } from "../api.js";
 import { captureAccountGuard } from "./auth.js";
 import { currentDevice } from "./pwa.js";
 
-export const RECORD_KEY = "ggp_push_device"; // { v: 2, user, endpoint, version, syncedAt, pending? }
+export const RECORD_KEY = "ggp_push_device"; // { v: 2, user, endpoint, version, syncedAt, pending?, op?, startedAt? }
 const LEGACY_KEYS = ["ggp_push_owner", "ggp_push_owner_endpoint", "ggp_push_synced_at"]; // v1 (11/06~11/09 개발판)
 const SYNC_EVERY_MS = 12 * 60 * 60 * 1000;
+// 등록 중 기록이 진행 중인 켜기 없이 남은 것으로 보는 시간 — Web Locks 가 없는 브라우저에서만(있으면 잠금으로 바로 안다).
+// 켜기 안의 기다림(구독 20초 · 서버 등록 10초)보다 길게.
+const PENDING_STALE_MS = 60_000;
+const inflight = new Set(); // 이 탭에서 진행 중인 켜기(등록 중 기록의 op)
 const STATUS_FRESH_MS = 15_000;
 const timing = { ping: 1_500, finalPing: 3_000 };
 
@@ -258,6 +262,7 @@ export function enablePush({ userId, config, win = globalThis.window } = {}) {
   return permission.then((answer) => {
     if (answer !== "granted") return answer === "denied" ? "denied" : "dismissed";
     if (!config?.enabled || !config.public_key) return "unconfigured";
+    const onDone = [];
     return exclusive(async () => {
       if (!current()) return "cancelled";
       const ready = await pushRegistration(win);
@@ -280,7 +285,10 @@ export function enablePush({ userId, config, win = globalThis.window } = {}) {
         await undo();
         return "cancelled";
       }
-      writeRecord({ user: String(userId), endpoint, version: 0, syncedAt: 0, pending: true });
+      const op = Math.random().toString(36).slice(2);
+      inflight.add(op);
+      onDone.push(() => inflight.delete(op));
+      writeRecord({ user: String(userId), endpoint, version: 0, syncedAt: 0, pending: true, op, startedAt: Date.now() });
       const body = subscription.toJSON();
       let saved;
       try {
@@ -299,7 +307,7 @@ export function enablePush({ userId, config, win = globalThis.window } = {}) {
       writeRecord({ user: String(userId), endpoint, version, syncedAt: Date.now() });
       statusMemo = { key: `${userId}|${endpoint}`, at: Date.now(), promise: Promise.resolve({ subscribed: true, version }) };
       return "on";
-    });
+    }).finally(() => onDone.forEach((done) => done()));
   });
 }
 
@@ -352,8 +360,13 @@ async function migrateLegacy({ userId, win, current }) {
   return server.subscribed ? "migrated" : "dropped";
 }
 
-// 앱을 열 때 · 앱으로 돌아올 때 — 이전 형식 기록을 옮기고, 다른 계정이 켠 구독은 끊고, 켜 둔 기기는 가끔(12시간) 서버에
-// 다시 맞춘다. 서버가 이미 지운 기기 · 다른 계정이 가져간 기기는 되살리지 않고 이 기기 구독도 끊는다(서버가 409 로 알린다).
+// 맞추기(reconcile) — 시작 · 로그인 · 연결 복구 · 앱으로 돌아옴 · 다른 창의 변경 때 pushController 가 부른다.
+// 브라우저 구독 · 권한 · 로그인 계정을 보고, 서버에 소유권과 세대를 물어 기기 기록을 확정한다.
+// - 이전 형식 기록은 서버가 확인해 주면 옮긴다(동의 보존). 못 물었으면 다음 기회에.
+// - 진행 중인 켜기 없이 남은 '등록 중' 기록(켜는 도중 앱이 닫힘)은 서버가 가진 그대로 확정하거나 정리한다.
+// - 다른 계정이 켠 구독 · 서버가 지운 구독은 이 기기에서도 끊는다(되살리지 않는다 — 서버가 409 로도 막는다).
+// - 서버 세대가 바뀌었으면 기록에 맞추고, 12시간마다 키 · 시각을 서버에 다시 맞춘다.
+// 결과: skip(못 물음 · 해당 없음) | none | busy | dropped | confirmed | migrated | adopted | fresh | synced | changed | cancelled
 export function syncPush({ userId, win = globalThis.window, now = Date.now() } = {}) {
   if (!userId || pushSupport(win) !== "supported") return Promise.resolve("skip");
   const current = captureAccountGuard({ accountOnly: true });
@@ -368,23 +381,40 @@ export function syncPush({ userId, win = globalThis.window, now = Date.now() } =
       if (record) clearRecord();
       return "none";
     }
-    if (record?.pending && record.user === String(userId) && record.endpoint === subscription.endpoint) return "busy";
+    if (record?.pending && record.user === String(userId) && record.endpoint === subscription.endpoint) {
+      const locks = typeof globalThis.navigator?.locks?.request === "function";
+      if (inflight.has(record.op) || (!locks && now - Number(record.startedAt || 0) < PENDING_STALE_MS)) return "busy";
+      const server = await serverStatus(userId, subscription.endpoint, { force: true, now });
+      if (!current()) return "cancelled";
+      if (server === null) return "skip";
+      if (readRecord()?.op !== record.op) return "changed";
+      if (!server.subscribed) {
+        await dropLocal({ local: true, win });
+        return "dropped";
+      }
+      writeRecord({ user: String(userId), endpoint: subscription.endpoint, version: server.version, syncedAt: now });
+      return "confirmed";
+    }
     if (!owns(record, userId, subscription.endpoint)) {
       await dropLocal({ local: true, win });
       return "dropped";
     }
     if (win.Notification.permission !== "granted") return "skip";
-    if (moved !== "migrated" && now - Number(record.syncedAt || 0) < SYNC_EVERY_MS) return "fresh";
-    const server = await serverStatus(userId, subscription.endpoint, { force: true, now });
-    if (server === null) return "skip"; // 서버에 못 물었다 — 다음에
+    const due = moved === "migrated" || now - Number(record.syncedAt || 0) >= SYNC_EVERY_MS;
+    const server = await serverStatus(userId, subscription.endpoint, { force: due, now });
+    if (server === null) return "skip"; // 서버에 못 물었다 — 다음 기회에
     const latest = await currentSubscription(win);
     // 마지막 기다림 바로 뒤 — 여기서부터 서버에 쓰기까지 기다림이 없다(계정이 바뀌었으면 B 의 토큰으로 A 의 구독을 등록하게 된다).
     if (!current()) return "cancelled";
-    if (latest?.endpoint !== subscription.endpoint || !owns(readRecord(), userId, subscription.endpoint)) return "changed";
+    const mine = readRecord();
+    if (latest?.endpoint !== subscription.endpoint || !owns(mine, userId, subscription.endpoint)) return "changed";
     if (!server.subscribed) {
       await dropLocal({ local: true, win });
       return "dropped";
     }
+    const adopted = server.version !== mine.version;
+    if (adopted) writeRecord({ ...mine, version: server.version }); // 서버가 확인한 세대로 기록을 맞춘다
+    if (!due) return adopted ? "adopted" : "fresh";
     const body = subscription.toJSON();
     let saved;
     try {

@@ -524,6 +524,95 @@ test("한 탭에서 켜고 끄면 다른 탭도 서버 확인을 새로 하고 �
   await one.disable();
   await until(() => two.snapshot().state === "off");
 });
+// --- 맞추기(reconcile) — 앱 재시작 · 연결 복구에서도 상태가 맞는다 ----------------------------------------
+test("켜는 도중 앱이 닫혀 '등록 중' 기록만 남았으면 — 다음 시작 때 서버에 물어 켜짐으로 확정하거나 정리한다", async (t) => {
+  signIn(t, 7);
+  const server = fakeServer(t);
+  const { win, state } = fakeBrowser({ permission: "granted" });
+  const subscription = await win.navigator.serviceWorker.ready.then((reg) => reg.pushManager.subscribe({ applicationServerKey: new Uint8Array(1) }));
+  // 서버는 등록을 받았지만, 기록을 확정하기 전에 앱이 닫혔다(이 탭에는 그 켜기가 돌고 있지 않다).
+  server.rows.set(subscription.endpoint, { user: 7, version: 321 });
+  globalThis.localStorage.setItem("ggp_push_device", JSON.stringify({ v: 2, user: "7", endpoint: subscription.endpoint,
+    version: 0, syncedAt: 0, pending: true, op: "gone-op", startedAt: Date.now() }));
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "off", "확정 전에는 켜짐이 아니다");
+  assert.equal(await syncPush({ userId: 7, win }), "confirmed");
+  assert.deepEqual({ ...readRecord(), syncedAt: 0 }, { v: 2, user: "7", endpoint: subscription.endpoint, version: 321, syncedAt: 0 });
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on");
+  // 서버에 없는 등록 중 기록은 정리한다
+  server.rows.clear();
+  globalThis.localStorage.setItem("ggp_push_device", JSON.stringify({ v: 2, user: "7", endpoint: subscription.endpoint,
+    version: 0, syncedAt: 0, pending: true, op: "gone-op-2", startedAt: Date.now() }));
+  forgetPushStatus();
+  assert.equal(await syncPush({ userId: 7, win }), "dropped");
+  assert.equal(readRecord(), null);
+  assert.equal(state.subscription, null);
+});
+
+test("다른 탭에서 진행 중인 켜기의 '등록 중' 기록은 건드리지 않는다 — 잠금이 없는 브라우저도 1분 안의 기록은 기다린다", async (t) => {
+  const tab2 = await import("../src/lib/push.js?pending-tab=2");
+  signIn(t, 7);
+  tab2.forgetPushStatus();
+  let release = null;
+  let held = false;
+  const { win } = fakeBrowser({ permission: "granted" });
+  fakeServer(t, { delay: async () => {
+    if (!held) {
+      held = true;
+      await new Promise((resolve) => { release = resolve; });
+    }
+  } });
+  Object.defineProperty(globalThis.navigator, "locks", { value: undefined, configurable: true });
+  try {
+    const enabling = enablePush({ userId: 7, config: CONFIG, win }); // 탭1 의 켜기 — 서버 등록 응답을 기다리는 중
+    while (!release) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(readRecord().pending, true);
+    assert.equal(await tab2.syncPush({ userId: 7, win }), "busy", "탭2 는 1분 안의 등록 중 기록을 기다린다");
+    assert.equal(readRecord().pending, true, "건드리지 않았다");
+    release();
+    assert.equal(await enabling, "on");
+    assert.equal(readRecord().pending, undefined);
+  } finally {
+    delete globalThis.navigator.locks;
+  }
+});
+
+test("서버 세대가 바뀌었으면(같은 계정) 기록을 서버에 맞춘다", async (t) => {
+  signIn(t, 7);
+  const server = fakeServer(t);
+  const { win, state } = fakeBrowser();
+  await enablePush({ userId: 7, config: CONFIG, win });
+  server.rows.set(state.subscription.endpoint, { user: 7, version: 4242 });
+  forgetPushStatus();
+  assert.equal(await syncPush({ userId: 7, win }), "adopted");
+  assert.equal(readRecord().version, 4242);
+  assert.equal(await syncPush({ userId: 7, win }), "fresh");
+});
+
+test("이전 형식 기록을 옮기다 오프라인이었으면 — 연결이 돌아오는 것만으로 옮겨 켜짐이 된다(컨트롤러 reconcile)", async (t) => {
+  signIn(t, 7);
+  const server = fakeServer(t);
+  const { win } = fakeBrowser({ permission: "granted" });
+  const events = new EventTarget();
+  win.addEventListener = events.addEventListener.bind(events);
+  const subscription = await win.navigator.serviceWorker.ready.then((reg) => reg.pushManager.subscribe({ applicationServerKey: new Uint8Array(1) }));
+  server.rows.set(subscription.endpoint, { user: 7, version: 77 });
+  globalThis.localStorage.setItem("ggp_push_owner", "7");
+  globalThis.localStorage.setItem("ggp_push_owner_endpoint", subscription.endpoint);
+  const real = api.pushStatus;
+  t.mock.method(api, "pushStatus", async () => { throw new Error("offline"); });
+  const controller = createPushController({ ...push, loadPushConfig: async () => CONFIG }, { win, doc: null });
+  t.after(() => controller.dispose());
+  controller.setUser("7");
+  await until(() => controller.snapshot().state === "loading" && api.pushStatus.mock.callCount() >= 1);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(controller.snapshot().state, "loading", "못 물었으면 옮기지 않고 기다린다");
+  t.mock.method(api, "pushStatus", real);
+  events.dispatchEvent(new Event("online"));
+  await until(() => controller.snapshot().state === "on");
+  assert.equal(readRecord().version, 77);
+  assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), null);
+});
+
 function mulberry32(seed) {
   let a = seed >>> 0;
   return () => {

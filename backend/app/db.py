@@ -715,9 +715,13 @@ class PushSubscription(SQLModel, table=True):
     # 푸시 서비스가 Retry-After 로 '그때까지 보내지 마'라고 한 시각(응답을 받은 시각 기준). 엔드포인트마다 —
     # 이 기기로 가는 모든 전송(새 알림 · 시험 알림 포함)이 기다린다. 더 늦은 값으로만 바뀌고, 받음 응답이 지우지 않는다.
     next_send_ms: int = Field(default=0, sa_type=BigInteger)
-    # 이 엔드포인트가 지금 계정에 묶인 세대. 만들 때 그 시각(ms)으로 시작해 계정이 바뀔 때마다 오른다 — SQLite 가 지운
-    # id 를 다시 써도 세대가 겹치지 않는다.
+    # 이 엔드포인트가 지금 계정에 묶인 세대 — 만들 때와 계정이 바뀔 때마다 새 무작위 값(52비트, 자바스크립트 안전 정수).
+    # 시각과 무관해 같은 밀리초에 지우고 다시 켜도, SQLite 가 지운 id 를 다시 써도 세대가 겹치지 않는다.
     version: int = Field(default=0, sa_type=BigInteger)
+    # 엔드포인트 발송 권한 — 일반 · 시험 알림, 모든 프로세스가 이 한 줄로 조율한다. 한 바퀴가 토큰을 적고 맡은 동안만 이
+    # 엔드포인트로 보낸다(같은 엔드포인트를 두 바퀴가 동시에 쓰지 않게). 결과를 반영하며 풀고, 바퀴가 죽으면 시각이 지나 풀린다.
+    send_token: str = ""
+    send_lease_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class PushOutbox(SQLModel, table=True):
@@ -739,7 +743,8 @@ class PushOutbox(SQLModel, table=True):
     created_ms: int = Field(default=0, sa_type=BigInteger)
     expires_ms: int = Field(default=0, sa_type=BigInteger)  # 이 시각이 지나면 어느 기기에도 보내지 않는다
     sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 끝나지 않은 기기가 있다. 모든 기기가 끝난 시각
-    # 끝난 까닭(기기별 결과를 모아) — delivered(한 대라도 받음) · gave_up · expired · failed · cancelled.
+    # 끝난 까닭(기기별 결과를 모아) — accepted(한 대라도 푸시 서비스가 받음 — 기기에 표시됐다는 뜻은 아니다) · gave_up ·
+    # expired · failed · cancelled · no_device.
     result: str = ""
 
 
@@ -1400,6 +1405,9 @@ class NotificationReceipt(SQLModel, table=True):
     read_ms: int = Field(default=0, sa_type=BigInteger)
 
 
+_SQLITE_DROPPED_COLUMNS = {"pushoutbox": ("lease_ms", "attempts", "done_json")}
+
+
 def _migrate() -> None:
     """Add columns introduced after a table was first created (SQLite create_all
     does not ALTER existing tables). Idempotent and safe to run every startup."""
@@ -1565,6 +1573,8 @@ def _migrate() -> None:
         "pushsubscription": {
             "next_send_ms": "ALTER TABLE pushsubscription ADD COLUMN next_send_ms INTEGER NOT NULL DEFAULT 0",
             "version": "ALTER TABLE pushsubscription ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
+            "send_token": "ALTER TABLE pushsubscription ADD COLUMN send_token TEXT NOT NULL DEFAULT ''",
+            "send_lease_ms": "ALTER TABLE pushsubscription ADD COLUMN send_lease_ms INTEGER NOT NULL DEFAULT 0",
         },
     }
     added.setdefault("runnerlaunchticket", {}).update({
@@ -1595,6 +1605,14 @@ def _migrate() -> None:
             for col, ddl in cols.items():
                 if col not in existing:
                     conn.exec_driver_sql(ddl)
+        # 모델에서 빠진 칸 — 옛 모델이 NOT NULL(기본값 없음)로 만든 칸이 남으면 새 INSERT 가 그 칸을 빼고 써서 실패한다
+        # (2026-11-09: pushoutbox 의 lease_ms · attempts · done_json 은 기기별 전송 표로 옮김). 색인 · 제약이 없는 칸이라
+        # SQLite 3.35+ 의 DROP COLUMN 으로 지운다. Postgres 는 마이그레이션 20261109120000 이 지운다.
+        for table, cols in _SQLITE_DROPPED_COLUMNS.items():
+            existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+            for col in cols:
+                if col in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {col}")
         # ALTER TABLE cannot add an indexed SQLModel field in SQLite. Keep the
         # lookup index explicit for upgraded databases as well as fresh ones.
         conn.exec_driver_sql(
@@ -1649,10 +1667,12 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
-    # 앱 알림 — 끝난 까닭 · 엔드포인트 대기(20261109100000) · 이벤트 만료 시각 · 구독 세대(20261109120000).
+    # 앱 알림 — 끝난 까닭 · 엔드포인트 대기(20261109100000) · 이벤트 만료 시각 · 구독 세대(20261109120000) ·
+    # 엔드포인트 발송 권한(20261109150000).
     # 기기별 전송은 새 표(pushdelivery)라 create_all 이 만든다. 마이그레이션과 같은 정의.
     "pushoutbox": {"expires_ms": "BIGINT NOT NULL DEFAULT 0", "result": "VARCHAR NOT NULL DEFAULT ''"},
-    "pushsubscription": {"next_send_ms": "BIGINT NOT NULL DEFAULT 0", "version": "BIGINT NOT NULL DEFAULT 0"},
+    "pushsubscription": {"next_send_ms": "BIGINT NOT NULL DEFAULT 0", "version": "BIGINT NOT NULL DEFAULT 0",
+                         "send_token": "VARCHAR NOT NULL DEFAULT ''", "send_lease_ms": "BIGINT NOT NULL DEFAULT 0"},
     # 코인동향 소식 목록 SQL 쪽 나누기(2026-10-18) — 번역 대기 글 숨김 · 검색어 거르기. 마이그레이션 20261018000000 과 같은 정의.
     "trendarticle": {"visible": "BOOLEAN NOT NULL DEFAULT TRUE", "search_text": "VARCHAR NOT NULL DEFAULT ''"},
     "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''",

@@ -190,7 +190,7 @@ def test_subscribe_status_and_unsubscribe(vapid_on):
     other = _signup()
     assert _status(other, sub) == {"subscribed": False, "version": 0}
     # 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮기고 세대를 올린다 — 앞 계정의 소식이 이 기기에 오지 않는다.
-    assert _on(other, sub)["version"] > first
+    assert _on(other, sub)["version"] != first, "세대는 시각과 무관한 새 값"
     assert _status(token, sub)["subscribed"] is False
     assert client.post("/api/me/push/unsubscribe", json={"endpoint": sub["endpoint"]}, headers=_auth(other)).json() == {
         "subscribed": False}
@@ -386,7 +386,7 @@ def test_agent_commentary_reaches_every_device_once(vapid_on):
         with get_session() as db:
             left = db.exec(select(PushSubscription.endpoint).where(PushSubscription.user_id == user_id)).all()
         assert left == [phone["endpoint"]], "끝난 구독(410)은 지운다"
-        assert {row.result for row in _rows(user_id)} == {"delivered"}
+        assert {row.result for row in _rows(user_id)} == {"accepted"}
         assert {d.state for d in _deliveries(user_id) if d.endpoint == laptop["endpoint"]} <= {"failed", "cancelled"}
     finally:
         _stop(key, first)
@@ -427,6 +427,49 @@ def test_the_quiet_bubble_stays_in_the_chat(vapid_on):
     assert [row.dedupe_key for row in _rows(user_id)] == ["s78:loss:e100:2"]
 
 
+def test_an_alert_that_could_not_be_queued_is_made_again_next_cycle(vapid_on, monkeypatch):
+    """말풍선 · 커서와 알림 이벤트는 함께 — 쌓다 실패하면 말풍선까지 되돌려 다음 바퀴에 다시 만든다(영구 누락 없음).
+    PUSH_RETRY_CYCLES 번 연달아 실패하면 채팅을 막지 않도록 말풍선만 남긴다."""
+    token = _signup()
+    user_id = _user_id(token)
+    key = _key(token)
+    _on(token)
+    sid = _start(key)
+    real = push_alerts._queue
+    broken = {"left": 1}
+
+    def flaky(*args, **kwargs):
+        if broken["left"]:
+            broken["left"] -= 1
+            raise RuntimeError("delivery insert failed")
+        return real(*args, **kwargs)
+    monkeypatch.setattr(push_alerts, "_queue", flaky)
+    try:
+        now = int(time.time() * 1000)
+        _cycle(now, [], 1)
+        with get_session() as db:
+            assert db.exec(select(ac.AgentUtterance).where(ac.AgentUtterance.session_id == sid)).first() is None, \
+                "알림을 못 쌓았으면 말풍선도 되돌린다"
+            assert db.get(ac.AgentCommentaryState, sid) is None, "중계 커서도"
+        _cycle(now + 1_000, [], 1)
+        assert f"s{sid}:start" in {row.dedupe_key for row in _rows(user_id)}, "다음 바퀴에 다시 만든다"
+        broken["left"] = ac.PUSH_RETRY_CYCLES  # 이번엔 계속 실패한다
+        before = _rows(user_id)
+        r = client.post("/api/runner/heartbeat", json={"session_id": sid, "last_price": 100.0, "in_position": True,
+                                                       "entry_price": 100.0, "position_qty": 1.0, "events": [
+            {"kind": "fill", "message": "실전 주문 결과", "event_name": "runner.order_result", "event_key": "fill-q",
+             "details": {"action": "BUY", "executed_qty": 1.0, "fill_price": 100.0}}]}, headers={"X-Runner-Key": key})
+        assert r.status_code == 200, r.text
+        for step in range(ac.PUSH_RETRY_CYCLES):
+            _cycle(now + 2_000 + step * 1_000, [], 1)
+        with get_session() as db:
+            kinds = [row.kind for row in db.exec(select(ac.AgentUtterance).where(ac.AgentUtterance.session_id == sid))]
+        assert "fill" in kinds, "계속 실패하면 채팅은 남긴다(알림만 빠지고 크게 남긴다)"
+        assert len(_rows(user_id)) == len(before)
+    finally:
+        _stop(key, sid)
+
+
 def test_accounts_without_a_device_queue_nothing(vapid_on):
     token = _signup()
     key = _key(token)
@@ -456,7 +499,7 @@ def test_one_device_failing_never_spends_another_devices_tries(vapid_on):
     assert _delivery(event, broken).state == "gave_up" and _delivery(event, broken).attempts == push_alerts.MAX_ATTEMPTS
     assert _delivery(event, slow).state == "accepted" and _delivery(event, slow).attempts == 2, \
         "고장 난 기기가 시도를 다 써도 다른 기기는 제 차례에 받는다"
-    assert _event_row(event).result == "delivered"
+    assert _event_row(event).result == "accepted"
 
 
 def test_a_device_turned_on_later_does_not_get_earlier_alerts(vapid_on):
@@ -507,7 +550,7 @@ def test_a_crash_while_sending_does_not_lose_the_alert(vapid_on):
     assert push_alerts.dispatch(now_ms=base + 2_000, send=service) == {"claimed": 0}, "맡은 동안 다른 바퀴가 겹쳐 보내지 않는다"
     result = push_alerts.dispatch(now_ms=base + 1_000 + push_alerts.LEASE_MS, send=service)
     assert (result["claimed"], result["sent"]) == (1, 1) and service.sent_to(sub) == [event]
-    assert _event_row(event).result == "delivered"
+    assert _event_row(event).result == "accepted"
 
 
 def test_a_late_pass_cannot_overwrite_the_pass_that_took_over(vapid_on):
@@ -598,8 +641,8 @@ def test_a_new_alert_and_a_test_push_both_wait_for_the_device(vapid_on):
 
 
 def test_a_wait_is_written_the_moment_it_arrives(vapid_on, monkeypatch):
-    """한 바퀴가 기기 A 에서 '기다려'를 받고 다른 기기로 보내는 사이 — 다른 바퀴가 A 에 새 알림을 보내지 않는다
-    (대기를 바퀴 끝이 아니라 받는 즉시 적는다)."""
+    """한 바퀴가 기기 A 에서 '기다려'를 받고 기기 B 로 보내는 사이 — 다른 바퀴는 A 에도(대기를 받는 즉시 적는다),
+    B 에도(그 바퀴가 B 의 발송 권한을 쥐고 있다) 보내지 않는다. B 의 새 알림은 권한이 풀린 뒤 차례로 간다."""
     monkeypatch.setattr(push_alerts, "SEND_THREADS", 1)
     token = _signup()
     user_id = _user_id(token)
@@ -617,7 +660,99 @@ def test_a_wait_is_written_the_moment_it_arrives(vapid_on, monkeypatch):
         return web_push.SENT
     push_alerts.dispatch(now_ms=base, send=outer)
     assert inner.sent_to(first) == [], "다른 바퀴도 A 의 대기를 안다"
-    assert len(inner.sent_to(second)) == 1
+    assert inner.sent_to(second) == [], "B 는 바깥 바퀴가 보내는 중 — 같은 엔드포인트를 두 바퀴가 함께 쓰지 않는다"
+    later = Service()
+    push_alerts.dispatch(now_ms=base + 1_000, send=later)
+    assert len(later.sent_to(second)) == 1 and later.sent_to(first) == []
+
+
+def test_a_test_push_cannot_cut_into_an_endpoint_another_pass_is_using(vapid_on, monkeypatch):
+    """규칙 3 — 발송 권한은 엔드포인트마다 하나(일반 · 시험 공통). 일반 바퀴가 보내는 중인 기기에 시험 알림이 끼어들어
+    같은 엔드포인트를 동시에 쓰지 않는다 — 시험 알림은 그 바퀴가 끝난 뒤 차례로 간다."""
+    monkeypatch.setattr(push_alerts.time, "sleep", lambda seconds: None)
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    _event(user_id, "fill:busy-1", base)
+    _event(user_id, "fill:busy-2", base)
+    test_results, inside = [], Service()
+
+    def background(subscription, data, **kwargs):
+        if not test_results:
+            test_results.append(push_alerts.send_test(user_id, now_ms=base, send=inside))
+        return web_push.SENT
+    push_alerts.dispatch(now_ms=base, send=background)
+    assert inside.log == [], "일반 바퀴가 쥔 엔드포인트로 시험 알림이 동시에 나가지 않는다"
+    assert test_results == [{"sent": 0, "devices": 1, "retry": 1}]
+    after = Service()
+    push_alerts.dispatch(now_ms=base + 1_000, send=after)
+    assert len(after.sent_to(sub)) == 1, "권한이 풀린 뒤 시험 알림이 간다"
+
+
+def test_a_pass_that_lost_its_authority_cannot_touch_the_subscription(vapid_on, send_clock):
+    """규칙 2 — 맡은 시간을 넘긴 옛 바퀴의 늦은 실패 10건이, 그사이 다른 바퀴가 받아 낸 정상 구독을 지우고 새 알림까지
+    취소하지 않는다(결과를 실제로 쓴 전송 · 아직 쥔 엔드포인트의 응답만 구독에 반영)."""
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    for index in range(push_alerts.FAIL_LIMIT):
+        _event(user_id, f"fill:stale-{index}", base)
+    calls = {"old": 0}
+    took_over = []
+
+    def replacement(subscription, data, **kwargs):
+        return web_push.SENT
+
+    def old(subscription, data, **kwargs):
+        calls["old"] += 1
+        if calls["old"] == push_alerts.FAIL_LIMIT:  # 마지막 응답이 늦게 닿는 사이 맡은 시간이 지나 새 바퀴가 돈다
+            send_clock["s"] += push_alerts.LEASE_MS / 1000 + 1
+            took_over.append(push_alerts.dispatch(now_ms=base + push_alerts.LEASE_MS + 1_000, send=replacement))
+            _event(user_id, "fill:after-takeover", base + push_alerts.LEASE_MS + 2_000)
+        return web_push.FAILED
+    result = push_alerts.dispatch(now_ms=base, send=old)
+    assert took_over[0]["sent"] == push_alerts.FAIL_LIMIT and result["lost"] == push_alerts.FAIL_LIMIT
+    assert _status(token, sub)["subscribed"] is True, "정상 구독을 지우지 않는다"
+    with get_session() as db:
+        row = db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).one()
+        assert row.fail_count == 0 and row.send_token == ""
+        fresh = db.exec(select(PushDelivery.state).join(PushOutbox, PushOutbox.id == PushDelivery.event_id).where(
+            PushOutbox.dedupe_key == "s77:fill:after-takeover")).one()
+    assert fresh == "pending", "새 알림을 취소하지 않는다"
+
+
+def test_a_regenerated_subscription_never_reuses_its_generation(vapid_on):
+    """세대는 시각과 무관 — 같은 밀리초에 지우고 다시 켜도 새 세대라, 옛 세대를 기대한 늦은 해제가 새 등록을 지우지 않는다."""
+    token = _signup()
+    user_id = _user_id(token)
+    sub = device()
+    first = push_alerts.subscribe(user_id, sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"], now_ms=5)["version"]
+    push_alerts.unsubscribe(user_id, sub["endpoint"], now_ms=5)
+    second = push_alerts.subscribe(user_id, sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"], now_ms=5)["version"]
+    assert second != first and 0 < second < 2**53, "자바스크립트 안전 정수 안의 새 값"
+    push_alerts.unsubscribe(user_id, sub["endpoint"], expected_version=first, now_ms=5)
+    assert _status(token, sub) == {"subscribed": True, "version": second}
+
+
+def test_registrations_for_one_account_take_turns_on_postgres(monkeypatch):
+    """기기 수 상한은 계정마다 한 줄로 — Postgres 에서는 등록 · 상한 처리를 계정 잠금(pg_advisory_xact_lock) 안에서 한다
+    (동시 등록 두 건이 각자 '아직 10대'로 보고 11대가 남던 것). SQLite 는 쓰기가 원래 한 줄."""
+    seen = []
+
+    class Bind:
+        class dialect:
+            name = "postgresql"
+
+    class FakeSession:
+        def get_bind(self):
+            return Bind()
+
+        def execute(self, statement, params):
+            seen.append((str(statement), params))
+    push_alerts._lock_account(FakeSession(), 7)
+    assert seen == [("SELECT pg_advisory_xact_lock(:space, :user_id)", {"space": push_alerts._DEVICE_LOCK, "user_id": 7})]
 
 
 def test_a_success_never_clears_a_newer_wait(vapid_on):
@@ -725,37 +860,46 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
     engine = create_engine(f"sqlite:///{tmp_path / 'older-push.db'}")
     monkeypatch.setattr(db_mod, "_engine", engine)
     with engine.begin() as conn:
-        conn.exec_driver_sql("""CREATE TABLE pushoutbox (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
-            dedupe_key VARCHAR NOT NULL, payload_json VARCHAR NOT NULL DEFAULT '', created_ms BIGINT NOT NULL DEFAULT 0,
-            sent_ms BIGINT NOT NULL DEFAULT 0, lease_ms BIGINT NOT NULL DEFAULT 0, attempts INTEGER NOT NULL DEFAULT 0,
-            done_json VARCHAR NOT NULL DEFAULT '')""")
-        conn.exec_driver_sql("""CREATE TABLE pushsubscription (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
-            endpoint VARCHAR NOT NULL, p256dh VARCHAR NOT NULL, auth VARCHAR NOT NULL, platform VARCHAR NOT NULL DEFAULT '',
-            created_ms BIGINT NOT NULL DEFAULT 0, updated_ms BIGINT NOT NULL DEFAULT 0, last_ok_ms BIGINT NOT NULL DEFAULT 0,
-            fail_count INTEGER NOT NULL DEFAULT 0)""")
+        # d8070d28 의 SQLModel 이 create_all 로 만든 그대로 — NOT NULL 이고 DB 기본값이 없다(리뷰 재현 DDL).
+        conn.exec_driver_sql("""CREATE TABLE pushoutbox (id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+            dedupe_key VARCHAR NOT NULL, payload_json VARCHAR NOT NULL, created_ms BIGINT NOT NULL, sent_ms BIGINT NOT NULL,
+            lease_ms BIGINT NOT NULL, attempts INTEGER NOT NULL, done_json VARCHAR NOT NULL, result VARCHAR NOT NULL,
+            PRIMARY KEY (id))""")
+        conn.exec_driver_sql("""CREATE TABLE pushsubscription (id INTEGER NOT NULL, user_id INTEGER NOT NULL,
+            endpoint VARCHAR NOT NULL, p256dh VARCHAR NOT NULL, auth VARCHAR NOT NULL, platform VARCHAR NOT NULL,
+            created_ms BIGINT NOT NULL, updated_ms BIGINT NOT NULL, last_ok_ms BIGINT NOT NULL, fail_count INTEGER NOT NULL,
+            next_send_ms BIGINT NOT NULL, PRIMARY KEY (id))""")
         conn.exec_driver_sql("CREATE UNIQUE INDEX ux_pushoutbox_user_key ON pushoutbox (user_id, dedupe_key)")
+        conn.exec_driver_sql("CREATE INDEX ix_pushoutbox_sent_id ON pushoutbox (sent_ms, id)")
         conn.exec_driver_sql("CREATE UNIQUE INDEX ux_pushsubscription_endpoint ON pushsubscription (endpoint)")
         kept = device()
-        conn.exec_driver_sql("INSERT INTO pushsubscription (id, user_id, endpoint, p256dh, auth) VALUES (1, 41, ?, ?, ?)",
+        conn.exec_driver_sql("""INSERT INTO pushsubscription (id, user_id, endpoint, p256dh, auth, platform, created_ms,
+            updated_ms, last_ok_ms, fail_count, next_send_ms) VALUES (1, 41, ?, ?, ?, 'android', 1, 1, 0, 0, 0)""",
                              (kept["endpoint"], kept["keys"]["p256dh"], kept["keys"]["auth"]))
+        conn.exec_driver_sql("""INSERT INTO pushoutbox VALUES (1, 41, 'old', '{}', 1, 0, 0, 0, '', '')""")
     try:
         db_mod.init_db()
         db_mod.init_db()
         assert {"version", "next_send_ms"} <= {col["name"] for col in inspect(engine).get_columns("pushsubscription")}
         assert "expires_ms" in {col["name"] for col in inspect(engine).get_columns("pushoutbox")}
         assert "pushdelivery" in inspect(engine).get_table_names()
+        assert not {"lease_ms", "attempts", "done_json"} & {col["name"] for col in inspect(engine).get_columns("pushoutbox")}, \
+            "옛 NOT NULL 칸을 지운다 — 남으면 새 INSERT 가 그 칸을 빼고 써서 실패한다"
+        assert {"send_token", "send_lease_ms"} <= {col["name"] for col in inspect(engine).get_columns("pushsubscription")}
         assert push_alerts.status(41, kept["endpoint"]) == {"subscribed": True, "version": 0}, "켜 둔 기기는 그대로"
         base = _base()
         _event(41, "fill:after-upgrade", base)
         service = Service()
         push_alerts.dispatch(now_ms=base, send=service)
         assert len(service.sent_to(kept)) == 1, "업그레이드 뒤에도 보낸다"
+        assert push_alerts.send_test(41, now_ms=base + 60_000, send=service)["sent"] == 1, "시험 알림도"
     finally:
         engine.dispose()
     # 운영(Postgres) 기동 보정도 같은 칸을 더한다 — 마이그레이션과 같은 정의.
     from tests.test_db_startup_migrations import current_schema
     state = current_schema()
     for table, column in (("pushsubscription", "version"), ("pushsubscription", "next_send_ms"),
+                          ("pushsubscription", "send_token"), ("pushsubscription", "send_lease_ms"),
                           ("pushoutbox", "expires_ms"), ("pushoutbox", "result")):
         state["columns"].pop((table, column))
     statements = db_mod._pg_migration_statements(state)
@@ -764,6 +908,8 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
         "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS result VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS next_send_ms BIGINT NOT NULL DEFAULT 0",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_token VARCHAR NOT NULL DEFAULT ''",
+        "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_lease_ms BIGINT NOT NULL DEFAULT 0",
     ]
 
 
@@ -802,12 +948,22 @@ def test_rules_hold_when_everything_happens_at_once(vapid_on, send_clock, monkey
     extra = {"resends": 0}
     terminal: dict[int, str] = {}
 
+    def refresh_owners():
+        """받는 기기는 그 순간 DB 에 있는 구독 — 410 을 받아도 권한을 잃은 옛 바퀴의 것이면 지우지 않으므로 DB 를 본다."""
+        owners.clear()
+        with get_session() as db:
+            for endpoint, user, version in db.exec(select(PushSubscription.endpoint, PushSubscription.user_id,
+                                                          PushSubscription.version)
+                                                   .where(PushSubscription.user_id.in_(users))).all():
+                owners[endpoint] = (user, version)
+
     def register(user, sub=None):
         sub = sub or device()
-        result = push_alerts.subscribe(user, sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"], now_ms=now())
-        if sub["endpoint"] in owners and owners[sub["endpoint"]][0] != user:
+        refresh_owners()
+        before = owners.get(sub["endpoint"])
+        push_alerts.subscribe(user, sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"], now_ms=now())
+        if before and before[0] != user:
             moved.setdefault(sub["endpoint"], []).append((now(), user))
-        owners[sub["endpoint"]] = (user, result["version"])
         subs[sub["endpoint"]] = sub
 
     def answer():
@@ -834,8 +990,6 @@ def test_rules_hold_when_everything_happens_at_once(vapid_on, send_clock, monkey
         endpoint = subscription["endpoint"]
         if outcome == web_push.RETRY and getattr(outcome, "retry_after_s", 0):
             holds[endpoint] = max(holds.get(endpoint, 0), now() + outcome.retry_after_s * 1000)
-        if outcome == web_push.GONE:
-            owners.pop(endpoint, None)
         return outcome
 
     def service(subscription, data, *, ttl, urgency, **kwargs):
@@ -847,6 +1001,7 @@ def test_rules_hold_when_everything_happens_at_once(vapid_on, send_clock, monkey
     for step in range(60):
         send_clock["s"] += rng.choice([5, 30, 90, 240, 600])
         action = rng.random()
+        refresh_owners()
         if action < 0.3:
             user = rng.choice(users)
             recipients = {e for e, (u, _) in owners.items() if u == user}

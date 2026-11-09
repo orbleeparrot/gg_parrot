@@ -1120,8 +1120,23 @@ def evaluate_session(session_id: int, *, now_ms: Optional[int] = None, candles_f
     from . import push_alerts
     with get_session() as db:
         added = save(db, facts, says, next_state, now_ms=now_ms)
-        # 말풍선은 앱 알림으로도 — 같은 트랜잭션에 쌓아, 커밋된 말풍선만 울린다.
-        queued = push_alerts.enqueue_says(db, facts, says, now_ms=now_ms) if added else 0
+        # 말풍선은 앱 알림으로도 — 같은 트랜잭션에 쌓아, 커밋된 말풍선만 울린다. 알림을 쌓다 실패하면 말풍선 · 커서까지
+        # 되돌려 다음 바퀴에 다시 한다(PUSH_RETRY_CYCLES 번). 그래도 안 되면 채팅을 막지 않도록 말풍선만 남기고 크게 남긴다.
+        queued = 0
+        if added:
+            try:
+                queued = push_alerts.enqueue_says(db, facts, says, now_ms=now_ms)
+                _PUSH_FAILURES.pop(session_id, None)
+            except Exception:
+                count = _PUSH_FAILURES[session_id] = _PUSH_FAILURES.get(session_id, 0) + 1
+                if count < PUSH_RETRY_CYCLES:
+                    db.rollback()
+                    log.warning("push enqueue failed; commentary rolled back to retry (session=%s, times=%s)",
+                                session_id, count, exc_info=count == 1)
+                    return 0
+                _PUSH_FAILURES.pop(session_id, None)
+                log.error("push enqueue failed %s times; keeping the chat without app alerts (session=%s)",
+                          count, session_id, exc_info=True)
         db.commit()
     if queued:
         from . import push_runtime
@@ -1152,10 +1167,15 @@ def run_cycle(*, now_ms: Optional[int] = None, claim: bool = True, **sources) ->
                         exc_info=count == 1 or count % 60 == 0)
     if len(_FAILURES) > 1000:
         _FAILURES.clear()
+    if len(_PUSH_FAILURES) > 1000:
+        _PUSH_FAILURES.clear()
     return {"skipped": False, "sessions": len(targets), "added": added, "failed": failed}
 
 
 _FAILURES: dict[int, int] = {}
+# 앱 알림을 쌓지 못해 말풍선까지 되돌린 횟수(세션마다) — 이만큼이면 채팅은 남긴다(바퀴 10초 · 약 30초).
+PUSH_RETRY_CYCLES = 3
+_PUSH_FAILURES: dict[int, int] = {}
 
 
 def kst_clock(ms: int) -> str:

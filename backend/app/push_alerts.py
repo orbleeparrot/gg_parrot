@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import delete as sql_delete, update
+from sqlalchemy import and_, delete as sql_delete, func, update
 from sqlmodel import select
 
 from . import web_push
@@ -81,7 +81,7 @@ def subscribe(user_id: int, endpoint: str, p256dh: str, auth: str, platform: str
     with get_session() as db:
         statement = _insert(db)(PushSubscription).values(
             user_id=user_id, endpoint=endpoint, p256dh=p256dh, auth=auth, platform=platform,
-            created_ms=now_ms, updated_ms=now_ms, last_ok_ms=0, fail_count=0)
+            created_ms=now_ms, updated_ms=now_ms, last_ok_ms=0, fail_count=0, next_send_ms=0)
         db.exec(statement.on_conflict_do_update(
             index_elements=[PushSubscription.endpoint],
             set_={"user_id": user_id, "p256dh": p256dh, "auth": auth, "platform": platform,
@@ -165,7 +165,7 @@ def enqueue_says(db, facts: dict, says: list[dict], *, now_ms: int) -> int:
         return 0
     user_id = int(facts["user_id"])
     rows = [{"user_id": user_id, "dedupe_key": _dedupe_key(facts, say)[:160], "created_ms": now_ms, "sent_ms": 0,
-             "lease_ms": 0, "attempts": 0, "done_json": "",
+             "lease_ms": 0, "attempts": 0, "done_json": "", "result": "",
              "payload_json": json.dumps(say_payload(facts, say), ensure_ascii=False, separators=(",", ":"))}
             for say in chosen]
     try:
@@ -183,14 +183,25 @@ def enqueue_says(db, facts: dict, says: list[dict], *, now_ms: int) -> int:
 
 
 # --- 보내기 -------------------------------------------------------------------
-def _send_all(jobs: list[tuple[dict, bytes]], send: Callable) -> list[str]:
+def _monotonic() -> float:
+    return time.monotonic()
+
+
+def _send_all(jobs: list[tuple[dict, bytes]], send: Callable) -> list[tuple[str, int]]:
+    """jobs 를 보내고 (결과, 보내기 시작부터 그 응답까지 걸린 ms) 목록을 돌려준다.
+
+    다음 시도 시각은 응답을 받은 때부터 센다 — 큰 묶음을 보내는 데 걸린 시간만큼 기다림이 줄지 않게.
+    """
+    started = _monotonic()
+
     def one(job):
         subscription, payload = job
         try:
-            return send(subscription, payload, ttl=TTL_SECONDS, urgency="high")
+            outcome = send(subscription, payload, ttl=TTL_SECONDS, urgency="high")
         except Exception:
             log.warning("web push send crashed", exc_info=True)
-            return web_push.RETRY
+            outcome = web_push.RETRY
+        return outcome, max(0, int((_monotonic() - started) * 1000))
     if len(jobs) <= 1:
         return [one(job) for job in jobs]
     with ThreadPoolExecutor(max_workers=min(SEND_THREADS, len(jobs)), thread_name_prefix="ggp-push") as pool:
@@ -201,26 +212,46 @@ def _encode(payload: dict) -> bytes:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
-def _device_results(db, jobs: list[tuple[dict, bytes]], outcomes: list[str], *, now_ms: int) -> dict:
+def _second(ms: int) -> int:
+    return -(-int(ms) // 1000) * 1000  # 초 단위로 올림 — 같은 처지의 줄을 묶어 쓰게(운영 DB 왕복 80ms)
+
+
+def _mine(rows: dict[int, str]):
+    """보낸 그 구독만 — id 와 엔드포인트가 둘 다 맞아야 한다. SQLite 는 지운 id 를 다시 쓰므로, 보내는 사이 껐다 켜서
+    같은 id 를 받은 새 구독이 옛 구독의 410 결과로 지워지지 않게."""
+    return and_(PushSubscription.id.in_(list(rows)), PushSubscription.endpoint.in_(list(rows.values())))
+
+
+def _device_results(db, jobs: list[tuple[dict, bytes]], results: list[tuple[str, int]], *, now_ms: int) -> dict:
     """보낸 결과로 기기 상태를 고친다(커밋은 호출자). 기기 수로 센다.
 
-    받음은 실패 횟수를 지우고, 끝난 구독(404 · 410)은 지우고, 거절(그 밖의 4xx)은 세다가 FAIL_LIMIT 번이면 지운다.
-    잠깐 막힘(429 · 5xx · 연결 실패)은 기기를 그대로 둔다 — 그 알림은 dispatch 가 다시 보낸다.
+    받음은 실패 횟수와 대기를 지우고, 끝난 구독(404 · 410)은 지우고, 거절(그 밖의 4xx)은 세다가 FAIL_LIMIT 번이면 지운다.
+    잠깐 막힘(429 · 5xx · 연결 실패)은 기기를 그대로 두되, Retry-After 를 받았으면 그 기기의 next_send_ms 에 응답 시각
+    기준으로 적는다 — 그 기기에 가는 모든 알림(새로 쌓인 것까지)이 그때까지 기다린다.
     """
-    ok, gone, failed, retry = set(), set(), set(), set()
-    for (subscription, _), outcome in zip(jobs, outcomes):
-        {web_push.SENT: ok, web_push.GONE: gone, web_push.FAILED: failed}.get(outcome, retry).add(subscription["id"])
-    failed -= ok | gone
-    retry -= ok | gone | failed
+    ok, gone, failed, retry, hold = {}, {}, {}, {}, {}
+    for (subscription, _), (outcome, elapsed) in zip(jobs, results):
+        key, endpoint = subscription["id"], subscription["endpoint"]
+        {web_push.SENT: ok, web_push.GONE: gone, web_push.FAILED: failed}.get(outcome, retry)[key] = endpoint
+        after = int(getattr(outcome, "retry_after_s", 0) or 0)
+        if outcome == web_push.RETRY and after:
+            until = _second(now_ms + elapsed + after * 1000)
+            hold[key] = (endpoint, max(until, hold.get(key, (endpoint, 0))[1]))
+    failed = {key: value for key, value in failed.items() if key not in ok and key not in gone}
+    retry = {key: value for key, value in retry.items() if key not in ok and key not in gone and key not in failed}
     if gone:
-        db.exec(sql_delete(PushSubscription).where(PushSubscription.id.in_(gone)))
+        db.exec(sql_delete(PushSubscription).where(_mine(gone)))
     if ok:
-        db.exec(update(PushSubscription).where(PushSubscription.id.in_(ok)).values(last_ok_ms=now_ms, fail_count=0))
+        db.exec(update(PushSubscription).where(_mine(ok)).values(last_ok_ms=now_ms, fail_count=0, next_send_ms=0))
     if failed:
-        db.exec(update(PushSubscription).where(PushSubscription.id.in_(failed))
-                .values(fail_count=PushSubscription.fail_count + 1))
-        db.exec(sql_delete(PushSubscription).where(PushSubscription.id.in_(failed),
-                                                   PushSubscription.fail_count >= FAIL_LIMIT))
+        db.exec(update(PushSubscription).where(_mine(failed)).values(fail_count=PushSubscription.fail_count + 1))
+        db.exec(sql_delete(PushSubscription).where(_mine(failed), PushSubscription.fail_count >= FAIL_LIMIT))
+    by_until: dict[int, dict[int, str]] = {}
+    for key, (endpoint, until) in hold.items():
+        if key not in gone:
+            by_until.setdefault(until, {})[key] = endpoint
+    for until, rows in by_until.items():
+        db.exec(update(PushSubscription).where(_mine(rows)).values(next_send_ms=until))
     return {"sent": len(ok), "gone": len(gone), "failed": len(failed), "retry": len(retry), "jobs": len(jobs)}
 
 
@@ -229,9 +260,9 @@ def _deliver(payloads: list[tuple[int, dict]], subscriptions: list[dict], *, now
     """(user_id, 알림) 목록을 그 계정 기기마다 한 번 보내고(다시 보내지 않는다), 결과로 기기 상태를 고친다."""
     jobs = [(subscription, _encode(payload)) for user_id, payload in payloads
             for subscription in subscriptions if subscription["user_id"] == user_id]
-    outcomes = _send_all(jobs, send)
+    results = _send_all(jobs, send)
     with get_session() as db:
-        result = _device_results(db, jobs, outcomes, now_ms=now_ms)
+        result = _device_results(db, jobs, results, now_ms=now_ms)
         db.commit()
     return result
 
@@ -239,7 +270,7 @@ def _deliver(payloads: list[tuple[int, dict]], subscriptions: list[dict], *, now
 def _subscriptions_for(db, user_ids) -> list[dict]:
     rows = db.exec(select(PushSubscription).where(PushSubscription.user_id.in_(list(user_ids)))).all()
     return [{"id": row.id, "user_id": row.user_id, "endpoint": row.endpoint, "p256dh": row.p256dh,
-             "auth": row.auth} for row in rows]
+             "auth": row.auth, "next_send_ms": int(row.next_send_ms or 0)} for row in rows]
 
 
 def _ids(text: str) -> set[int]:
@@ -249,13 +280,22 @@ def _ids(text: str) -> set[int]:
         return set()
 
 
+def _owned(ids, tries: int) -> tuple:
+    """이 작업이 아직 맡고 있는 줄. 꺼낼 때마다 attempts 가 오르므로, 맡은 시간이 지나 다른 작업이 다시 꺼낸 줄은
+    attempts 가 이미 달라 걸리지 않는다 — 늦게 끝난 옛 작업이 새 작업의 결과(받은 기기 · 다음 시각)를 덮지 않게."""
+    return PushOutbox.id.in_(list(ids)), PushOutbox.attempts == tries, PushOutbox.sent_ms == 0
+
+
 def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send) -> dict:
     """쌓인 알림을 꺼내 보낸다.
 
     꺼낼 때 ``lease_ms`` 로 맡아 두 프로세스가 같은 알림을 함께 보내지 않게 하고, 보낸 뒤에야 ``sent_ms`` 를 채운다.
     보내는 도중 프로세스가 죽으면 맡은 시간(LEASE_MS)이 지나 다시 꺼낸다 — 드물게 한 기기에 두 번 갈 수 있지만 같은
-    tag 라 기기에서는 한 장으로 바뀐다. 잠깐 막힌 기기는 그 기기에만 RETRY_WAIT_MS(또는 Retry-After) 뒤에 다시
-    보낸다(MAX_ATTEMPTS 번, 쌓인 지 PENDING_MAX_AGE_MS 안). 결과는 아직 맡고 있는 줄에만 쓴다(``_owned``).
+    tag 라 기기에서는 한 장으로 바뀐다. 결과는 아직 맡고 있는 줄에만 쓴다(``_owned``).
+
+    기기마다 따로 기다린다: 잠깐 막힌 기기는 응답을 받은 때부터 RETRY_WAIT_MS 뒤에 그 기기에만 다시 보내고(MAX_ATTEMPTS
+    번), Retry-After 를 받은 기기는 그 기기의 next_send_ms 까지 어떤 알림도 보내지 않는다. 그동안 다른 기기는 제 박자로
+    받는다. 남은 기기가 쌓인 지 PENDING_MAX_AGE_MS 안에 받을 수 없으면 그 알림은 expired 로 끝낸다.
     """
     now_ms = _now_ms() if now_ms is None else now_ms
     if not web_push.enabled():
@@ -268,7 +308,7 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send) ->
                                                         PushOutbox.sent_ms == 0, PushOutbox.lease_ms <= now_ms)
                                .values(lease_ms=now_ms + LEASE_MS, attempts=PushOutbox.attempts + 1)
                                .returning(PushOutbox.id, PushOutbox.user_id, PushOutbox.payload_json,
-                                          PushOutbox.done_json, PushOutbox.attempts)).all())
+                                          PushOutbox.done_json, PushOutbox.attempts, PushOutbox.created_ms)).all())
         subscriptions = _subscriptions_for(db, {row[1] for row in claimed}) if claimed else []
         db.commit()
     _cleanup(now_ms)
@@ -277,68 +317,85 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send) ->
     by_user: dict[int, list[dict]] = {}
     for subscription in subscriptions:
         by_user.setdefault(subscription["user_id"], []).append(subscription)
-    jobs, owners, done, attempts = [], [], {}, {}
-    for row_id, user_id, payload_json, done_json, tries in sorted(claimed):
-        done[row_id], attempts[row_id] = _ids(done_json), int(tries or 0)
+    jobs, owners, plan = [], [], {}
+    for row_id, user_id, payload_json, done_json, tries, created_ms in sorted(claimed):
+        row = plan[row_id] = {"done": _ids(done_json), "tries": int(tries or 0), "created": int(created_ms or 0),
+                              "due": [], "sent": False, "retry": False, "broken": False}
         try:
             data = _encode(json.loads(payload_json))
         except (TypeError, ValueError):
-            continue  # 망가진 줄은 보내지 않고 끝낸다
+            row["broken"] = True  # 망가진 줄은 보내지 않고 끝낸다
+            continue
         for subscription in by_user.get(user_id, []):
-            if subscription["id"] not in done[row_id]:
-                jobs.append((subscription, data))
-                owners.append(row_id)
+            if subscription["id"] in row["done"]:
+                continue
+            if subscription["next_send_ms"] > now_ms:
+                row["due"].append(subscription["next_send_ms"])  # 푸시 서비스가 기다리라고 한 기기 — 이번엔 건너뛴다
+                continue
+            jobs.append((subscription, data))
+            owners.append(row_id)
+            row["sent"] = True
     # 큰 묶음(알림 × 기기)은 보내는 데 LEASE_MS 보다 오래 걸릴 수 있다 — 그동안 다른 작업이 다시 꺼내지 않게 늘려 둔다.
     needed = -(-len(jobs) // SEND_THREADS) * SEND_WAVE_MS + 60_000
     if needed > LEASE_MS:
+        groups: dict[int, list[int]] = {}
+        for row_id, row in plan.items():
+            groups.setdefault(row["tries"], []).append(row_id)
         with get_session() as db:
-            for where in _owned(attempts, attempts):
-                db.exec(update(PushOutbox).where(*where).values(lease_ms=now_ms + needed))
+            for tries, ids in groups.items():
+                db.exec(update(PushOutbox).where(*_owned(ids, tries)).values(lease_ms=now_ms + needed))
             db.commit()
-    outcomes = _send_all(jobs, send)
-    blocked, delay = set(), {}
-    for row_id, (subscription, _), outcome in zip(owners, jobs, outcomes):
-        if outcome == web_push.RETRY:
-            blocked.add(row_id)
-            delay[row_id] = max(delay.get(row_id, 0), int(getattr(outcome, "retry_after_s", 0) or 0) * 1000)
+    results = _send_all(jobs, send)
+    for row_id, (subscription, _), (outcome, elapsed) in zip(owners, jobs, results):
+        row = plan[row_id]
+        if outcome != web_push.RETRY:
+            row["done"].add(subscription["id"])
+            continue
+        row["retry"] = True
+        backoff = RETRY_WAIT_MS[min(max(row["tries"], 1), len(RETRY_WAIT_MS)) - 1]
+        after = int(getattr(outcome, "retry_after_s", 0) or 0) * 1000
+        row["due"].append(now_ms + elapsed + max(backoff, after))  # 응답을 받은 때부터
+    finished: dict[tuple[int, str], list[int]] = {}
+    later: dict[tuple[int, int, str, int], list[int]] = {}
+    for row_id, row in sorted(plan.items()):
+        if row["broken"]:
+            outcome = "broken"
+        elif not row["due"]:
+            outcome = "delivered" if row["done"] else "no_device"
+        elif row["retry"] and row["tries"] >= MAX_ATTEMPTS:
+            outcome = "gave_up"
+        elif min(row["due"]) > row["created"] + PENDING_MAX_AGE_MS:
+            outcome = "expired"  # 남은 기기가 유효 시간 안에 받을 수 없다
         else:
-            done[row_id].add(subscription["id"])
-    finished = [row_id for row_id in done if row_id not in blocked or attempts[row_id] >= MAX_ATTEMPTS]
-    later: dict[tuple[int, str, int], list[int]] = {}
-    for row_id in sorted(blocked.difference(finished)):
-        wait = max(RETRY_WAIT_MS[min(attempts[row_id], len(RETRY_WAIT_MS)) - 1], delay.get(row_id, 0))
-        later.setdefault((attempts[row_id], json.dumps(sorted(done[row_id])), now_ms + wait), []).append(row_id)
+            # 아무 데도 안 보낸 바퀴(모든 남은 기기가 대기 중)는 시도로 세지 않는다.
+            tries_after = row["tries"] if row["sent"] else row["tries"] - 1
+            key = (row["tries"], tries_after, json.dumps(sorted(row["done"])), _second(min(row["due"])))
+            later.setdefault(key, []).append(row_id)
+            continue
+        finished.setdefault((row["tries"], outcome), []).append(row_id)
     written = 0
     with get_session() as db:
-        result = _device_results(db, jobs, outcomes, now_ms=now_ms)
-        for where in _owned(finished, attempts):
-            written += db.exec(update(PushOutbox).where(*where).values(sent_ms=now_ms, lease_ms=0, done_json="")).rowcount
-        for (tries, done_json, lease_ms), ids in later.items():  # 같은 처지끼리 묶어 쓴다(운영 DB 왕복 80ms)
-            written += db.exec(update(PushOutbox).where(PushOutbox.id.in_(ids), PushOutbox.attempts == tries,
-                                                        PushOutbox.sent_ms == 0)
-                               .values(lease_ms=lease_ms, done_json=done_json)).rowcount
+        result = _device_results(db, jobs, results, now_ms=now_ms)
+        for (tries, outcome), ids in finished.items():
+            written += db.exec(update(PushOutbox).where(*_owned(ids, tries))
+                               .values(sent_ms=now_ms, lease_ms=0, done_json="", result=outcome)).rowcount
+        for (tries, tries_after, done_json, due), ids in later.items():  # 같은 처지끼리 묶어 쓴다(운영 DB 왕복 80ms)
+            written += db.exec(update(PushOutbox).where(*_owned(ids, tries))
+                               .values(lease_ms=due, done_json=done_json, attempts=tries_after)).rowcount
         db.commit()
     lost = len(claimed) - written
     if lost:
         log.warning("push dispatch outlived its lease; %s alerts were taken over by another pass", lost)
-    gave_up = len(blocked.intersection(finished))
-    if gave_up:
-        log.warning("push gave up after %s attempts (%s alerts)", MAX_ATTEMPTS, gave_up)
-    return {"claimed": len(claimed), **result, "later": sum(len(ids) for ids in later.values()), "lost": lost}
-
-
-def _owned(row_ids, attempts: dict[int, int]) -> list[tuple]:
-    """이 작업이 아직 맡고 있는 줄을 고르는 조건들. 꺼낼 때마다 attempts 가 오르므로, 맡은 시간이 지나 다른 작업이 다시
-    꺼낸 줄은 attempts 가 이미 달라 걸리지 않는다 — 늦게 끝난 옛 작업이 새 작업의 결과(받은 기기 · 다음 시각)를 덮지 않게."""
-    groups: dict[int, list[int]] = {}
-    for row_id in row_ids:
-        groups.setdefault(attempts[row_id], []).append(row_id)
-    return [(PushOutbox.id.in_(ids), PushOutbox.attempts == tries, PushOutbox.sent_ms == 0)
-            for tries, ids in sorted(groups.items())]
+    ended = {outcome: len(ids) for (_, outcome), ids in finished.items() if outcome in ("gave_up", "expired")}
+    if ended:
+        log.warning("push alerts ended undelivered: %s", ended)
+    return {"claimed": len(claimed), **result, "later": sum(len(ids) for ids in later.values()), "lost": lost,
+            **{outcome: count for outcome, count in ended.items()}}
 
 
 def _cleanup(now_ms: int) -> None:
-    """사흘 지난 보낸 기록을 지운다 — 한 시간에 한 번만."""
+    """한 시간에 한 번 — 유효 시간(PENDING_MAX_AGE_MS) 안에 못 보낸 알림을 expired 로 끝내고, 사흘 지난 기록을 지우고,
+    지난 한 시간 동안 끝난 까닭별 개수와 가장 오래 기다리는 알림의 나이를 남긴다('알림이 안 왔다' 문의를 가를 때)."""
     global _last_cleanup_ms
     with _cleanup_lock:
         if now_ms - _last_cleanup_ms < 3_600_000:
@@ -346,8 +403,17 @@ def _cleanup(now_ms: int) -> None:
         _last_cleanup_ms = now_ms
     try:
         with get_session() as db:
+            expired = db.exec(update(PushOutbox).where(
+                PushOutbox.sent_ms == 0, PushOutbox.lease_ms <= now_ms,
+                PushOutbox.created_ms < now_ms - PENDING_MAX_AGE_MS).values(sent_ms=now_ms, lease_ms=0, result="expired")
+            ).rowcount
             db.exec(sql_delete(PushOutbox).where(PushOutbox.created_ms < now_ms - KEEP_MS))
+            counts = dict(db.exec(select(PushOutbox.result, func.count()).where(
+                PushOutbox.sent_ms >= now_ms - 3_600_000).group_by(PushOutbox.result)).all())
+            oldest = db.exec(select(func.min(PushOutbox.created_ms)).where(PushOutbox.sent_ms == 0)).first()
             db.commit()
+        log.info("push alerts last hour: %s · expired now %s · oldest waiting %ss", counts, expired,
+                 (now_ms - oldest) // 1000 if oldest else 0)
     except Exception:
         log.warning("push outbox cleanup failed", exc_info=True)
 
@@ -370,6 +436,9 @@ def send_test(user_id: int, *, now_ms: Optional[int] = None, send: Callable = we
     payload = {"title": "껄무새 앱 알림이 켜졌어요",
                "body": "내 에이전트의 매매 · 손익 · 시세 · 뉴스 소식을 이렇게 알려 드려요.",
                "url": "/agents", "tag": "push-test"}
-    result = _deliver([(user_id, payload)], subscriptions, now_ms=now_ms, send=send)
+    # 푸시 서비스가 기다리라고 한 기기(Retry-After)에는 시험 알림도 보내지 않고 '잠시 막힘'으로 센다.
+    ready = [subscription for subscription in subscriptions if subscription["next_send_ms"] <= now_ms]
+    result = _deliver([(user_id, payload)], ready, now_ms=now_ms, send=send)
     # 화면이 받음 · 일부 · 못 보냄을 가른다 — retry 는 '잠시 뒤 다시', 나머지 실패는 '알림 다시 켜기'(구독이 끝났거나 거절됨).
-    return {"sent": result["sent"], "devices": result["jobs"], "retry": result["retry"]}
+    return {"sent": result["sent"], "devices": len(subscriptions),
+            "retry": result["retry"] + len(subscriptions) - len(ready)}

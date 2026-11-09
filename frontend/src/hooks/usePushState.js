@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../lib/auth.js";
-import { disablePush, enablePush, forgetPushStatus, loadPushConfig, readPushState, sendTestPush } from "../lib/push.js";
+import {
+  PUSH_STORAGE_PREFIX, disablePush, enablePush, forgetPushStatus, loadPushConfig, readPushState, sendTestPush,
+} from "../lib/push.js";
 
 // 이 기기의 앱 알림 상태 — 설정 탭 · 내 에이전트 종 단추 · 첫 실행 묻기가 함께 쓴다.
-// 한 곳에서 켜고 끄면 CHANGED 로 다른 곳도 다시 읽는다.
+// 한 곳에서 켜고 끄면 CHANGED 로 같은 창의 다른 곳도, storage 이벤트로 다른 창(태블릿 여러 창)도 다시 읽는다.
 // state: loading | on | off | denied | unconfigured | desktop | needs-install | in-app | unsupported
 const CHANGED = "ggp:push-changed";
 
@@ -51,12 +53,18 @@ export function usePushState() {
     const onVisible = () => {
       if (document.visibilityState === "visible") again(); // 브라우저 설정에서 알림을 막거나 풀고 돌아왔을 때 · 서버가 기기를 지웠을 때
     };
+    // 다른 창이 켜거나 끄면 켠 계정 기록(localStorage)이 바뀐다 — 보이는 채로 나란히 열린 창도 바로 맞춘다.
+    const onStorage = (event) => {
+      if (event.key === null || event.key?.startsWith(PUSH_STORAGE_PREFIX)) refresh();
+    };
     window.addEventListener(CHANGED, refresh);
     window.addEventListener("online", again);
+    window.addEventListener("storage", onStorage);
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       window.removeEventListener(CHANGED, refresh);
       window.removeEventListener("online", again);
+      window.removeEventListener("storage", onStorage);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh, config, loadConfig]);

@@ -33,6 +33,14 @@ def vapid_on(monkeypatch):
     monkeypatch.setenv("VAPID_SUBJECT", "https://gg-parrot.vercel.app")
 
 
+@pytest.fixture(autouse=True)
+def send_clock(monkeypatch):
+    """보내는 데 걸린 시간 — 시험에서는 멈춰 두고, 필요한 시험만 send 안에서 앞으로 돌린다(다음 시도 = 응답 시각 + 대기)."""
+    clock = {"s": 0.0}
+    monkeypatch.setattr(push_alerts, "_monotonic", lambda: clock["s"])
+    return clock
+
+
 def device(name: str = "") -> dict:
     """브라우저 한 대 — PushManager 가 주는 것과 같은 모양의 구독과, 받은 본문을 풀 비밀키."""
     key = ec.generate_private_key(ec.SECP256R1())
@@ -496,6 +504,83 @@ def test_retry_after_from_the_push_service_is_respected(vapid_on):
     assert push_alerts.dispatch(now_ms=FAR + push_alerts.RETRY_WAIT_MS[0], send=lambda *a, **k: web_push.SENT) == {
         "claimed": 0}, "푸시 서비스가 10분 기다리라고 했으면 30초 뒤에 다시 보내 시도를 쓰지 않는다"
     assert push_alerts.dispatch(now_ms=FAR + 600_000, send=lambda *a, **k: web_push.SENT)["sent"] == 1
+
+
+def test_waits_count_from_the_response_not_the_start_of_a_slow_batch(vapid_on, send_clock):
+    """큰 묶음을 보내는 데 500초가 걸린 뒤 600초 기다리라는 답을 받으면 — 그 답을 받은 때부터 600초."""
+    token = _signup()
+    user_id = _user_id(token)
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    _queue(user_id, "fill:slow-batch", FAR)
+
+    def slow(*args, **kwargs):
+        send_clock["s"] += 500
+        return web_push._retry(600)
+    assert push_alerts.dispatch(now_ms=FAR, send=slow)["later"] == 1
+    with get_session() as db:
+        held = db.exec(select(PushSubscription.next_send_ms).where(PushSubscription.user_id == user_id)).one()
+    assert held == FAR + 1_100_000 and _rows(user_id)[0].lease_ms == FAR + 1_100_000
+    assert push_alerts.dispatch(now_ms=FAR + 700_000, send=lambda *a, **k: web_push.SENT) == {"claimed": 0}, \
+        "답을 받고 100초 만에 다시 보내지 않는다"
+
+
+def test_one_devices_retry_after_does_not_hold_back_the_others(vapid_on):
+    """기기 하나가 한 시간 기다리라고 해도 다른 기기는 제 박자(30초 뒤)에 받는다."""
+    token = _signup()
+    user_id = _user_id(token)
+    slow, quick = device(), device()
+    for sub in (slow, quick):
+        client.put("/api/me/push/subscription", json=public_sub(sub), headers=_auth(token))
+    _queue(user_id, "fill:mixed-wait", FAR)
+    answers = {slow["endpoint"]: web_push._retry(3700), quick["endpoint"]: web_push.RETRY}
+    assert push_alerts.dispatch(now_ms=FAR, send=lambda s, d, **k: answers[s["endpoint"]])["later"] == 1
+    calls = []
+    retry = push_alerts.dispatch(now_ms=FAR + push_alerts.RETRY_WAIT_MS[0],
+                                 send=lambda s, d, **k: calls.append(s["endpoint"]) or web_push.SENT)
+    assert retry["claimed"] == 1 and calls == [quick["endpoint"]], "기다리라는 기기는 건너뛰고 다른 기기는 받는다"
+    row = _rows(user_id)[0]
+    assert row.sent_ms > 0 and row.result == "expired", "남은 기기는 한 시간 안에 받을 수 없어 끝낸다(까닭을 남긴다)"
+
+
+def test_a_new_alert_also_waits_for_a_device_that_asked_to_wait(vapid_on):
+    """기다리라는 기기에 새 알림이 쌓여도 그 시각 전에는 보내지 않는다(RFC 8030 §8.4) — 그 바퀴는 시도로 세지 않는다."""
+    token = _signup()
+    user_id = _user_id(token)
+    client.put("/api/me/push/subscription", json=public_sub(device()), headers=_auth(token))
+    _queue(user_id, "fill:first", FAR)
+    assert push_alerts.dispatch(now_ms=FAR, send=lambda *a, **k: web_push._retry(600))["later"] == 1
+    _queue(user_id, "fill:second", FAR + 1_000)
+    calls = []
+    second = push_alerts.dispatch(now_ms=FAR + 1_000, send=lambda *a, **k: calls.append(1) or web_push.SENT)
+    assert second["claimed"] == 1 and calls == [], "1초 뒤 새 알림도 그 기기에는 보내지 않는다"
+    fresh = next(row for row in _rows(user_id) if row.dedupe_key.endswith("fill:second"))
+    assert fresh.lease_ms == FAR + 600_000 and fresh.attempts == 0
+    both = push_alerts.dispatch(now_ms=FAR + 600_000, send=lambda *a, **k: calls.append(1) or web_push.SENT)
+    assert both["claimed"] == 2 and len(calls) == 2
+    assert {row.result for row in _rows(user_id)} == {"delivered"}
+
+
+def test_a_late_410_for_an_old_subscription_does_not_remove_a_new_one_with_the_same_id(vapid_on):
+    """SQLite 는 지운 id 를 다시 쓴다 — 보내는 사이 껐다 켜 같은 id 를 받은 새 구독이 옛 구독의 410 으로 지워지지 않게."""
+    token = _signup()
+    user_id = _user_id(token)
+    old = device()
+    client.put("/api/me/push/subscription", json=public_sub(old), headers=_auth(token))
+    with get_session() as db:
+        snapshot = push_alerts._subscriptions_for(db, {user_id})
+    new = device()
+
+    def resubscribe_then_gone(subscription, data, **kwargs):
+        # 옛 구독으로 보내는 사이 사용자가 껐다 켰다 — 새 구독이 같은 id 를 받는 경우를 그대로 만든다.
+        with get_session() as db:
+            row = db.get(PushSubscription, subscription["id"])
+            row.endpoint, row.p256dh, row.auth = new["endpoint"], new["keys"]["p256dh"], new["keys"]["auth"]
+            db.add(row)
+            db.commit()
+        return web_push.GONE
+    push_alerts._deliver([(user_id, {"title": "t"})], snapshot, now_ms=FAR, send=resubscribe_then_gone)
+    status = client.post("/api/me/push/status", json={"endpoint": new["endpoint"]}, headers=_auth(token)).json()
+    assert status == {"subscribed": True}, "같은 id 라도 엔드포인트가 다르면 옛 결과를 적용하지 않는다"
 
 
 def test_an_older_queue_table_gains_the_new_columns_on_boot(tmp_path, monkeypatch, vapid_on):

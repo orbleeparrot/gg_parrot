@@ -5,14 +5,17 @@
 // 켠 계정을 기억해 두는 까닭 — 로그아웃 정리가 실패한 기기에서 다른 사람이 로그인했을 때, 앞 사람이 켠 구독을
 // 새 계정으로 옮겨 남의 기기에 알림이 가지 않게 한다(옮기지 않고 지운다).
 //
-// 구독을 바꾸는 일(켜기 · 끄기 · 동기화)은 한 탭 안에서 하나씩만 돈다(exclusive) — 기다리던 옛 작업이 나중 작업이
-// 만든 구독을 끊지 않게. 기다린 뒤에는 계정부터 다시 확인하고, 끊을 때는 지금 구독이 내가 본 그 구독인지 확인한다.
+// 구독을 바꾸는 일(켜기 · 끄기 · 동기화)은 하나씩만 돈다(exclusive) — 탭 사이에도(Web Locks, 없으면 한 탭 안에서만).
+// 기다리던 옛 작업이 나중 작업이 만든 구독을 끊지 않게. 계정에 묶인 요청은 마지막 기다림 바로 뒤에 계정을 다시 확인하고,
+// 켠 계정과 함께 그 구독의 엔드포인트도 적어 두어 실패를 되돌릴 때 자기 구독의 기록만 지운다.
 import { api } from "../api.js";
 import { captureAccountGuard } from "./auth.js";
 import { currentDevice } from "./pwa.js";
 
 const OWNER_KEY = "ggp_push_owner";
+const OWNER_ENDPOINT_KEY = "ggp_push_owner_endpoint";
 const SYNC_KEY = "ggp_push_synced_at";
+export const PUSH_STORAGE_PREFIX = "ggp_push_"; // 다른 탭이 켜고 끈 것을 알아채는 storage 이벤트 거름(usePushState)
 const SYNC_EVERY_MS = 12 * 60 * 60 * 1000;
 const STATUS_FRESH_MS = 15_000;
 const timing = { ping: 1_500, finalPing: 3_000 };
@@ -40,6 +43,25 @@ function write(key, value) {
   } catch {
     /* 저장이 막힌 브라우저 — 다음에 다시 맞춘다 */
   }
+}
+
+// 이 계정이 켠 바로 그 구독인지 — 계정만 맞고 엔드포인트가 다르면(다른 탭이 새로 켬 · 브라우저가 바꿈) 내 기록이 아니다.
+function owns(userId, endpoint) {
+  return Boolean(userId) && read(OWNER_KEY) === String(userId) && read(OWNER_ENDPOINT_KEY) === endpoint;
+}
+
+function setOwner(userId, endpoint, now = Date.now()) {
+  write(OWNER_KEY, String(userId));
+  write(OWNER_ENDPOINT_KEY, endpoint);
+  write(SYNC_KEY, String(now));
+}
+
+// 기록을 지운다. endpoint 를 주면 그 구독의 기록일 때만 — 다른 탭이 그사이 켠 새 구독의 기록은 남긴다.
+function clearOwner(endpoint = "") {
+  if (endpoint && read(OWNER_ENDPOINT_KEY) !== endpoint) return;
+  write(OWNER_KEY, "");
+  write(OWNER_ENDPOINT_KEY, "");
+  write(SYNC_KEY, "");
 }
 
 export function urlBase64ToUint8Array(text) {
@@ -83,9 +105,14 @@ export function setPushTimingForTest(values = {}) {
   Object.assign(timing, { ping: 1_500, finalPing: 3_000 }, values);
 }
 
-// 구독을 바꾸는 일을 한 줄로 세운다. 안에서 다시 exclusive 를 부르지 않는다(내부 도우미는 dropOwn 등을 쓴다).
+// 구독을 바꾸는 일을 한 줄로 세운다 — Web Locks 가 있으면 같은 사이트의 모든 탭 · 창이 한 줄(아이폰 16.4+ · 안드로이드
+// 크롬 모두 있음), 없으면 이 탭 안에서만. 안에서 다시 exclusive 를 부르지 않는다(내부 도우미는 dropLocal 등을 쓴다).
+// 일 하나가 끝나지 않으면 줄 전체가 멈추므로, 안에서 기다리는 것은 모두 시간 제한이 있다.
+const LOCK_NAME = "ggp-push-subscription";
 let chain = Promise.resolve();
 function exclusive(task) {
+  const locks = globalThis.navigator?.locks;
+  if (typeof locks?.request === "function") return locks.request(LOCK_NAME, () => task());
   const run = chain.then(task, task);
   chain = run.catch(() => {});
   return run;
@@ -205,7 +232,7 @@ export async function readPushState({ userId, config, win = globalThis.window } 
   if (permission === "denied") return "denied";
   const subscription = await currentSubscription(win);
   if (!subscription || permission !== "granted") return "off";
-  if (!userId || read(OWNER_KEY) !== String(userId)) return "off";
+  if (!owns(userId, subscription.endpoint)) return "off";
   return (await serverHas(userId, subscription.endpoint)) === false ? "off" : "on";
 }
 
@@ -231,25 +258,22 @@ export function enablePush({ userId, config, win = globalThis.window } = {}) {
       const stale = await ready.pushManager.getSubscription().catch(() => null);
       if (!current()) return "cancelled";
       if (stale) await stale.unsubscribe().catch(() => {});
-      const subscription = await ready.pushManager.subscribe({
+      const subscription = await withTimeout(ready.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(config.public_key),
-      });
+      }), 20_000);
       const endpoint = subscription.endpoint;
+      // 되돌리기는 이 구독 것만 — 다른 탭이 그사이 켠 새 구독과 그 기록은 남긴다.
       const undo = async () => {
         await dropOwn(win, endpoint);
-        if (read(OWNER_KEY) === String(userId)) {
-          write(OWNER_KEY, "");
-          write(SYNC_KEY, "");
-        }
+        clearOwner(endpoint);
       };
       if (!current()) {
         await undo();
         return "cancelled";
       }
       // 서버 등록 전에 먼저 적는다 — 다른 탭의 동기화가 '켠 계정 없는 구독'으로 보고 끊지 않게(실패하면 되돌린다).
-      write(OWNER_KEY, String(userId));
-      write(SYNC_KEY, String(Date.now()));
+      setOwner(userId, endpoint);
       const body = subscription.toJSON();
       try {
         // 바로 앞에서 계정을 확인했고 그 사이 기다림이 없다 — 요청은 시작한 계정의 토큰으로 나간다.
@@ -269,15 +293,15 @@ export function enablePush({ userId, config, win = globalThis.window } = {}) {
   });
 }
 
-// 이 기기 구독을 끊는다(서버에 알리는 것은 local=false 일 때만).
-async function dropLocal({ local, win }) {
-  write(OWNER_KEY, "");
-  write(SYNC_KEY, "");
+// 이 기기 구독을 끊는다. 서버에 알리는 것은 local=false 이고, 시작한 계정이 그대로일 때만 — 계정이 바뀌었으면
+// 지금 토큰(다른 계정)으로 해제를 보내지 않는다(끊긴 구독은 다음 발송 때 410 으로 지워진다).
+async function dropLocal({ local, win, current = () => true }) {
+  clearOwner();
   statusMemo = null;
   if (pushSupport(win) !== "supported") return "off";
   const subscription = await currentSubscription(win);
   if (!subscription) return "off";
-  if (!local) {
+  if (!local && current()) {
     try {
       await api.pushUnsubscribe(subscription.endpoint);
     } catch {
@@ -291,7 +315,8 @@ async function dropLocal({ local, win }) {
 // 끄기 — 서버에서 지우고 브라우저 구독도 끊는다. 로그아웃 뒤(local)에는 서버에 묻지 않는다:
 // 끊긴 구독은 다음 발송 때 푸시 서비스가 410 으로 알려 서버가 지운다.
 export function disablePush({ local = false, win = globalThis.window } = {}) {
-  return exclusive(() => dropLocal({ local, win }));
+  const current = captureAccountGuard({ accountOnly: true });
+  return exclusive(() => dropLocal({ local, win, current }));
 }
 
 // 앱을 열 때 · 앱으로 돌아올 때 — 다른 계정이 켠 구독은 끊고, 켜 둔 기기는 가끔(12시간) 서버에 다시 맞춘다.
@@ -305,26 +330,30 @@ export function syncPush({ userId, win = globalThis.window, now = Date.now() } =
     const subscription = await currentSubscription(win);
     if (!current()) return "cancelled";
     if (!subscription) {
-      if (read(OWNER_KEY)) write(OWNER_KEY, "");
+      if (read(OWNER_KEY)) clearOwner();
       return "none";
     }
-    if (read(OWNER_KEY) !== String(userId)) {
+    if (!owns(userId, subscription.endpoint)) {
       await dropLocal({ local: true, win });
       return "dropped";
     }
     if (win.Notification.permission !== "granted") return "skip";
     if (now - Number(read(SYNC_KEY) || 0) < SYNC_EVERY_MS) return "fresh";
     const has = await serverHas(userId, subscription.endpoint, { force: true, now });
-    if (!current()) return "cancelled";
     if (has === null) return "skip"; // 서버에 못 물었다 — 다음에
     // 물어보는 사이 다른 탭이 구독을 바꿨으면 이 답은 옛 구독 것이다 — 다음에 다시 맞춘다.
-    if ((await currentSubscription(win))?.endpoint !== subscription.endpoint) return "changed";
+    const latest = await currentSubscription(win);
+    // 마지막 기다림 바로 뒤 — 여기서부터 서버에 쓰기까지 기다림이 없다. 그사이 A→B 로 바뀌었으면 B 의 토큰으로
+    // A 의 구독을 등록하게 되므로, 계정에 묶인 요청 바로 앞에서 다시 확인한다.
+    if (!current()) return "cancelled";
+    if (latest?.endpoint !== subscription.endpoint || !owns(userId, subscription.endpoint)) return "changed";
     if (!has) {
       await dropLocal({ local: true, win });
       return "dropped";
     }
     const body = subscription.toJSON();
     await api.pushSubscribe({ endpoint: body.endpoint, keys: body.keys, platform: currentDevice(win).platform });
+    if (!current() || !owns(userId, subscription.endpoint)) return "cancelled"; // 등록하는 사이 바뀌었으면 기록하지 않는다
     write(SYNC_KEY, String(now));
     return "synced";
   });

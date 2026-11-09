@@ -711,6 +711,9 @@ class PushSubscription(SQLModel, table=True):
     updated_ms: int = Field(default=0, sa_type=BigInteger)
     last_ok_ms: int = Field(default=0, sa_type=BigInteger)
     fail_count: int = 0
+    # 푸시 서비스가 Retry-After 로 '그때까지 보내지 마'라고 한 시각(응답을 받은 시각 기준). 기기마다 따로 —
+    # 한 기기의 대기가 같은 알림의 다른 기기를 늦추지 않고, 그사이 새로 쌓인 알림도 이 기기에는 이 시각까지 기다린다.
+    next_send_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class PushOutbox(SQLModel, table=True):
@@ -735,8 +738,11 @@ class PushOutbox(SQLModel, table=True):
     created_ms: int = Field(default=0, sa_type=BigInteger)
     sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 다 못 보냄. 모든 기기를 끝내거나 시도를 다 쓴 시각
     lease_ms: int = Field(default=0, sa_type=BigInteger)  # 이 시각 전에는 꺼내지 않는다(보내는 중 · 다시 보내기 대기)
-    attempts: int = 0
+    attempts: int = 0  # 실제로 보낸 바퀴 수(기기 대기로 아무 데도 안 보낸 바퀴는 세지 않는다)
     done_json: str = ""  # 이미 끝낸 기기(구독 id) 목록 — 다시 보낼 때 건너뛴다
+    # 끝난 까닭 — delivered(모든 기기 처리) · gave_up(시도를 다 씀) · expired(한 시간 안에 못 보냄) · no_device · broken.
+    # '알림이 안 왔다'는 문의를 가를 때 본다(push_alerts._cleanup 이 한 시간마다 집계를 남긴다).
+    result: str = ""
 
 
 class TickerNewsSnapshot(SQLModel, table=True):
@@ -1525,6 +1531,10 @@ def _migrate() -> None:
             "lease_ms": "ALTER TABLE pushoutbox ADD COLUMN lease_ms INTEGER NOT NULL DEFAULT 0",
             "attempts": "ALTER TABLE pushoutbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
             "done_json": "ALTER TABLE pushoutbox ADD COLUMN done_json TEXT NOT NULL DEFAULT ''",
+            "result": "ALTER TABLE pushoutbox ADD COLUMN result TEXT NOT NULL DEFAULT ''",
+        },
+        "pushsubscription": {
+            "next_send_ms": "ALTER TABLE pushsubscription ADD COLUMN next_send_ms INTEGER NOT NULL DEFAULT 0",
         },
     }
     added.setdefault("runnerlaunchticket", {}).update({
@@ -1609,9 +1619,11 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
-    # 앱 알림 대기열을 '보낸 뒤에야 sent_ms' 로(2026-11-06). 마이그레이션 20261106130000 과 같은 정의.
+    # 앱 알림 대기열을 '보낸 뒤에야 sent_ms' 로(2026-11-06, 마이그레이션 20261106130000) · 끝난 까닭과
+    # 기기별 Retry-After 대기(2026-11-09, 20261109100000). 마이그레이션과 같은 정의.
     "pushoutbox": {"lease_ms": "BIGINT NOT NULL DEFAULT 0", "attempts": "INTEGER NOT NULL DEFAULT 0",
-                   "done_json": "VARCHAR NOT NULL DEFAULT ''"},
+                   "done_json": "VARCHAR NOT NULL DEFAULT ''", "result": "VARCHAR NOT NULL DEFAULT ''"},
+    "pushsubscription": {"next_send_ms": "BIGINT NOT NULL DEFAULT 0"},
     # 코인동향 소식 목록 SQL 쪽 나누기(2026-10-18) — 번역 대기 글 숨김 · 검색어 거르기. 마이그레이션 20261018000000 과 같은 정의.
     "trendarticle": {"visible": "BOOLEAN NOT NULL DEFAULT TRUE", "search_text": "VARCHAR NOT NULL DEFAULT ''"},
     "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''",

@@ -108,7 +108,10 @@ function fakeBrowser({ userAgent = UA.android, permission = "default", answer = 
     return subscription;
   };
   const pushManager = {
-    getSubscription: async () => state.subscription,
+    getSubscription: async () => {
+      if (state.onRead) await state.onRead(); // 시험이 구독 읽기 도중을 붙잡을 때
+      return state.subscription;
+    },
     subscribe: async ({ applicationServerKey }) => {
       if (beforeSubscribe) await beforeSubscribe();
       state.subscription = makeSubscription(applicationServerKey);
@@ -281,6 +284,77 @@ test("옛 구독에 대한 늦은 '없음' 답이 그사이 켠 새 구독을 �
   assert.equal(await syncPush({ userId: 7, win }), "fresh");
   assert.equal(state.subscription?.endpoint, fresh, "새 구독은 그대로");
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on");
+});
+
+test("12시간 동기화의 마지막 구독 읽기 도중 A→B 로 바뀌면 — B 의 토큰으로 A 의 구독을 등록하지 않는다", async (t) => {
+  signIn(t, 7);
+  const put = t.mock.method(api, "pushSubscribe", async () => ({ subscribed: true }));
+  const { win, state } = fakeBrowser();
+  await enablePush({ userId: 7, config: CONFIG, win });
+  let pauseNext = false;
+  let entered;
+  let resume;
+  const reached = new Promise((resolve) => { entered = resolve; });
+  const gate = new Promise((resolve) => { resume = resolve; });
+  state.onRead = async () => {
+    if (!pauseNext) return;
+    pauseNext = false;
+    entered();
+    await gate;
+  };
+  t.mock.method(api, "pushStatus", async () => {
+    pauseNext = true; // 서버 답 뒤의 '마지막 구독 읽기'를 붙잡는다
+    return { subscribed: true };
+  });
+  const sync = syncPush({ userId: 7, win, now: Date.now() + 13 * 3600_000 });
+  await reached;
+  clearAuth();
+  setAuth("token-8", { id: 8 }); // 다른 탭에서 B 로 로그인
+  resume();
+  assert.equal(await sync, "cancelled");
+  assert.equal(put.mock.callCount(), 1, "켤 때 한 번뿐 — B 의 토큰으로 다시 등록하지 않는다");
+});
+
+test("두 탭: 탭1 의 켜기가 늦게 실패해도 탭2 가 그사이 켠 새 구독과 그 기록은 남는다(Web Locks · 없을 때 모두)", async (t) => {
+  const tab2 = await import("../src/lib/push.js?tab=2"); // 탭마다 따로 도는 모듈 — 구독 · 저장소만 같다
+  for (const locks of [true, false]) {
+    signIn(t, 7);
+    tab2.forgetPushStatus();
+    tab2.setPushTimingForTest({ ping: 40, finalPing: 40 });
+    if (!locks) Object.defineProperty(globalThis.navigator, "locks", { value: undefined, configurable: true });
+    try {
+      let fail;
+      let asked;
+      const reached = new Promise((resolve) => { asked = resolve; });
+      let calls = 0;
+      t.mock.method(api, "pushSubscribe", () => {
+        calls += 1;
+        if (calls > 1) return Promise.resolve({ subscribed: true });
+        asked();
+        return new Promise((_, reject) => { fail = reject; }); // 탭1 의 서버 등록이 오래 걸린다
+      });
+      t.mock.method(api, "pushStatus", async () => ({ subscribed: true }));
+      const { win, state } = fakeBrowser({ permission: "granted" });
+      const first = enablePush({ userId: 7, config: CONFIG, win }).catch((error) => error.message);
+      await reached;
+      const second = tab2.enablePush({ userId: 7, config: CONFIG, win });
+      if (!locks) assert.equal(await second, "on", "잠금이 없으면 탭2 가 먼저 끝난다");
+      fail(new Error("tab1 registration failed"));
+      assert.equal(await first, "tab1 registration failed");
+      assert.equal(await second, "on");
+      const endpoint = state.subscription?.endpoint;
+      assert.ok(endpoint, `탭2 의 구독이 남는다(locks=${locks})`);
+      assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), "7");
+      assert.equal(globalThis.localStorage.getItem("ggp_push_owner_endpoint"), endpoint, "기록도 탭2 구독 것");
+      assert.equal(await tab2.syncPush({ userId: 7, win }), "fresh");
+      assert.equal(state.subscription?.endpoint, endpoint, "다음 동기화가 끊지 않는다");
+    } finally {
+      if (!locks) delete globalThis.navigator.locks;
+      tab2.setPushTimingForTest();
+      t.mock.restoreAll();
+    }
+  }
+  assert.equal(typeof globalThis.navigator.locks?.request, "function", "잠금을 되돌려 놓았다");
 });
 
 test("A 의 켜기가 워커를 기다리는 사이 B 로 로그인해 켜면 — A 는 아무 구독도 건드리지 않고 그만둔다", async (t) => {

@@ -6,7 +6,7 @@ import MarketContext from "./MarketContext.jsx";
 import { BrandLink } from "./SiteNavigation.jsx";
 import ThemeToggle from "./ThemeToggle.jsx";
 import UserAvatar from "./UserAvatar.jsx";
-import { DeviceMobileIcon, DownloadIcon, HelpIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
+import { DeviceMobileIcon, DownloadIcon, MenuIcon, UserIcon } from "./utilityIcons.jsx";
 import { openAppInstall } from "../lib/installDialog.js";
 import { offersAppInstall } from "../lib/pwa.js";
 import HeaderMemberKey from "./HeaderMemberKey.jsx";
@@ -30,7 +30,7 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
         {hasSidebar ? <MarketContext /> : null}
         <div className="site-header-utility header-tools">
           {hasSidebar ? (
-            <nav className="header-resources" aria-label="설치 및 사용 안내">
+            <nav className="header-resources" aria-label="설치 안내">
               <NavLink to="/runner/install" className="header-control header-resource t-small" aria-label="실행기 설치">
                 <DownloadIcon />
                 <span className="header-resource-label">실행기 설치</span>
@@ -46,11 +46,6 @@ export default function SiteHeader({ hasSidebar, onOpenNavigation, menuButtonRef
                   <span className="header-tooltip" aria-hidden="true">앱 설치</span>
                 </button>
               ) : null}
-              <NavLink to="/guide" className="header-control header-resource t-small" aria-label="FAQ">
-                <HelpIcon />
-                <span className="header-resource-label">FAQ</span>
-                <span className="header-tooltip" aria-hidden="true">FAQ</span>
-              </NavLink>
             </nav>
           ) : null}
           <div className="header-personal">

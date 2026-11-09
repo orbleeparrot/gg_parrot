@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { DeviceMobileIcon, DownloadIcon, HelpIcon, KeyIcon } from "./utilityIcons.jsx";
+import { DeviceMobileIcon, DownloadIcon, KeyIcon } from "./utilityIcons.jsx";
 import { openAppInstall } from "../lib/installDialog.js";
 import { offersAppInstall } from "../lib/pwa.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
@@ -12,6 +12,8 @@ const NAV_LINKS = [
   { to: "/leaderboard", label: "리더보드", icon: "leaderboard", matches: ["/leaderboard", "/gallery"] },
   { to: "/news", label: "코인동향", icon: "news", matches: ["/news"] },
   { to: "/board", label: "게시판", icon: "board", matches: ["/board"] },
+  // FAQ — 머리글에서 페이지 목록으로 옮김(11/10 사용자 결정). 사용 설명(/guide)의 옛 주소도 같은 페이지로 온다.
+  { to: "/guide", label: "FAQ", icon: "faq", matches: ["/guide"] },
   // 준비 중인 페이지 — 링크가 아니라 자리만 잡는다(배지 `업데이트 예정`, 비활성). 열리면 to 를 살리고 soon 을 뗀다.
   { to: "/bots", label: "자동 매매 봇", icon: "agent", matches: ["/bots"], soon: true, soonLabel: "업데이트 예정" },
 ];
@@ -22,6 +24,7 @@ const NAV_ICON_SOURCES = {
   builder: "/brand/navigation/outline/ggparrot-outline-builder.svg",
   leaderboard: "/brand/navigation/outline/ggparrot-outline-leaderboard.svg",
   news: "/brand/navigation/outline/ggparrot-outline-news.svg",
+  faq: "/brand/navigation/outline/ggparrot-outline-faq.svg",
   board: "/brand/navigation/outline/ggparrot-outline-board.svg",
 };
 
@@ -142,9 +145,6 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
             ) : null}
             <NavLink to="/mypage/settings?tab=security" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
               <KeyIcon /><span>회원 키</span><small>실행기 계정 연결</small>
-            </NavLink>
-            <NavLink to="/guide" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
-              <HelpIcon /><span>FAQ</span>
             </NavLink>
           </div>
         ) : null}

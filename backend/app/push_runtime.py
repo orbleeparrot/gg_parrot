@@ -43,8 +43,8 @@ class PushRuntime:
             self.changed.clear()
             try:
                 result = await asyncio.to_thread(self.dispatch)
-                # 한 번에 다 못 꺼냈으면(BATCH) 기다리지 않고 바로 다음 묶음
-                if result.get("claimed", 0) >= push_alerts.BATCH:
+                # 한 바퀴에 다 맡지 못했으면(엔드포인트 · 엔드포인트당 상한) 기다리지 않고 바로 다음 바퀴
+                if result.get("more"):
                     continue
             except Exception:
                 logger.exception("Push dispatch failed; retrying on the next scan")

@@ -70,10 +70,12 @@ export function createPushController(ops = pushOps, { win, doc = globalThis.docu
   }
 
   // 기기 기록을 서버와 맞추고(로그인했을 때만) 상태를 다시 읽는다. 기록이 바뀌었으면 다른 창에도 알린다.
+  // 서버에 못 물었으면(unverified) 그 결과를 그대로 '확인 못 함'으로 — 다시 읽은 값이 그보다 단정적(꺼짐)이면 덮지 않는다.
   async function reconcile() {
     const userId = snapshot.userId;
-    const result = userId ? await ops.syncPush({ userId, win }).catch(() => "error") : "skip";
-    await refresh({ reloadConfig: true });
+    const result = userId ? await ops.syncPush({ userId, win }).catch(() => "unverified") : "skip";
+    const state = await refresh({ reloadConfig: true });
+    if (result === "unverified" && userId === snapshot.userId && ["off", "loading"].includes(state)) emit({ state: "unknown" });
     if (["dropped", "migrated", "confirmed", "adopted", "none"].includes(result)) announce();
     return result;
   }

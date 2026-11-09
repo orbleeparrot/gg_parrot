@@ -48,7 +48,8 @@ EVENT_TTL_MS = 60 * 60_000          # 쌓은 뒤 한 시간 — 그 뒤로는 �
 TEST_TTL_MS = 5 * 60_000            # 시험 알림은 5분
 KEEP_MS = 3 * 86_400_000            # 기록은 사흘 남겨 같은 글이 다시 울리지 않게 한다
 FAIL_LIMIT = 10                     # 연달아 이만큼 거절되면(키 바뀜 등) 그 기기를 지운다
-BATCH = 200                         # 한 바퀴에 맡는 전송 수
+ENDPOINT_BATCH = 100                # 한 바퀴에 맡는 엔드포인트 수
+PER_ENDPOINT = 20                   # 엔드포인트 하나에서 한 바퀴에 맡는 전송 수 — 한 기기의 밀린 알림이 바퀴를 다 차지하지 않게
 LEASE_MS = 5 * 60_000               # 맡은 바퀴가 이 안에 끝내지 못하면(죽음 · 멈춤) 다른 바퀴가 다시 맡는다
 MAX_ATTEMPTS = 5                    # 기기 하나에 보내 보는 횟수(첫 시도 포함) — 그 기기의 전송에만 센다
 RETRY_WAIT_MS = (30_000, 60_000, 120_000, 300_000)  # n 번째 시도가 막혔을 때 다음 시도까지(Retry-After 가 더 길면 그만큼)
@@ -344,37 +345,53 @@ def _expire(db, now_ms: int) -> None:
     _finish_events(db, {row[0] for row in rows}, now_ms=now_ms)
 
 
-def _still_mine(subscription: dict, token: str) -> bool:
-    """이 바퀴가 아직 이 엔드포인트의 발송 권한을 쥐고 있고 구독 세대도 그대로인지 — 같은 엔드포인트로 두 번째 전송부터
-    보내기 직전에 묻는다(그사이 다른 계정이 이 기기로 켰으면 앞 계정의 알림을 보내지 않게)."""
+def _may_send(delivery: dict, subscription: dict, token: str, at: int) -> bool:
+    """이 HTTP 를 지금 보내도 되는지 — 첫 전송을 포함해 매번 보내기 직전에 DB 로 확인한다. 이 바퀴가 아직 이 엔드포인트의
+    발송 권한(토큰 · 맡은 시각)을 쥐고 있고, 구독 세대 · 주소가 그대로이고, 푸시 서비스의 대기가 없고, 이 전송도 아직 이
+    바퀴가 맡은 채(다른 계정으로 옮겨 취소되지 않음)여야 한다. 확인할 수 없으면 보내지 않는다."""
     try:
         with get_session() as db:
-            row = db.exec(select(PushSubscription.version, PushSubscription.send_token)
-                          .where(PushSubscription.id == subscription["id"])).first()
+            row = db.exec(select(PushSubscription.version, PushSubscription.endpoint, PushSubscription.send_token,
+                                 PushSubscription.send_lease_ms, PushSubscription.next_send_ms,
+                                 PushDelivery.state, PushDelivery.claim_token)
+                          .join(PushDelivery, PushDelivery.subscription_id == PushSubscription.id)
+                          .where(PushDelivery.id == delivery["id"], PushSubscription.id == subscription["id"])).first()
     except Exception:
         log.warning("push authority check failed", exc_info=True)
         return False
-    return row is not None and int(row[0]) == int(subscription["version"]) and row[1] == token
+    if row is None:
+        return False
+    version, endpoint, send_token, lease_ms, wait_ms, state, claim_token = row
+    return (int(version) == int(subscription["version"]) and endpoint == subscription["endpoint"]
+            and send_token == token and int(lease_ms) > at and int(wait_ms) <= at
+            and state == SENDING and claim_token == token)
 
 
 def _send_endpoint(queue: list, send: Callable, *, now_ms: int, started: float, lease_until: int,
                    token: str) -> list[tuple]:
     """한 엔드포인트의 전송을 차례로 보낸다 — 응답을 반영한 뒤 다음 것을 고른다.
 
-    잠깐 막히거나(429 · 5xx · 연결 실패) 구독이 끝나면(404 · 410) 그 뒤 전송은 이번 바퀴에 보내지 않는다. 푸시 서비스에는
-    남은 수명만큼만 TTL 을 준다. 맡은 시간이 지났거나(바퀴가 멈췄다 깨어남) 발송 권한 · 세대가 바뀌었으면 더 보내지
-    않는다. (전송, 결과, 응답 시각) 목록을 돌려준다.
+    잠깐 막히거나(429 · 5xx · 연결 실패) 구독이 끝나면(404 · 410) 그 뒤 전송은 이번 바퀴에 보내지 않는다. 시각은 맡기
+    전부터 잰다(started) — 맡는 트랜잭션 · 스레드 대기 · 바퀴가 멈춘 시간까지 빼고 남은 수명만 TTL 로 주고, 맡은 시간이
+    지났으면 보내지 않는다. 모든 HTTP 직전에 _may_send 로 권한 · 세대 · 대기 · 전송 상태를 확인하고, 아니면 이 전송부터
+    내려놓는다. (전송, 결과, 응답 시각) 목록을 돌려준다.
     """
     out = []
     for index, (delivery, subscription, data) in enumerate(queue):
         at = now_ms + max(0, int((_monotonic() - started) * 1000))
-        if at >= lease_until or (index and not _still_mine(subscription, token)):
-            out.extend((rest, "lapsed", at) for rest, _, _ in queue[index:])
-            break
         left_ms = int(delivery["expires_ms"]) - at
-        if left_ms < 1000:
+        if at < lease_until and left_ms < 1000:
             out.append((delivery, "expired", at))
             continue
+        if at >= lease_until or not _may_send(delivery, subscription, token, at):
+            out.extend((rest, "lapsed", at) for rest, _, _ in queue[index:])
+            break
+        # 확인한 뒤 보낼 때까지 걸린 시간도 뺀다(확인이 DB 왕복이다).
+        at = now_ms + max(0, int((_monotonic() - started) * 1000))
+        left_ms = int(delivery["expires_ms"]) - at
+        if at >= lease_until or left_ms < 1000:
+            out.extend((rest, "lapsed", at) for rest, _, _ in queue[index:])
+            break
         try:
             outcome = send(subscription, data, ttl=left_ms // 1000, urgency="high")
         except Exception:
@@ -429,6 +446,7 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
     if not web_push.enabled() or (event_ids is not None and not event_ids):
         return {"claimed": 0}
     token = uuid.uuid4().hex
+    started = _monotonic()  # 시각은 맡기 전부터 — DB 처리 · 스레드 대기 · 멈춤도 맡은 시간과 남은 수명에서 뺀다
     with get_session() as db:  # 만료 정리는 따로 — 맡기 트랜잭션은 구독(엔드포인트) → 전송 순서로만 잠근다
         _expire(db, now_ms)
         db.commit()
@@ -441,29 +459,41 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
         # ① 보낼 차례인 전송이 있는 엔드포인트의 발송 권한부터 — 다른 바퀴(일반 · 시험 · 다른 프로세스)가 쥐고 있거나
         #    푸시 서비스가 기다리라고 한 엔드포인트는 건너뛴다. 조건부 UPDATE 라 두 바퀴가 같은 엔드포인트를 함께 쥐지 못한다.
         wanted = (select(PushSubscription.id).join(PushDelivery, generation)
-                  .where(_claimable(now_ms), PushDelivery.expires_ms > now_ms, free, *scope).distinct().limit(BATCH))
+                  .where(_claimable(now_ms), PushDelivery.expires_ms > now_ms, free, *scope).distinct()
+                  .limit(ENDPOINT_BATCH))
         owned = db.exec(update(PushSubscription).where(PushSubscription.id.in_(wanted.scalar_subquery()), free)
                         .values(send_token=token, send_lease_ms=now_ms + LEASE_MS)
                         .returning(PushSubscription.id, PushSubscription.version, PushSubscription.endpoint,
                                    PushSubscription.p256dh, PushSubscription.auth)).all()
         subs = {int(row[0]): {"id": int(row[0]), "version": int(row[1]), "endpoint": row[2], "p256dh": row[3],
                               "auth": row[4]} for row in owned}
-        claimed, payloads = [], {}
+        claimed, payloads, more = [], {}, len(subs) >= ENDPOINT_BATCH
         if subs:
-            # ② 쥔 엔드포인트의 전송만 맡는다(이 바퀴의 토큰).
-            due = (select(PushDelivery.id).join(PushSubscription, generation)
-                   .where(PushSubscription.send_token == token, _claimable(now_ms), PushDelivery.expires_ms > now_ms,
-                          *scope).order_by(PushDelivery.id).limit(BATCH))
+            # ② 쥔 엔드포인트의 전송을 엔드포인트마다 PER_ENDPOINT 건까지 공정하게 맡는다(이 바퀴의 토큰).
+            ranked = (select(PushDelivery.id.label("id"),
+                             func.row_number().over(partition_by=PushDelivery.subscription_id,
+                                                    order_by=PushDelivery.id).label("rank"))
+                      .join(PushSubscription, generation)
+                      .where(PushSubscription.send_token == token, _claimable(now_ms), PushDelivery.expires_ms > now_ms,
+                             *scope).subquery())
+            due = select(ranked.c.id).where(ranked.c.rank <= PER_ENDPOINT)
             claimed = [dict(row._mapping) for row in db.exec(
-                update(PushDelivery).where(PushDelivery.id.in_(due.scalar_subquery()), _claimable(now_ms))
+                update(PushDelivery).where(PushDelivery.id.in_(due), _claimable(now_ms))
                 .values(state=SENDING, claim_token=token, lease_ms=now_ms + LEASE_MS, attempts=PushDelivery.attempts + 1)
                 .returning(PushDelivery.id, PushDelivery.event_id, PushDelivery.subscription_id, PushDelivery.sub_version,
                            PushDelivery.endpoint, PushDelivery.attempts, PushDelivery.expires_ms)).all()]
+            assigned = {item["subscription_id"] for item in claimed}
+            # ③ 전송을 하나도 맡지 못한 엔드포인트의 권한은 바로 돌려준다 — 다른 바퀴가 쓸 수 있게.
+            db.exec(update(PushSubscription).where(PushSubscription.send_token == token,
+                                                   PushSubscription.id.notin_(assigned or {0}))
+                    .values(send_token="", send_lease_ms=0))
+            per_endpoint: dict[int, int] = {}
+            for item in claimed:
+                per_endpoint[item["subscription_id"]] = per_endpoint.get(item["subscription_id"], 0) + 1
+            more = more or any(count >= PER_ENDPOINT for count in per_endpoint.values())
             if claimed:
                 payloads = dict(db.exec(select(PushOutbox.id, PushOutbox.payload_json).where(
                     PushOutbox.id.in_({item["event_id"] for item in claimed}))).all())
-            else:
-                _release(db, token)
         db.commit()
     _cleanup(now_ms)
     if not claimed:
@@ -499,7 +529,6 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
             db.exec(update(PushDelivery).where(PushDelivery.claim_token == token, PushDelivery.state == SENDING)
                     .values(lease_ms=lease_until))
             db.commit()
-    started = _monotonic()
     work = list(queues.values())
 
     def run(queue):
@@ -603,10 +632,11 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
     written = len(written)
     lost = len(claimed) - written
     if lost:
-        log.warning("push dispatch outlived its lease; %s deliveries were taken over by another pass", lost)
+        log.warning("push dispatch could not record %s deliveries (taken over by another pass or cancelled)", lost)
     if counts["gave_up"] or counts["expired"]:
         log.warning("push deliveries ended undelivered: gave_up=%s expired=%s", counts["gave_up"], counts["expired"])
-    return {"claimed": len(claimed), "jobs": jobs, "lost": lost, **counts}
+    # more — 이 바퀴가 다 맡지 못한 차례가 남았을 수 있다(엔드포인트 · 엔드포인트당 상한) — push_runtime 이 바로 다음 바퀴를 돈다.
+    return {"claimed": len(claimed), "jobs": jobs, "lost": lost, "more": more, **counts}
 
 
 def _device_results(db, *, accepted: dict, holds: dict, failed: dict, gone: dict, now_ms: int) -> set[int]:

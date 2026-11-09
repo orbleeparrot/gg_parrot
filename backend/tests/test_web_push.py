@@ -755,6 +755,94 @@ def test_registrations_for_one_account_take_turns_on_postgres(monkeypatch):
     assert seen == [("SELECT pg_advisory_xact_lock(:space, :user_id)", {"space": push_alerts._DEVICE_LOCK, "user_id": 7})]
 
 
+def test_the_first_send_is_checked_too(vapid_on, monkeypatch):
+    """규칙 2 — 맡은 뒤 첫 HTTP 전에 같은 기기를 B 가 가져가면(A 의 전송은 취소) A 의 알림은 한 건도 나가지 않는다."""
+    a, b = _signup(), _signup()
+    sub = _on(a)
+    base = _base()
+    _event(_user_id(a), "fill:first-send", base)
+    real = push_alerts._cleanup
+
+    def switch_after_claim(now_ms):
+        real(now_ms)
+        _on(b, sub)  # 맡는 트랜잭션은 끝났고, 아직 아무것도 보내지 않았다
+    monkeypatch.setattr(push_alerts, "_cleanup", switch_after_claim)
+    service = Service()
+    result = push_alerts.dispatch(now_ms=base, send=service)
+    assert service.log == [], "취소된 A 의 알림을 B 의 기기로 보내지 않는다"
+    assert result["claimed"] == 1 and result["lost"] == 1
+
+
+def test_time_counts_from_before_the_claim(vapid_on, monkeypatch, send_clock):
+    """맡은 뒤 프로세스가 멈춘 시간도 센다 — 301초 멈추면(맡은 시간 300초) 보내지 않고 내려놓고, 100초면 TTL 이 그만큼 준다."""
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    event = _event(user_id, "fill:stalled-claim", base)
+    real = push_alerts._cleanup
+    stall = {"s": 301}
+
+    def frozen(now_ms):
+        real(now_ms)
+        send_clock["s"] += stall["s"]
+    monkeypatch.setattr(push_alerts, "_cleanup", frozen)
+    service = Service()
+    push_alerts.dispatch(now_ms=base, send=service)
+    assert service.log == [], "맡은 시간이 이미 지났다 — 첫 HTTP 도 보내지 않는다"
+    delivery = _delivery(event, sub)
+    assert delivery.state == "pending" and delivery.attempts == 0, "보내지 않은 것은 시도로 세지 않고 내려놓는다"
+    stall["s"] = 100
+    at = base + 301_000
+    push_alerts.dispatch(now_ms=at, send=service)
+    assert service.log[0]["ttl"] == (base + push_alerts.EVENT_TTL_MS - at - 100_000) // 1000, \
+        "멈춘 100초까지 빼고 남은 수명만"
+
+
+def test_one_devices_backlog_does_not_take_the_whole_pass(vapid_on):
+    """엔드포인트마다 PER_ENDPOINT 건까지 공정하게 — 한 기기에 밀린 알림이 많아도 다른 기기는 같은 바퀴에 받고,
+    남은 차례가 있으면 more 로 알려 발송 루프가 기다리지 않고 바로 다음 바퀴를 돈다."""
+    busy, quiet = _signup(), _signup()
+    busy_sub, quiet_sub = _on(busy), _on(quiet)
+    base = _base()
+    for index in range(push_alerts.PER_ENDPOINT + 10):
+        _event(_user_id(busy), f"fill:backlog-{index}", base)
+    _event(_user_id(quiet), "fill:quiet", base + 1)
+    service = Service()
+    first = push_alerts.dispatch(now_ms=base + 2, send=service)
+    assert len(service.sent_to(quiet_sub)) == 1, "밀린 기기 뒤에서 기다리지 않는다"
+    assert len(service.sent_to(busy_sub)) == push_alerts.PER_ENDPOINT and first["more"] is True
+    second = push_alerts.dispatch(now_ms=base + 3, send=service)
+    assert len(service.sent_to(busy_sub)) == push_alerts.PER_ENDPOINT + 10 and second["more"] is False
+
+
+def test_an_endpoint_with_nothing_assigned_is_released_at_once(vapid_on, monkeypatch):
+    """권한은 실제로 전송을 맡은 엔드포인트만 — 하나도 못 맡았으면 맡는 트랜잭션에서 바로 돌려준다(다른 바퀴가 쓸 수 있게)."""
+    token = _signup()
+    user_id = _user_id(token)
+    one, two = _on(token), _on(token)
+    base = _base()
+    _event(user_id, "fill:release", base)
+    held = []
+
+    def watch(subscription, data, **kwargs):
+        with get_session() as db:  # 보내는 동안 권한을 쥔 엔드포인트는 모두 이 바퀴의 전송을 맡고 있다
+            for sub_id, token_value in db.exec(select(PushSubscription.id, PushSubscription.send_token)
+                                               .where(PushSubscription.send_token != "")).all():
+                held.append(db.exec(select(func.count()).select_from(PushDelivery).where(
+                    PushDelivery.subscription_id == sub_id, PushDelivery.claim_token == token_value,
+                    PushDelivery.state == "sending")).one())
+        return web_push.SENT
+    push_alerts.dispatch(now_ms=base, send=watch)
+    assert held and all(held), "전송 없이 권한만 쥔 엔드포인트가 없다"
+    _event(user_id, "fill:release-2", base + 1)
+    monkeypatch.setattr(push_alerts, "PER_ENDPOINT", 0)  # 권한은 잡았지만 하나도 맡지 못하는 경우
+    assert push_alerts.dispatch(now_ms=base + 2, send=watch) == {"claimed": 0}
+    with get_session() as db:
+        assert db.exec(select(func.count()).select_from(PushSubscription).where(
+            PushSubscription.send_token != "")).one() == 0, "맡은 것이 없으면 권한을 바로 돌려준다"
+
+
 def test_a_success_never_clears_a_newer_wait(vapid_on):
     """대기는 더 늦은 값으로만 — 늦게 온 '받음'이 그 뒤에 받은 '기다려'를 지우지 않는다."""
     token = _signup()

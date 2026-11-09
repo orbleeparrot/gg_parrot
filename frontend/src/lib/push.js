@@ -243,7 +243,12 @@ export async function readPushState({ userId, config, win = globalThis.window } 
   const subscription = await currentSubscription(win);
   if (!subscription || permission !== "granted") return "off";
   const record = readRecord();
-  if (!record && hasLegacy()) return "loading"; // 이전 형식 기록 — 동기화(syncPush)가 서버에 확인해 옮길 때까지
+  // 서버 확인이 남은 기록 — '꺼짐'이 아니라 '확인 못 함'. 맞추기(syncPush)가 서버에 물어 확정하면 바뀐다.
+  // · 이전 형식 기록(아직 못 옮김) · 진행 중인 켜기 없이 남은 '등록 중' 기록(이 탭에서 켜는 중이면 controller 가 busy 로 보여 준다)
+  if (!record && hasLegacy()) return "unknown";
+  if (record?.pending && record.user === String(userId) && record.endpoint === subscription.endpoint) {
+    return inflight.has(record.op) ? "off" : "unknown";
+  }
   if (!owns(record, userId, subscription.endpoint)) return "off";
   const server = await serverStatus(userId, subscription.endpoint);
   if (server === null) return "unknown";
@@ -366,14 +371,15 @@ async function migrateLegacy({ userId, win, current }) {
 // - 진행 중인 켜기 없이 남은 '등록 중' 기록(켜는 도중 앱이 닫힘)은 서버가 가진 그대로 확정하거나 정리한다.
 // - 다른 계정이 켠 구독 · 서버가 지운 구독은 이 기기에서도 끊는다(되살리지 않는다 — 서버가 409 로도 막는다).
 // - 서버 세대가 바뀌었으면 기록에 맞추고, 12시간마다 키 · 시각을 서버에 다시 맞춘다.
-// 결과: skip(못 물음 · 해당 없음) | none | busy | dropped | confirmed | migrated | adopted | fresh | synced | changed | cancelled
+// 결과: skip(해당 없음) | unverified(서버에 못 물음 — 화면은 '확인 못 함') | none | busy | dropped | confirmed | migrated
+// | adopted | fresh | synced | changed | cancelled
 export function syncPush({ userId, win = globalThis.window, now = Date.now() } = {}) {
   if (!userId || pushSupport(win) !== "supported") return Promise.resolve("skip");
   const current = captureAccountGuard({ accountOnly: true });
   return exclusive(async () => {
     if (!current()) return "cancelled";
     const moved = await migrateLegacy({ userId, win, current });
-    if (moved === "later") return "skip";
+    if (moved === "later") return "unverified"; // 서버에 못 물었다 — 화면은 '확인 못 함', 다음 기회에
     const subscription = await currentSubscription(win);
     if (!current()) return "cancelled";
     const record = readRecord();
@@ -386,7 +392,7 @@ export function syncPush({ userId, win = globalThis.window, now = Date.now() } =
       if (inflight.has(record.op) || (!locks && now - Number(record.startedAt || 0) < PENDING_STALE_MS)) return "busy";
       const server = await serverStatus(userId, subscription.endpoint, { force: true, now });
       if (!current()) return "cancelled";
-      if (server === null) return "skip";
+      if (server === null) return "unverified";
       if (readRecord()?.op !== record.op) return "changed";
       if (!server.subscribed) {
         await dropLocal({ local: true, win });
@@ -402,7 +408,7 @@ export function syncPush({ userId, win = globalThis.window, now = Date.now() } =
     if (win.Notification.permission !== "granted") return "skip";
     const due = moved === "migrated" || now - Number(record.syncedAt || 0) >= SYNC_EVERY_MS;
     const server = await serverStatus(userId, subscription.endpoint, { force: due, now });
-    if (server === null) return "skip"; // 서버에 못 물었다 — 다음 기회에
+    if (server === null) return "unverified"; // 서버에 못 물었다 — 다음 기회에
     const latest = await currentSubscription(win);
     // 마지막 기다림 바로 뒤 — 여기서부터 서버에 쓰기까지 기다림이 없다(계정이 바뀌었으면 B 의 토큰으로 A 의 구독을 등록하게 된다).
     if (!current()) return "cancelled";

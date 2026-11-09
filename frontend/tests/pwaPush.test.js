@@ -346,7 +346,7 @@ test("서버에 못 물으면 '확인 못 함' — 꺼짐으로 보이지 않고
   forgetPushStatus();
   t.mock.method(api, "pushStatus", async () => { throw new Error("offline"); });
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "unknown");
-  assert.equal(await syncPush({ userId: 7, win, now: Date.now() + 13 * 3600_000 }), "skip");
+  assert.equal(await syncPush({ userId: 7, win, now: Date.now() + 13 * 3600_000 }), "unverified");
   assert.ok(readRecord(), "못 물었다고 기록을 지우지 않는다");
 });
 
@@ -458,7 +458,7 @@ test("이전 형식 기록(v1 키 셋) — 서버가 이 계정으로 확인해 
   globalThis.localStorage.setItem("ggp_push_owner", "7");
   globalThis.localStorage.setItem("ggp_push_owner_endpoint", subscription.endpoint);
   globalThis.localStorage.setItem("ggp_push_synced_at", String(Date.now()));
-  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "loading", "옮기기 전에는 판단하지 않는다");
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "unknown", "옮기기 전에는 켜짐 · 꺼짐을 단정하지 않는다");
   assert.equal(await syncPush({ userId: 7, win }), "migrated");
   assert.deepEqual({ ...readRecord(), syncedAt: 0 }, { v: 2, user: "7", endpoint: subscription.endpoint, version: 55, syncedAt: 0 });
   assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), null, "옛 키는 지운다");
@@ -474,8 +474,9 @@ test("이전 형식 기록 — 서버에 없으면 정리하고, 서버에 못 �
   globalThis.localStorage.setItem("ggp_push_owner", "7");
   const real = api.pushStatus;
   t.mock.method(api, "pushStatus", async () => { throw new Error("offline"); });
-  assert.equal(await syncPush({ userId: 7, win }), "skip");
+  assert.equal(await syncPush({ userId: 7, win }), "unverified");
   assert.equal(globalThis.localStorage.getItem("ggp_push_owner"), "7", "못 물었으면 그대로");
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "unknown", "꺼짐이 아니라 확인 못 함");
   t.mock.method(api, "pushStatus", real);
   forgetPushStatus();
   assert.equal(await syncPush({ userId: 7, win }), "dropped");
@@ -534,7 +535,7 @@ test("켜는 도중 앱이 닫혀 '등록 중' 기록만 남았으면 — 다음
   server.rows.set(subscription.endpoint, { user: 7, version: 321 });
   globalThis.localStorage.setItem("ggp_push_device", JSON.stringify({ v: 2, user: "7", endpoint: subscription.endpoint,
     version: 0, syncedAt: 0, pending: true, op: "gone-op", startedAt: Date.now() }));
-  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "off", "확정 전에는 켜짐이 아니다");
+  assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "unknown", "확정 전에는 켜짐도 꺼짐도 아니다");
   assert.equal(await syncPush({ userId: 7, win }), "confirmed");
   assert.deepEqual({ ...readRecord(), syncedAt: 0 }, { v: 2, user: "7", endpoint: subscription.endpoint, version: 321, syncedAt: 0 });
   assert.equal(await readPushState({ userId: 7, config: CONFIG, win }), "on");
@@ -576,6 +577,32 @@ test("다른 탭에서 진행 중인 켜기의 '등록 중' 기록은 건드리�
   }
 });
 
+test("남은 '등록 중' 기록을 확정하려다 서버에 못 물으면 — 화면은 꺼짐이 아니라 '확인 못 함', 연결이 돌아오면 켜짐", async (t) => {
+  signIn(t, 7);
+  const server = fakeServer(t);
+  const { win } = fakeBrowser({ permission: "granted" });
+  const events = new EventTarget();
+  win.addEventListener = events.addEventListener.bind(events);
+  const subscription = await win.navigator.serviceWorker.ready.then((reg) => reg.pushManager.subscribe({ applicationServerKey: new Uint8Array(1) }));
+  server.rows.set(subscription.endpoint, { user: 7, version: 9 });
+  globalThis.localStorage.setItem("ggp_push_device", JSON.stringify({ v: 2, user: "7", endpoint: subscription.endpoint,
+    version: 0, syncedAt: 0, pending: true, op: "closed-app", startedAt: Date.now() }));
+  const real = api.pushStatus;
+  t.mock.method(api, "pushStatus", async () => { throw new Error("offline"); });
+  const controller = createPushController({ ...push, loadPushConfig: async () => CONFIG }, { win, doc: null });
+  t.after(() => controller.dispose());
+  controller.setUser("7");
+  await until(() => api.pushStatus.mock.callCount() >= 1 && controller.snapshot().state !== "loading");
+  assert.equal(controller.snapshot().state, "unknown", "실제로는 켜진 구독 — 꺼짐으로 보이면 안 된다");
+  await controller.refresh();
+  assert.equal(controller.snapshot().state, "unknown", "따로 읽어도 꺼짐으로 덮지 않는다");
+  t.mock.method(api, "pushStatus", real);
+  push.forgetPushStatus();
+  events.dispatchEvent(new Event("online"));
+  await until(() => controller.snapshot().state === "on");
+  assert.equal(readRecord().version, 9);
+});
+
 test("서버 세대가 바뀌었으면(같은 계정) 기록을 서버에 맞춘다", async (t) => {
   signIn(t, 7);
   const server = fakeServer(t);
@@ -603,9 +630,9 @@ test("이전 형식 기록을 옮기다 오프라인이었으면 — 연결이 �
   const controller = createPushController({ ...push, loadPushConfig: async () => CONFIG }, { win, doc: null });
   t.after(() => controller.dispose());
   controller.setUser("7");
-  await until(() => controller.snapshot().state === "loading" && api.pushStatus.mock.callCount() >= 1);
+  await until(() => controller.snapshot().state === "unknown" && api.pushStatus.mock.callCount() >= 1);
   await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(controller.snapshot().state, "loading", "못 물었으면 옮기지 않고 기다린다");
+  assert.equal(controller.snapshot().state, "unknown", "못 물었으면 옮기지 않고 '확인 못 함'으로 기다린다");
   t.mock.method(api, "pushStatus", real);
   events.dispatchEvent(new Event("online"));
   await until(() => controller.snapshot().state === "on");

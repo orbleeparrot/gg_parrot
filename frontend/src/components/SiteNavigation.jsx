@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { DownloadIcon, HelpIcon, KeyIcon } from "./utilityIcons.jsx";
+import { DeviceMobileIcon, DownloadIcon, HelpIcon, KeyIcon } from "./utilityIcons.jsx";
+import { openAppInstall } from "../lib/installDialog.js";
+import { offersAppInstall } from "../lib/pwa.js";
 import { lockBodyScroll } from "../lib/bodyScrollLock.js";
 import { Icon } from "./icons.jsx";
 
@@ -132,6 +134,12 @@ function NavigationContents({ onNavigate, tabIndex, mobile = false }) {
             <NavLink to="/runner/install" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
               <DownloadIcon /><span>실행기 설치</span><small>Windows · Mac</small>
             </NavLink>
+            {offersAppInstall() ? (
+              <button type="button" tabIndex={tabIndex} className="site-drawer-tool" aria-haspopup="dialog"
+                onClick={() => { onNavigate?.(); openAppInstall(); }}>
+                <DeviceMobileIcon /><span>앱 설치</span><small>Android · iPhone</small>
+              </button>
+            ) : null}
             <NavLink to="/mypage/settings?tab=security" onClick={onNavigate} tabIndex={tabIndex} className="site-drawer-tool">
               <KeyIcon /><span>회원 키</span><small>실행기 계정 연결</small>
             </NavLink>

@@ -96,7 +96,9 @@ export function shouldSignalActivity(method, path) {
   // A news receipt creates no notification; do not refresh notification RPCs.
   if (/^\/api\/me\/agents\/sessions\/\d+\/news-receipts$/.test(pathname)) return false;
   if (/^\/api\/me\/agents\/sessions\/\d+\/observations$/.test(pathname)) return false;
-  return !pathname.startsWith("/api/me/notifications") && !pathname.startsWith("/api/auth/");
+  // 앱 알림 기기 등록 · 해제도 알림을 만들지 않는다.
+  return !pathname.startsWith("/api/me/notifications") && !pathname.startsWith("/api/auth/")
+    && !pathname.startsWith("/api/me/push/");
 }
 
 // SSE 재연결 간격: 1초부터 두 배씩, 최대 30초, ±20% 흔들림(모두 같은 순간에 다시 붙지 않게).

@@ -304,6 +304,7 @@
     border-radius: 6px; color: rgb(var(--c-slate-700)); font-size: 15px; font-weight: 600;
   }
   .site-drawer-tool > svg { flex: 0 0 24px; width: 24px; height: 24px; }
+  button.site-drawer-tool { border: 0; background: transparent; font-family: inherit; text-align: left; cursor: pointer; }
   .site-drawer-tool > small { margin-left: auto; font-size: 12px; font-weight: 500; }
   .site-drawer-tool:hover, .site-drawer-tool[aria-current="page"] { background: rgb(var(--c-slate-100)); }
   .site-drawer-tool:focus-visible { outline: 2px solid rgb(var(--c-brand-line)); outline-offset: 2px; }

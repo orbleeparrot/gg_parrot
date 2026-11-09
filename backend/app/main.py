@@ -70,6 +70,8 @@ from . import leaderboard as leaderboard_mod
 from . import leaderboard_runtime
 from . import agent_commentary as agent_commentary_mod
 from . import agent_commentary_runtime
+from . import push_alerts as push_alerts_mod
+from . import push_runtime
 from . import optimize as optimize_mod
 from . import optimize_runtime as optimize_runtime_mod
 from . import paper as paper_mod
@@ -156,6 +158,7 @@ async def lifespan(app: FastAPI):
     whale_activity_runtime.start()
     log_retention_runtime.start()
     agent_commentary_runtime.start()
+    push_runtime.start()  # VAPID 키가 있을 때만 — 쌓인 앱 알림을 기기로 보낸다
     try:
         yield
     finally:
@@ -163,7 +166,7 @@ async def lifespan(app: FastAPI):
         stopped = await asyncio.gather(
             leaderboard_runtime.stop(), public_news_mod.stop(),
             whale_activity_runtime.stop(), position_news_runtime.stop(),
-            log_retention_runtime.stop(), agent_commentary_runtime.stop(),
+            log_retention_runtime.stop(), agent_commentary_runtime.stop(), push_runtime.stop(),
             asyncio.to_thread(domestic_community_mod.stop_runtime),
             asyncio.to_thread(exchange_notices_mod.stop_runtime),
             asyncio.to_thread(regional_trends_mod.stop_runtime),
@@ -969,6 +972,54 @@ async def me_notifications_stream(token: str = Query(default="", max_length=2048
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"},
     )
+
+
+# 앱(PWA) 알림 — 이 기기의 브라우저 구독을 등록 · 해제한다. 보내는 쪽은 push_alerts · push_runtime.
+class PushKeysIn(BaseModel):
+    p256dh: str = Field(default="", max_length=200)
+    auth: str = Field(default="", max_length=100)
+
+
+class PushSubscriptionIn(BaseModel):
+    endpoint: str = Field(default="", max_length=push_alerts_mod.MAX_ENDPOINT)
+    keys: PushKeysIn = Field(default_factory=PushKeysIn)
+    platform: str = Field(default="", max_length=20)
+    # 앱이 아는 이 기기의 세대 — 재등록 때 보낸다. 서버의 세대가 다르면(다른 계정이 가져감 · 서버가 지움) 409.
+    expected_version: Optional[int] = Field(default=None, ge=0)
+
+
+class PushEndpointIn(BaseModel):
+    endpoint: str = Field(default="", max_length=push_alerts_mod.MAX_ENDPOINT)
+    expected_version: Optional[int] = Field(default=None, ge=0)
+
+
+@app.get("/api/push/config")
+def push_config() -> dict:
+    """앱 알림을 켤 수 있는지와 브라우저 구독에 넣을 서버 공개키(VAPID)."""
+    return push_alerts_mod.config()
+
+
+@app.put("/api/me/push/subscription")
+def me_push_subscribe(req: PushSubscriptionIn, user: User = Depends(auth_mod.current_user)) -> dict:
+    return push_alerts_mod.subscribe(user.id, req.endpoint, req.keys.p256dh, req.keys.auth, req.platform,
+                                     expected_version=req.expected_version)
+
+
+@app.post("/api/me/push/unsubscribe")
+def me_push_unsubscribe(req: PushEndpointIn, user: User = Depends(auth_mod.current_user)) -> dict:
+    return push_alerts_mod.unsubscribe(user.id, req.endpoint, expected_version=req.expected_version)
+
+
+@app.post("/api/me/push/status")
+def me_push_status(req: PushEndpointIn, user: User = Depends(auth_mod.current_user)) -> dict:
+    """이 기기가 이 계정으로 알림을 받는지 — 엔드포인트는 비밀에 가까워 주소창(GET) 대신 본문으로 받는다."""
+    return push_alerts_mod.status(user.id, req.endpoint)
+
+
+@app.post("/api/me/push/test")
+def me_push_test(user: User = Depends(auth_mod.current_user)) -> dict:
+    """알림을 켠 기기 모두에 시험 알림 한 장."""
+    return push_alerts_mod.send_test(user.id)
 
 
 # --- 비콘(익명 write 경로) — 입력 상한 · body 상한 · 방문자별 한도 ---------------------------------------

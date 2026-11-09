@@ -1,0 +1,7 @@
+/* 첫 실행 '알림 받을까요?' — 확인 대화상자 틀 + 껄무새 얼굴 + 알림 예시 한 장(글 대신 그림으로). */
+.push-ask-face { display: block; width: 64px; height: 64px; margin-bottom: 12px; pointer-events: none; user-select: none; }
+.push-ask-sample { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; padding: 12px; border-radius: 16px; background: rgb(var(--c-slate-100)); }
+.push-ask-sample img { width: 36px; height: 36px; flex: 0 0 auto; border-radius: 8px; background: #ffffff; }
+.push-ask-sample-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 14px; line-height: 20px; color: rgb(var(--c-slate-700)); }
+.push-ask-sample-text b { color: rgb(var(--c-slate-900)); font-weight: 700; }
+.push-ask-sample-meta { font-size: 12px; line-height: 18px; color: rgb(var(--c-slate-500)); }

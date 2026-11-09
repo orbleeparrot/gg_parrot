@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app import agent_commentary as ac
-from app.db import AgentCommentaryState, AgentUtterance, get_session
+from app.db import AgentCommentaryState, AgentUtterance, RunSession, get_session
 from app.main import app
 from sqlmodel import select
 from tests.test_runner import _auth, _signup
@@ -122,17 +122,33 @@ def test_loss_and_gain_bands_speak_once_per_band_and_rearm_for_a_new_position():
     assert gain[0]["hl"] == "익절 안 하고 버티는 당신은 강심장!" and gain[0]["nums_tone"] == "up"
 
 
+def test_profit_and_loss_bands_match_the_desktop_runner():
+    """손익 구간은 데스크톱 실행기 알림과 같다 — 손실 · 수익 모두 2 · 5 · 10 · 15 · 20 · 30 · 50%(앱 알림도 이 말풍선을 따른다)."""
+    assert ac.LOSS_BANDS == ac.GAIN_BANDS == (2, 5, 10, 15, 20, 30, 50)
+    holding = dict(in_position=True, entry_price=100.0, position_qty=1.0, sl_pct=8.0, tp_pct=None)
+    first, state = ac.decide(started_state(), facts(**holding, last_price=97.9, unrealized_pct=-2.1), now_ms=NOW)
+    assert [s["kind"] for s in first] == ["loss"] and first[0]["hl"] == "어어? -2% 넘었어요"
+    assert {"t": "다음엔 -5%에서 말할게요"} in first[0]["subs"]
+    still, _ = ac.decide(state, facts(**holding, last_price=98.1, unrealized_pct=-1.9), now_ms=NOW + MIN)
+    assert still == [], "-2% 안쪽으로 돌아와도 같은 구간을 다시 말하지 않는다"
+    up, state = ac.decide(started_state(), facts(**holding, last_price=102.1, unrealized_pct=2.1), now_ms=NOW)
+    assert [s["kind"] for s in up] == ["gain"] and "+2%" in up[0]["hl"]
+    fifteen, _ = ac.decide(state, facts(**holding, last_price=115.5, unrealized_pct=15.5), now_ms=NOW + MIN)
+    assert [s["kind"] for s in fifteen] == ["gain"] and "+15%" in fifteen[0]["hl"], "실행기처럼 +15% 구간도 있다"
+
+
 def test_stop_loss_distance_replaces_the_question_when_a_stop_exists():
     says, _ = ac.decide(started_state(), facts(in_position=True, entry_price=100.0, position_qty=1.0, last_price=96.8,
                                                unrealized_pct=-3.2, sl_pct=5.0), now_ms=NOW)
-    assert says[0]["hl"] == "어어? -3% 넘었어요"
+    assert says[0]["hl"] == "어어? -2% 넘었어요"
     assert {"t": "손절선(-5%)까지 1.8% 남았어요"} in says[0]["subs"]
 
 
 def test_price_move_needs_three_percent_and_waits_fifteen_minutes():
     candles = bars([0.6] * 20, closes=[201.0] * 20)
     holding = dict(in_position=True, entry_price=201.0, position_qty=1.0, unrealized_pct=3.48)
-    held = started_state() | {"pos_key": "f1", "pos_open_ms": NOW - 60 * MIN}
+    # +2% 구간은 이미 말했다 — 같은 순간엔 구간 말풍선이 움직임 말풍선보다 먼저다(같은 이야기를 두 번 하지 않는다).
+    held = started_state() | {"pos_key": "f1", "pos_open_ms": NOW - 60 * MIN, "gain_band": 2}
     says, state = ac.decide(held, facts(**holding, last_price=208.0), candles=candles, now_ms=NOW + 2 * MIN)
     move = [s for s in says if s["kind"] == "move"][0]
     assert move["face"] == "signal" and move["nums"] == "208원" and "+3.5%" in move["hl"]
@@ -341,6 +357,61 @@ def test_one_broken_session_does_not_stop_the_cycle(monkeypatch):
         assert sid in calls and result["failed"] >= 1
     finally:
         _stop(key, sid)
+
+
+def test_a_run_that_ends_before_the_first_cycle_is_still_told():
+    """바퀴 사이에 시작 · 매수 · 종료가 다 끝난 짧은 실행 — 상태 줄이 없어도 처음부터 한 번 말한다(앱 알림도 여기서 나간다)."""
+    import time
+    token = _signup()
+    key = _key(token)
+    sid = _start_session(key)
+    r = client.post("/api/runner/heartbeat", json={"session_id": sid, "last_price": 100.0, "in_position": True,
+                                                   "entry_price": 100.0, "position_qty": 2.0, "events": [
+        {"kind": "fill", "message": "실전 주문 결과", "event_name": "runner.order_result", "event_key": "fill-short",
+         "details": {"action": "BUY", "executed_qty": 2.0, "fill_price": 100.0}}]}, headers={"X-Runner-Key": key})
+    assert r.status_code == 200, r.text
+    _stop(key, sid)
+    old = _start_session(key)
+    _stop(key, old)
+    with get_session() as db:
+        row = db.get(RunSession, old)
+        row.stopped_at = "2000-01-01T00:00:00Z"  # 오래전에 끝난 실행은 처음부터 말하지 않는다
+        db.add(row)
+        db.commit()
+    now = int(time.time() * 1000)
+    _cycle(now)
+    body = client.get(f"/api/me/runner/sessions/{sid}/agent", headers=_auth(token)).json()
+    assert [item["kind"] for item in body["items"]] == ["start", "fill", "end"]
+    _cycle(now + 1_000)
+    again = client.get(f"/api/me/runner/sessions/{sid}/agent", headers=_auth(token)).json()
+    assert len(again["items"]) == 3, "한 번만"
+    with get_session() as db:
+        assert db.get(AgentCommentaryState, old) is None
+        assert db.exec(select(AgentUtterance).where(AgentUtterance.session_id == old)).first() is None
+
+
+def test_a_run_that_ends_after_the_commentary_stalled_is_still_told():
+    """중계가 15분 넘게 멈췄다가(서버 재시작 · 장애) 그사이 체결 · 종료가 들어온 실행 — 상태가 오래돼도 방금 끝났으면 말한다."""
+    import time
+    token = _signup()
+    key = _key(token)
+    sid = _start_session(key)
+    now = int(time.time() * 1000)
+    _cycle(now)  # 시작은 말했다(상태 줄이 생김)
+    r = client.post("/api/runner/heartbeat", json={"session_id": sid, "last_price": 100.0, "in_position": True,
+                                                   "entry_price": 100.0, "position_qty": 2.0, "events": [
+        {"kind": "fill", "message": "실전 주문 결과", "event_name": "runner.order_result", "event_key": "fill-stalled",
+         "details": {"action": "BUY", "executed_qty": 2.0, "fill_price": 100.0}}]}, headers={"X-Runner-Key": key})
+    assert r.status_code == 200, r.text
+    _stop(key, sid)
+    with get_session() as db:
+        state = db.get(AgentCommentaryState, sid)
+        state.updated_ms = now - 20 * 60_000  # 중계가 20분 멈춰 있었다
+        db.add(state)
+        db.commit()
+    _cycle(now + 1_000)
+    body = client.get(f"/api/me/runner/sessions/{sid}/agent", headers=_auth(token)).json()
+    assert [item["kind"] for item in body["items"]] == ["start", "fill", "end"]
 
 
 def test_moves_before_the_entry_are_not_news_and_losses_are_not_cheered():

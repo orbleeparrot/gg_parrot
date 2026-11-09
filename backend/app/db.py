@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from functools import partial
 from typing import Iterator, Optional
 
-from sqlalchemy import BigInteger, event, Index, Integer
+from sqlalchemy import BigInteger, event, Index, Integer, text as sql_text
 from sqlalchemy.exc import DBAPIError
 
 # epoch 밀리초를 담는 컬럼은 반드시 BIGINT 여야 한다. SQLite 의 INTEGER 는
@@ -694,6 +694,106 @@ class AgentCommentaryState(SQLModel, table=True):
     updated_ms: int = Field(default=0, sa_type=BigInteger)
 
 
+class PushSubscription(SQLModel, table=True):
+    """앱(PWA) 알림을 받을 기기 하나 — 브라우저 PushManager 구독(web_push · push_alerts).
+
+    엔드포인트는 기기 · 브라우저마다 하나라 유일하다. 같은 기기에서 다른 계정으로 켜면 그 계정으로 옮기고 ``version`` 을
+    올린다 — 옛 버전 앞으로 쌓인 전송(PushDelivery)은 취소되고, 옛 버전을 기대한 요청(앱의 재등록 · 해제)은 서버가 거절한다.
+    """
+
+    __table_args__ = (Index("ux_pushsubscription_endpoint", "endpoint", unique=True),)
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(index=True)
+    endpoint: str
+    p256dh: str
+    auth: str
+    platform: str = ""  # android | ios | desktop — 안내 · 통계용(브라우저가 알려 준 값)
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    updated_ms: int = Field(default=0, sa_type=BigInteger)
+    last_ok_ms: int = Field(default=0, sa_type=BigInteger)
+    fail_count: int = 0
+    # 푸시 서비스가 Retry-After 로 '그때까지 보내지 마'라고 한 시각(응답을 받은 시각 기준). 엔드포인트마다 —
+    # 이 기기로 가는 모든 전송(새 알림 · 시험 알림 포함)이 기다린다. 더 늦은 값으로만 바뀌고, 받음 응답이 지우지 않는다.
+    next_send_ms: int = Field(default=0, sa_type=BigInteger)
+    # 이 엔드포인트가 지금 계정에 묶인 세대 — 만들 때와 계정이 바뀔 때마다 새 무작위 값(52비트, 자바스크립트 안전 정수).
+    # 시각과 무관해 같은 밀리초에 지우고 다시 켜도, SQLite 가 지운 id 를 다시 써도 세대가 겹치지 않는다.
+    version: int = Field(default=0, sa_type=BigInteger)
+    # 엔드포인트 발송 권한 — 일반 · 시험 알림, 모든 프로세스가 이 한 줄로 조율한다. 한 바퀴가 토큰을 적고 맡은 동안만 이
+    # 엔드포인트로 보낸다(같은 엔드포인트를 두 바퀴가 동시에 쓰지 않게). 결과를 반영하며 풀고, 바퀴가 죽으면 시각이 지나 풀린다.
+    send_token: str = ""
+    send_lease_ms: int = Field(default=0, sa_type=BigInteger)
+    # 마지막으로 발송 바퀴에 배정된 시각 — 맡을 엔드포인트는 이 값이 오랜 순으로 고른다(성공 여부와 무관하게 돌아가며).
+    # 받은 시각(last_ok_ms)으로 고르면 실패만 하는 엔드포인트가 늘 앞자리를 차지해 건강한 기기가 밀린다(11/09 리뷰).
+    served_ms: int = Field(default=0, sa_type=BigInteger)
+
+
+class PushOutbox(SQLModel, table=True):
+    """알림 이벤트 하나 — 누구에게 무슨 일이 일어났는지. 중계가 말풍선과 같은 트랜잭션에 넣는다.
+
+    ``dedupe_key`` 가 계정마다 유일하다 — 같은 코인을 두 세션이 돌려도 같은 기사는 한 번만 울린다. ``expires_ms`` 는
+    쌓을 때 고정한다(다시 보내기가 수명을 늘리지 않는다). 기기마다 보내는 일은 PushDelivery 에 따로 있고, 모든 기기의
+    전송이 끝나면 ``sent_ms`` 와 ``result`` 를 채운다. 며칠 남겨 중복을 막다가 지운다(push_alerts.KEEP_MS).
+    """
+
+    __table_args__ = (
+        Index("ux_pushoutbox_user_key", "user_id", "dedupe_key", unique=True),
+        Index("ix_pushoutbox_sent_id", "sent_ms", "id"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int
+    dedupe_key: str
+    payload_json: str = ""
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    expires_ms: int = Field(default=0, sa_type=BigInteger)  # 이 시각이 지나면 어느 기기에도 보내지 않는다
+    sent_ms: int = Field(default=0, sa_type=BigInteger)  # 0 = 아직 끝나지 않은 기기가 있다. 모든 기기가 끝난 시각
+    # 끝난 까닭(기기별 결과를 모아) — accepted(한 대라도 푸시 서비스가 받음 — 기기에 표시됐다는 뜻은 아니다) · gave_up ·
+    # expired · failed · cancelled · no_device.
+    result: str = ""
+
+
+class PushDelivery(SQLModel, table=True):
+    """알림 하나를 구독 하나(그 세대)에 보내는 일. 시도 · 다음 시각 · 상태를 기기마다 따로 둔다.
+
+    상태: pending(보낼 차례 · 다시 보내기 대기) → sending(어떤 바퀴가 ``claim_token`` 으로 맡음) → accepted(푸시 서비스가
+    받음) | failed(영구 거절 · 끝난 구독) | gave_up(시도를 다 씀) | expired(만료 시각이 지남) | cancelled(구독 해지 · 계정 바뀜).
+    결과는 자기 토큰으로 맡고 있는 줄에만 쓴다 — 늦게 끝난 옛 바퀴가 새 바퀴의 결과를 덮지 않게.
+    대상 기기는 쌓을 때 정한다 — 나중에 켠 기기 · 다른 계정에 지난 알림을 배정하지 않는다.
+    """
+
+    __table_args__ = (
+        Index("ux_pushdelivery_event_sub", "event_id", "subscription_id", "sub_version", unique=True),
+        Index("ix_pushdelivery_state_next", "state", "next_ms"),
+        # 아직 안 끝난 전송만 담는 부분 인덱스 — 엔드포인트마다 차례 20건을 끝난 기록 · 밀린 줄 전체를 훑지 않고 찾는다.
+        # 세대(sub_version)까지 키에 둔다 — 빼면 Postgres 가 '구독 = 세대' 조건의 선택도를 곱해 맞는 행이 거의 없다고 보고
+        # 대기 전체를 비트맵으로 훑는다(11/09 PG16 실측: 끝난 27만 + 대기 3만 · 엔드포인트 100개에서 50ms → 1.0ms).
+        # 처음 이름(ix_pushdelivery_live)은 (subscription_id, id) 로 만들어졌다 — 같은 이름의 IF NOT EXISTS 는 정의를 바꾸지
+        # 않으므로 새 이름으로 만들고 옛 것은 지운다(마이그레이션 20261109210000 · 기동 보정 _PG_DROPPED_INDEXES).
+        Index("ix_pushdelivery_live_gen", "subscription_id", "sub_version", "id",
+              postgresql_where=sql_text("state IN ('pending', 'sending')"),
+              sqlite_where=sql_text("state IN ('pending', 'sending')")),
+        # 같은 부분 인덱스를 만료 시각 순으로 — 만료 정리가 지난 것만 읽는다(끝난 기록 · 살아 있는 전송을 PK 순으로 훑지 않는다).
+        Index("ix_pushdelivery_live_expiry", "expires_ms", "id",
+              postgresql_where=sql_text("state IN ('pending', 'sending')"),
+              sqlite_where=sql_text("state IN ('pending', 'sending')")),
+        Index("ix_pushdelivery_sub", "subscription_id"),
+    )
+    id: Optional[int] = Field(default=None, primary_key=True)
+    event_id: int = Field(index=True)
+    user_id: int = Field(index=True)
+    subscription_id: int
+    sub_version: int = Field(default=0, sa_type=BigInteger)
+    endpoint: str = ""  # 쌓을 때의 엔드포인트 — 같은 id 의 다른 구독에 보내지 않게
+    state: str = "pending"
+    attempts: int = 0  # 실제로 보낸 횟수(같은 엔드포인트의 앞 전송이 막혀 이번에 못 보낸 것은 세지 않는다)
+    next_ms: int = Field(default=0, sa_type=BigInteger)
+    lease_ms: int = Field(default=0, sa_type=BigInteger)
+    claim_token: str = ""
+    expires_ms: int = Field(default=0, sa_type=BigInteger)
+    created_ms: int = Field(default=0, sa_type=BigInteger)
+    finished_ms: int = Field(default=0, sa_type=BigInteger)
+    last_outcome: str = ""  # 마지막 응답(sent · retry · gone · failed) — 문의 때 본다
+
+
 class TickerNewsSnapshot(SQLModel, table=True):
     """One immutable, position-independent news analysis for an asset ticker.
 
@@ -1320,6 +1420,9 @@ class NotificationReceipt(SQLModel, table=True):
     read_ms: int = Field(default=0, sa_type=BigInteger)
 
 
+_SQLITE_DROPPED_COLUMNS = {"pushoutbox": ("lease_ms", "attempts", "done_json")}
+
+
 def _migrate() -> None:
     """Add columns introduced after a table was first created (SQLite create_all
     does not ALTER existing tables). Idempotent and safe to run every startup."""
@@ -1475,6 +1578,20 @@ def _migrate() -> None:
             "claimed_ms": "ALTER TABLE dailychallenge ADD COLUMN claimed_ms INTEGER DEFAULT 0",
             "last_error": "ALTER TABLE dailychallenge ADD COLUMN last_error TEXT DEFAULT ''",
         },
+        # 앱 알림 대기열 — 보낸 뒤에야 sent_ms(2026-11-06). 이전 6칸 표가 있는 DB 에 칸을 더한다.
+        # 앱 알림 — 이벤트 · 기기별 전송 · 구독 세대로 나눔(2026-11-09). 이전 표가 있는 DB 에 칸을 더한다.
+        # (lease_ms · attempts · done_json 은 기기별 전송 표로 옮겨 이벤트 표에서는 쓰지 않는다.)
+        "pushoutbox": {
+            "expires_ms": "ALTER TABLE pushoutbox ADD COLUMN expires_ms INTEGER NOT NULL DEFAULT 0",
+            "result": "ALTER TABLE pushoutbox ADD COLUMN result TEXT NOT NULL DEFAULT ''",
+        },
+        "pushsubscription": {
+            "next_send_ms": "ALTER TABLE pushsubscription ADD COLUMN next_send_ms INTEGER NOT NULL DEFAULT 0",
+            "version": "ALTER TABLE pushsubscription ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
+            "send_token": "ALTER TABLE pushsubscription ADD COLUMN send_token TEXT NOT NULL DEFAULT ''",
+            "send_lease_ms": "ALTER TABLE pushsubscription ADD COLUMN send_lease_ms INTEGER NOT NULL DEFAULT 0",
+            "served_ms": "ALTER TABLE pushsubscription ADD COLUMN served_ms INTEGER NOT NULL DEFAULT 0",
+        },
     }
     added.setdefault("runnerlaunchticket", {}).update({
         "rejected_at": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_at TEXT DEFAULT ''",
@@ -1504,6 +1621,21 @@ def _migrate() -> None:
             for col, ddl in cols.items():
                 if col not in existing:
                     conn.exec_driver_sql(ddl)
+        # 모델에서 빠진 칸 — 옛 모델이 NOT NULL(기본값 없음)로 만든 칸이 남으면 새 INSERT 가 그 칸을 빼고 써서 실패한다
+        # (2026-11-09: pushoutbox 의 lease_ms · attempts · done_json 은 기기별 전송 표로 옮김). 색인 · 제약이 없는 칸이라
+        # SQLite 3.35+ 의 DROP COLUMN 으로 지운다. Postgres 는 마이그레이션 20261109120000 이 지운다.
+        for table, cols in _SQLITE_DROPPED_COLUMNS.items():
+            existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+            for col in cols:
+                if col in existing:
+                    conn.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {col}")
+        # 앱 알림 부분 인덱스 — create_all 은 이미 있는 표에 새 인덱스를 만들지 않는다. 정의가 바뀐 옛 이름은 지운다.
+        tables = {row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        for name, (table, columns, where) in _PG_PARTIAL_INDEXES.items():
+            if table in tables:
+                conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns}) WHERE {where}")
+        for name in _PG_DROPPED_INDEXES:
+            conn.exec_driver_sql(f"DROP INDEX IF EXISTS {name}")
         # ALTER TABLE cannot add an indexed SQLModel field in SQLite. Keep the
         # lookup index explicit for upgraded databases as well as fresh ones.
         conn.exec_driver_sql(
@@ -1558,6 +1690,13 @@ def _migrate() -> None:
 
 
 _PG_ADDED_COLUMNS = {
+    # 앱 알림 — 끝난 까닭 · 엔드포인트 대기(20261109100000) · 이벤트 만료 시각 · 구독 세대(20261109120000) ·
+    # 엔드포인트 발송 권한(20261109150000) · 엔드포인트 배정 차례(20261109210000).
+    # 기기별 전송은 새 표(pushdelivery)라 create_all 이 만든다. 마이그레이션과 같은 정의.
+    "pushoutbox": {"expires_ms": "BIGINT NOT NULL DEFAULT 0", "result": "VARCHAR NOT NULL DEFAULT ''"},
+    "pushsubscription": {"next_send_ms": "BIGINT NOT NULL DEFAULT 0", "version": "BIGINT NOT NULL DEFAULT 0",
+                         "send_token": "VARCHAR NOT NULL DEFAULT ''", "send_lease_ms": "BIGINT NOT NULL DEFAULT 0",
+                         "served_ms": "BIGINT NOT NULL DEFAULT 0"},
     # 코인동향 소식 목록 SQL 쪽 나누기(2026-10-18) — 번역 대기 글 숨김 · 검색어 거르기. 마이그레이션 20261018000000 과 같은 정의.
     "trendarticle": {"visible": "BOOLEAN NOT NULL DEFAULT TRUE", "search_text": "VARCHAR NOT NULL DEFAULT ''"},
     "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''",
@@ -1662,6 +1801,17 @@ _PG_ADDED_COLUMNS = {
         "setup_progress_at": "TEXT DEFAULT ''",
     },
 }
+# 부분 인덱스(조건이 쿼리 조건에 들어맞아야 쓰인다) — 마이그레이션과 같은 정의.
+_PG_PARTIAL_INDEXES = {
+    # 앱 알림 — 엔드포인트별 차례 찾기(push_alerts.dispatch 의 LATERAL). 마이그레이션 20261109210000.
+    "ix_pushdelivery_live_gen": ("pushdelivery", "subscription_id, sub_version, id", "state IN ('pending', 'sending')"),
+    # 앱 알림 — 만료 정리(push_alerts._expire 의 expires_ms, id 순). 마이그레이션 20261109210000.
+    "ix_pushdelivery_live_expiry": ("pushdelivery", "expires_ms, id", "state IN ('pending', 'sending')"),
+}
+# 정의가 바뀌어 새 이름으로 옮긴 옛 인덱스 — 새 인덱스를 만든 뒤 지운다(같은 이름의 IF NOT EXISTS 는 정의를 바꾸지 않는다).
+_PG_DROPPED_INDEXES = (
+    "ix_pushdelivery_live",  # (subscription_id, id) → ix_pushdelivery_live_gen (subscription_id, sub_version, id). 20261109210000.
+)
 _PG_INDEXES = {
     "ix_trendarticle_feed": ("trendarticle", "region, content_type, published_ms, id"),
     "ix_runsessionevent_session_id_id": ("runsessionevent", "session_id, id"),
@@ -1708,6 +1858,7 @@ _PG_PRIVATE_CACHE_TABLES = (
     "visit", "macroeventdaily", "collectorrun", "collectorsourcedaily", "apiusagedaily",
     "devnote", "newsheadlinearchive", "clienterror",
     "agentutterance", "agentcommentarystate",
+    "pushsubscription", "pushoutbox", "pushdelivery",
 )
 _PG_MIGRATION_LOCK = 0x6767706172726F74  # Stable across web/worker processes and deployments.
 _PG_MIGRATION_ATTEMPTS = 3
@@ -1770,6 +1921,12 @@ def _pg_migration_statements(state: dict) -> list[str]:
     for name, (table, columns) in _PG_UNIQUE_INDEXES.items():
         if table in state["tables"] and name not in state["indexes"]:
             statements.append(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
+    for name, (table, columns, where) in _PG_PARTIAL_INDEXES.items():
+        if table in state["tables"] and name not in state["indexes"]:
+            statements.append(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns}) WHERE {where}")
+    for name in _PG_DROPPED_INDEXES:  # 대신할 인덱스는 바로 위에서 만든다
+        if name in state["indexes"]:
+            statements.append(f"DROP INDEX IF EXISTS {name}")
     for table in _PG_PRIVATE_CACHE_TABLES:
         if table not in state["tables"]:
             continue

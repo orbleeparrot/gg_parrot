@@ -21,6 +21,7 @@ import zlib
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
+from sqlalchemy import or_
 from sqlmodel import select
 
 from .db import AgentCommentaryState, AgentUtterance, RunnerCommand, RunSession, RunSessionEvent, get_session
@@ -30,8 +31,10 @@ log = logging.getLogger(__name__)
 STATE_VERSION = 1
 UTTERANCE_CAP = 400          # 세션당 말풍선 상한(오래된 것부터 지운다)
 FILL_BACKLOG = 20            # 처음 볼 때 지난 체결은 최근 이만큼만 말한다
-LOSS_BANDS = (3, 5, 10, 15, 20, 30, 50)
-GAIN_BANDS = (5, 10, 20, 30, 50)
+# 손익 구간 — 데스크톱 실행기(0.20.15~) 알림과 같은 기준(±2 · 5 · 10 · 15 · 20 · 30 · 50%, 2026-11-09 사용자 결정).
+# 채팅 말풍선과 앱 알림이 이 구간을 함께 쓴다.
+LOSS_BANDS = (2, 5, 10, 15, 20, 30, 50)
+GAIN_BANDS = (2, 5, 10, 15, 20, 30, 50)
 MOVE_PCT = 3.0               # 5~10분 사이 이만큼 움직이면 한마디
 MOVE_COOLDOWN_MS = 15 * 60_000
 REBUY_WINDOW_MS = 120_000
@@ -520,9 +523,9 @@ def _say_bands(state: dict, facts: dict, now_ms: int) -> list[dict]:
             subs.append(_sub(f"손절선(-{facts['sl_pct']:g}%)까지 {facts['sl_pct'] - abs(pct):.1f}% 남았어요"))
         if deeper:
             subs.append(_sub(f"다음엔 -{deeper[0]}%에서 말할게요"))
-        if loss == 3:
+        if loss == LOSS_BANDS[0]:
             hl = ("어어? 손절 기준이 없는데, 이대로 괜찮으세요?" if facts["sl_pct"] is None
-                  else "어어? -3% 넘었어요")
+                  else f"어어? -{loss}% 넘었어요")
             face, tone = "warning", "warn"
         elif loss == 5:
             face, tone, hl = "critical", "risk", "-5%도 넘었어요. 차분히 볼게요"
@@ -1061,10 +1064,16 @@ def _default_wait(wait_args: dict) -> Optional[dict]:
 
 def _targets(db, now_ms: int) -> list[int]:
     running = list(db.exec(select(RunSession.id).where(RunSession.status == "running")).all())
-    ended = list(db.exec(select(AgentCommentaryState.session_id).join(
-        RunSession, RunSession.id == AgentCommentaryState.session_id).where(
-        RunSession.status != "running", AgentCommentaryState.updated_ms >= now_ms - ENDED_LOOKBACK_MS,
-        ~AgentCommentaryState.state_json.contains('"ended":true'))).all())
+    # 끝난 실행 중 아직 '끝났어요'를 말하지 않은 것 — 방금(15분) 끝났거나, 상태를 방금 고친 것.
+    # 끝난 시각으로도 고르는 까닭: ① 첫 바퀴 전에 시작 · 체결 · 종료가 다 끝난 짧은 실행은 상태 줄이 없고,
+    # ② 중계가 15분 넘게 멈췄던(서버 재시작 · 장애) 실행은 상태가 오래돼 — 상태 시각만 보면 마지막 체결 · 종료가
+    # 채팅에도 앱 알림에도 영영 안 나온다. stopped_at 은 어디서나 '%Y-%m-%dT%H:%M:%SZ'(UTC)라 글자 비교가 시각 비교다.
+    since = datetime.fromtimestamp((now_ms - ENDED_LOOKBACK_MS) / 1000, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ended = list(db.exec(select(RunSession.id).outerjoin(
+        AgentCommentaryState, AgentCommentaryState.session_id == RunSession.id).where(
+        RunSession.status != "running",
+        or_(AgentCommentaryState.session_id.is_(None), ~AgentCommentaryState.state_json.contains('"ended":true')),
+        or_(RunSession.stopped_at >= since, AgentCommentaryState.updated_ms >= now_ms - ENDED_LOOKBACK_MS))).all())
     return list(dict.fromkeys([*running, *ended]))
 
 
@@ -1108,9 +1117,30 @@ def evaluate_session(session_id: int, *, now_ms: Optional[int] = None, candles_f
         feed = None
     says, next_state = decide(state, facts, fills=fills, errors=errors, candles=candles, feed=feed, wait=wait,
                               now_ms=now_ms)
+    from . import push_alerts
     with get_session() as db:
         added = save(db, facts, says, next_state, now_ms=now_ms)
+        # 말풍선은 앱 알림으로도 — 같은 트랜잭션에 쌓아, 커밋된 말풍선만 울린다. 알림을 쌓다 실패하면 말풍선 · 커서까지
+        # 되돌려 다음 바퀴에 다시 한다(PUSH_RETRY_CYCLES 번). 그래도 안 되면 채팅을 막지 않도록 말풍선만 남기고 크게 남긴다.
+        queued = 0
+        if added:
+            try:
+                queued = push_alerts.enqueue_says(db, facts, says, now_ms=now_ms)
+                _PUSH_FAILURES.pop(session_id, None)
+            except Exception:
+                count = _PUSH_FAILURES[session_id] = _PUSH_FAILURES.get(session_id, 0) + 1
+                if count < PUSH_RETRY_CYCLES:
+                    db.rollback()
+                    log.warning("push enqueue failed; commentary rolled back to retry (session=%s, times=%s)",
+                                session_id, count, exc_info=count == 1)
+                    return 0
+                _PUSH_FAILURES.pop(session_id, None)
+                log.error("push enqueue failed %s times; keeping the chat without app alerts (session=%s)",
+                          count, session_id, exc_info=True)
         db.commit()
+    if queued:
+        from . import push_runtime
+        push_runtime.request_dispatch()
     return added
 
 
@@ -1137,10 +1167,16 @@ def run_cycle(*, now_ms: Optional[int] = None, claim: bool = True, **sources) ->
                         exc_info=count == 1 or count % 60 == 0)
     if len(_FAILURES) > 1000:
         _FAILURES.clear()
+    if len(_PUSH_FAILURES) > 1000:
+        _PUSH_FAILURES.clear()
     return {"skipped": False, "sessions": len(targets), "added": added, "failed": failed}
 
 
 _FAILURES: dict[int, int] = {}
+# 앱 알림을 쌓지 못해 말풍선까지 되돌린 횟수(세션마다) — 이만큼이면 채팅은 남긴다(바퀴 10초 · 약 30초).
+# 그 알림은 다시 만들지 않고 뺀다(복구 대기 기록 없음) — 2026-11-09 사용자 결정: "저장이 3번 연속 실패하면 그냥 빼버려".
+PUSH_RETRY_CYCLES = 3
+_PUSH_FAILURES: dict[int, int] = {}
 
 
 def kst_clock(ms: int) -> str:

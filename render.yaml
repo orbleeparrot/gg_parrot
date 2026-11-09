@@ -89,6 +89,10 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
+      # 앱(PWA) 알림 서명 키 — backend/scripts/gen_vapid_keys.py 로 한 번 만들어 넣는다. 바꾸면 켜 둔 기기 알림이 모두 끊긴다.
+      # 비어 있으면 앱 알림만 꺼진다(설치 안내 · 나머지 기능은 그대로).
+      - key: VAPID_PRIVATE_KEY
+        sync: false
       # Google Identity Services의 공개 OAuth 2.0 Web client ID.
       - key: GOOGLE_CLIENT_ID
         sync: false

@@ -3,10 +3,13 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowLeftIcon } from "@phosphor-icons/react/dist/csr/ArrowLeft";
 import { UserCircleIcon } from "@phosphor-icons/react/dist/csr/UserCircle";
 import { ShieldCheckIcon } from "@phosphor-icons/react/dist/csr/ShieldCheck";
+import { BellIcon } from "@phosphor-icons/react/dist/csr/Bell";
 import { api } from "../api.js";
 import { clearAuth, getAuthUser, getToken, mergeFetchedAuthUser, setAuth, updateAuthUser, useAuth } from "../lib/auth.js";
 import ProfileEditor, { DeleteAccountDialog, PasswordChangeDialog } from "../components/ProfileEditor.jsx";
 import { RunnerKeyPanel } from "../components/RunnerKeyPanel.jsx";
+import AppAlertsSettings from "../components/AppAlertsSettings.jsx";
+import { currentDevice } from "../lib/pwa.js";
 import "./ProfileSettings.css";
 
 function hasProfile(user) {
@@ -35,14 +38,16 @@ export default function ProfileSettings() {
   const [loadError, setLoadError] = useState("");
   const [retry, setRetry] = useState(0);
   const leavingAccount = useRef(false);
-  const security = searchParams.get("tab") === "security";
+  const tab = searchParams.get("tab");
+  const security = tab === "security";
+  const alerts = tab === "alerts";
   const needsProfile = !hasProfile(user);
 
   useEffect(() => {
     setDialog(null);
     setLoadError("");
     if (!token && !leavingAccount.current) {
-      navigate(`/login?next=${encodeURIComponent(`/mypage/settings${security ? "?tab=security" : ""}`)}`, { replace: true });
+      navigate(`/login?next=${encodeURIComponent(`/mypage/settings${security || alerts ? `?tab=${tab}` : ""}`)}`, { replace: true });
     }
   }, [token, navigate]);
 
@@ -100,14 +105,16 @@ export default function ProfileSettings() {
       </header>
       <div className="profile-settings-layout">
         <nav className="profile-settings-nav" aria-label="설정 메뉴">
-          <Link to="/mypage/settings" aria-current={!security ? "page" : undefined}><UserCircleIcon size={22} aria-hidden="true" /><span>프로필</span></Link>
+          <Link to="/mypage/settings" aria-current={!security && !alerts ? "page" : undefined}><UserCircleIcon size={22} aria-hidden="true" /><span>프로필</span></Link>
           <Link to="/mypage/settings?tab=security" aria-current={security ? "page" : undefined}><ShieldCheckIcon size={22} aria-hidden="true" /><span>계정 및 보안</span></Link>
+          {/* 앱 알림은 휴대폰 · 태블릿만 — PC 는 데스크톱 실행기가 알림을 보낸다(주소로 들어오면 그 안내만 보인다). */}
+          {alerts || currentDevice().platform !== "desktop" ? <Link to="/mypage/settings?tab=alerts" aria-current={alerts ? "page" : undefined}><BellIcon size={22} aria-hidden="true" /><span>앱 알림</span></Link> : null}
         </nav>
         <div className="profile-settings-content">
           {loadError ? <div className="profile-settings-load-error" role="alert"><p>{loadError}</p><button type="button" className="btn btn-s btn-secondary" onClick={() => setRetry((value) => value + 1)}>다시 불러오기</button></div> : null}
           {notice ? <p className="profile-settings-status" role="status">{notice}</p> : null}
           {user?.id != null ? <>
-            <section className="profile-settings-panel" hidden={security} aria-labelledby="profile-settings-profile-title">
+            <section className="profile-settings-panel" hidden={security || alerts} aria-labelledby="profile-settings-profile-title">
               <h2 id="profile-settings-profile-title">프로필</h2>
               {needsProfile ? !loadError ? <p className="profile-settings-loading" role="status">계정 정보를 불러오는 중…</p> : null : <ProfileEditor key={accountKey} inline user={user} onClose={() => navigate("/mypage")} onSaved={saveProfile} />}
             </section>
@@ -123,6 +130,10 @@ export default function ProfileSettings() {
                 <button type="button" className="btn btn-m btn-secondary" onClick={logout}>로그아웃</button>
                 <button type="button" className="btn btn-m btn-ghost profile-settings-withdrawal" aria-haspopup="dialog" disabled={typeof user.can_change_password !== "boolean"} onClick={() => setDialog("delete")}>회원 탈퇴</button>
               </div>
+            </section>
+            <section className="profile-settings-panel" hidden={!alerts} aria-labelledby="profile-settings-alerts-title">
+              <h2 id="profile-settings-alerts-title">앱 알림</h2>
+              {alerts ? <AppAlertsSettings key={accountKey} /> : null}
             </section>
           </> : !loadError ? <p className="profile-settings-loading" role="status">계정 정보를 불러오는 중…</p> : null}
         </div>

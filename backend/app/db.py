@@ -722,6 +722,9 @@ class PushSubscription(SQLModel, table=True):
     # 엔드포인트로 보낸다(같은 엔드포인트를 두 바퀴가 동시에 쓰지 않게). 결과를 반영하며 풀고, 바퀴가 죽으면 시각이 지나 풀린다.
     send_token: str = ""
     send_lease_ms: int = Field(default=0, sa_type=BigInteger)
+    # 마지막으로 발송 바퀴에 배정된 시각 — 맡을 엔드포인트는 이 값이 오랜 순으로 고른다(성공 여부와 무관하게 돌아가며).
+    # 받은 시각(last_ok_ms)으로 고르면 실패만 하는 엔드포인트가 늘 앞자리를 차지해 건강한 기기가 밀린다(11/09 리뷰).
+    served_ms: int = Field(default=0, sa_type=BigInteger)
 
 
 class PushOutbox(SQLModel, table=True):
@@ -763,7 +766,9 @@ class PushDelivery(SQLModel, table=True):
         # 아직 안 끝난 전송만 담는 부분 인덱스 — 엔드포인트마다 차례 20건을 끝난 기록 · 밀린 줄 전체를 훑지 않고 찾는다.
         # 세대(sub_version)까지 키에 둔다 — 빼면 Postgres 가 '구독 = 세대' 조건의 선택도를 곱해 맞는 행이 거의 없다고 보고
         # 대기 전체를 비트맵으로 훑는다(11/09 PG16 실측: 끝난 27만 + 대기 3만 · 엔드포인트 100개에서 50ms → 1.0ms).
-        Index("ix_pushdelivery_live", "subscription_id", "sub_version", "id",
+        # 처음 이름(ix_pushdelivery_live)은 (subscription_id, id) 로 만들어졌다 — 같은 이름의 IF NOT EXISTS 는 정의를 바꾸지
+        # 않으므로 새 이름으로 만들고 옛 것은 지운다(마이그레이션 20261109210000 · 기동 보정 _PG_DROPPED_INDEXES).
+        Index("ix_pushdelivery_live_gen", "subscription_id", "sub_version", "id",
               postgresql_where=sql_text("state IN ('pending', 'sending')"),
               sqlite_where=sql_text("state IN ('pending', 'sending')")),
         # 같은 부분 인덱스를 만료 시각 순으로 — 만료 정리가 지난 것만 읽는다(끝난 기록 · 살아 있는 전송을 PK 순으로 훑지 않는다).
@@ -1585,6 +1590,7 @@ def _migrate() -> None:
             "version": "ALTER TABLE pushsubscription ADD COLUMN version INTEGER NOT NULL DEFAULT 0",
             "send_token": "ALTER TABLE pushsubscription ADD COLUMN send_token TEXT NOT NULL DEFAULT ''",
             "send_lease_ms": "ALTER TABLE pushsubscription ADD COLUMN send_lease_ms INTEGER NOT NULL DEFAULT 0",
+            "served_ms": "ALTER TABLE pushsubscription ADD COLUMN served_ms INTEGER NOT NULL DEFAULT 0",
         },
     }
     added.setdefault("runnerlaunchticket", {}).update({
@@ -1623,6 +1629,13 @@ def _migrate() -> None:
             for col in cols:
                 if col in existing:
                     conn.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {col}")
+        # 앱 알림 부분 인덱스 — create_all 은 이미 있는 표에 새 인덱스를 만들지 않는다. 정의가 바뀐 옛 이름은 지운다.
+        tables = {row[0] for row in conn.exec_driver_sql("SELECT name FROM sqlite_master WHERE type = 'table'")}
+        for name, (table, columns, where) in _PG_PARTIAL_INDEXES.items():
+            if table in tables:
+                conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns}) WHERE {where}")
+        for name in _PG_DROPPED_INDEXES:
+            conn.exec_driver_sql(f"DROP INDEX IF EXISTS {name}")
         # ALTER TABLE cannot add an indexed SQLModel field in SQLite. Keep the
         # lookup index explicit for upgraded databases as well as fresh ones.
         conn.exec_driver_sql(
@@ -1678,11 +1691,12 @@ def _migrate() -> None:
 
 _PG_ADDED_COLUMNS = {
     # 앱 알림 — 끝난 까닭 · 엔드포인트 대기(20261109100000) · 이벤트 만료 시각 · 구독 세대(20261109120000) ·
-    # 엔드포인트 발송 권한(20261109150000).
+    # 엔드포인트 발송 권한(20261109150000) · 엔드포인트 배정 차례(20261109210000).
     # 기기별 전송은 새 표(pushdelivery)라 create_all 이 만든다. 마이그레이션과 같은 정의.
     "pushoutbox": {"expires_ms": "BIGINT NOT NULL DEFAULT 0", "result": "VARCHAR NOT NULL DEFAULT ''"},
     "pushsubscription": {"next_send_ms": "BIGINT NOT NULL DEFAULT 0", "version": "BIGINT NOT NULL DEFAULT 0",
-                         "send_token": "VARCHAR NOT NULL DEFAULT ''", "send_lease_ms": "BIGINT NOT NULL DEFAULT 0"},
+                         "send_token": "VARCHAR NOT NULL DEFAULT ''", "send_lease_ms": "BIGINT NOT NULL DEFAULT 0",
+                         "served_ms": "BIGINT NOT NULL DEFAULT 0"},
     # 코인동향 소식 목록 SQL 쪽 나누기(2026-10-18) — 번역 대기 글 숨김 · 검색어 거르기. 마이그레이션 20261018000000 과 같은 정의.
     "trendarticle": {"visible": "BOOLEAN NOT NULL DEFAULT TRUE", "search_text": "VARCHAR NOT NULL DEFAULT ''"},
     "runsessionevent": {"event_key": "TEXT", "details_json": "TEXT NOT NULL DEFAULT ''",
@@ -1789,11 +1803,15 @@ _PG_ADDED_COLUMNS = {
 }
 # 부분 인덱스(조건이 쿼리 조건에 들어맞아야 쓰인다) — 마이그레이션과 같은 정의.
 _PG_PARTIAL_INDEXES = {
-    # 앱 알림 — 엔드포인트별 차례 찾기(push_alerts.dispatch 의 LATERAL). 마이그레이션 20261109180000.
-    "ix_pushdelivery_live": ("pushdelivery", "subscription_id, sub_version, id", "state IN ('pending', 'sending')"),
-    # 앱 알림 — 만료 정리(push_alerts._expire 의 expires_ms, id 순). 마이그레이션 20261109180000.
+    # 앱 알림 — 엔드포인트별 차례 찾기(push_alerts.dispatch 의 LATERAL). 마이그레이션 20261109210000.
+    "ix_pushdelivery_live_gen": ("pushdelivery", "subscription_id, sub_version, id", "state IN ('pending', 'sending')"),
+    # 앱 알림 — 만료 정리(push_alerts._expire 의 expires_ms, id 순). 마이그레이션 20261109210000.
     "ix_pushdelivery_live_expiry": ("pushdelivery", "expires_ms, id", "state IN ('pending', 'sending')"),
 }
+# 정의가 바뀌어 새 이름으로 옮긴 옛 인덱스 — 새 인덱스를 만든 뒤 지운다(같은 이름의 IF NOT EXISTS 는 정의를 바꾸지 않는다).
+_PG_DROPPED_INDEXES = (
+    "ix_pushdelivery_live",  # (subscription_id, id) → ix_pushdelivery_live_gen (subscription_id, sub_version, id). 20261109210000.
+)
 _PG_INDEXES = {
     "ix_trendarticle_feed": ("trendarticle", "region, content_type, published_ms, id"),
     "ix_runsessionevent_session_id_id": ("runsessionevent", "session_id, id"),
@@ -1906,6 +1924,9 @@ def _pg_migration_statements(state: dict) -> list[str]:
     for name, (table, columns, where) in _PG_PARTIAL_INDEXES.items():
         if table in state["tables"] and name not in state["indexes"]:
             statements.append(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns}) WHERE {where}")
+    for name in _PG_DROPPED_INDEXES:  # 대신할 인덱스는 바로 위에서 만든다
+        if name in state["indexes"]:
+            statements.append(f"DROP INDEX IF EXISTS {name}")
     for table in _PG_PRIVATE_CACHE_TABLES:
         if table not in state["tables"]:
             continue

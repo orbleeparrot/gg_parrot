@@ -73,7 +73,7 @@ LIVE = (PENDING, SENDING)
 _cleanup_lock = threading.Lock()
 _last_cleanup_ms = 0
 _cleanup_cycle: Optional[dict] = None  # 진행 중인 한 시간 정리 — 단계 · 이어 할 자리 · 센 수(다음 부름이 이어 한다)
-# 안 끝난 전송 — 부분 인덱스(ix_pushdelivery_live · ix_pushdelivery_live_expiry)의 조건과 같은 꼴로 써야 그 인덱스를 쓴다.
+# 안 끝난 전송 — 부분 인덱스(ix_pushdelivery_live_gen · ix_pushdelivery_live_expiry)의 조건과 같은 꼴로 써야 그 인덱스를 쓴다.
 # 값을 SQL 에 그대로 적는다 — 바인드 파라미터면 SQLite 는 부분 인덱스를 못 쓰고, Postgres 도 일반 계획(prepared)에서는 못 쓴다.
 _LIVE_ROWS = PushDelivery.state.in_([literal_column(f"'{state}'") for state in LIVE])
 _test_lock = threading.Lock()
@@ -521,15 +521,17 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
     with _session() as db:
         # ① 보낼 차례인 전송이 있는 엔드포인트의 발송 권한부터 — 다른 바퀴(일반 · 시험 · 다른 프로세스)가 쥐고 있거나
         #    푸시 서비스가 기다리라고 한 엔드포인트는 건너뛴다. 조건부 UPDATE 라 두 바퀴가 같은 엔드포인트를 함께 쥐지 못한다.
-        #    엔드포인트마다 보낼 것이 '있는지'만 본다(EXISTS — 첫 한 건에서 멈춘다. 밀린 줄을 다 읽지 않는다). 고르는 차례는
-        #    마지막으로 받은 시각이 오랜 순 — 밀린 엔드포인트가 ENDPOINT_BATCH 를 넘어도 같은 엔드포인트만 계속 뽑히지 않게.
-        live = _LIVE_ROWS  # 부분 인덱스(ix_pushdelivery_live) 조건과 맞춘다
+        #    엔드포인트마다 보낼 것이 '있는지'만 묻는다(EXISTS). 읽는 방법은 옵티마이저가 정한다 — 엔드포인트마다 인덱스에서
+        #    첫 한 건을 찾거나(엔드포인트가 적을 때), 안 끝난 전송으로 hash semi join(많을 때). 어느 쪽이든 끝난 기록은 읽지 않는다.
+        #    고르는 차례는 마지막으로 배정된 시각(served_ms)이 오랜 순 — 맡을 때 이 바퀴 시각을 적으므로 성공 여부와 무관하게
+        #    돌아간다. 받은 시각으로 고르면 실패만 하는 엔드포인트가 밀린 줄이 남는 동안 늘 앞자리를 차지했다(11/09 리뷰).
+        live = _LIVE_ROWS  # 부분 인덱스(ix_pushdelivery_live_gen) 조건과 맞춘다
         due_here = (select(PushDelivery.id)
                     .where(generation, live, _claimable(now_ms), PushDelivery.expires_ms > now_ms, *scope).exists())
         wanted = (select(PushSubscription.id).where(free, due_here)
-                  .order_by(PushSubscription.last_ok_ms, PushSubscription.id).limit(ENDPOINT_BATCH))
+                  .order_by(PushSubscription.served_ms, PushSubscription.id).limit(ENDPOINT_BATCH))
         owned = db.exec(update(PushSubscription).where(PushSubscription.id.in_(wanted.scalar_subquery()), free)
-                        .values(send_token=token, send_lease_ms=now_ms + LEASE_MS)
+                        .values(send_token=token, send_lease_ms=now_ms + LEASE_MS, served_ms=now_ms)
                         .returning(PushSubscription.id, PushSubscription.version, PushSubscription.endpoint,
                                    PushSubscription.p256dh, PushSubscription.auth)).all()
         subs = {int(row[0]): {"id": int(row[0]), "version": int(row[1]), "endpoint": row[2], "p256dh": row[3],

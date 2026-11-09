@@ -859,25 +859,30 @@ def test_an_endpoint_with_nothing_assigned_is_released_at_once(vapid_on, monkeyp
             PushSubscription.send_token != "")).one() == 0, "맡은 것이 없으면 권한을 바로 돌려준다"
 
 
-def test_endpoints_take_turns_when_more_are_due_than_a_pass_takes(vapid_on, monkeypatch):
-    """보낼 것이 있는 엔드포인트가 한 바퀴 몫(ENDPOINT_BATCH)보다 많으면 마지막으로 받은 시각이 오랜 기기부터 — 방금 받은
-    기기가 다시 앞자리를 차지해 다른 기기가 밀려나지 않는다."""
+def test_endpoints_take_turns_even_when_some_keep_failing(vapid_on, monkeypatch):
+    """보낼 것이 있는 엔드포인트가 한 바퀴 몫(ENDPOINT_BATCH)보다 많으면 마지막으로 배정된 시각이 오랜 기기부터 — 실패만
+    하는 기기의 밀린 줄이 남아 있어도 건강한 기기가 다음 바퀴에 차례를 받는다(리뷰 재현: 받은 시각 순이면 실패 기기 100개가
+    밀린 줄을 다 쓸 때까지 세 바퀴 동안 앞자리를 차지했다)."""
     monkeypatch.setattr(push_alerts, "ENDPOINT_BATCH", 2)
-    token = _signup()
-    user_id = _user_id(token)
-    subs = [_on(token) for _ in range(3)]
+    monkeypatch.setattr(push_alerts, "PER_ENDPOINT", 2)
+    failing_account, healthy_account = _signup(), _signup()
+    failing = [_on(failing_account) for _ in range(2)]
+    healthy = _on(healthy_account)
     base = _base()
-    with get_session() as db:  # 앞의 두 기기는 방금 받았다
-        for sub, last_ok in zip(subs, (base - 1_000, base - 2_000, 0)):
-            db.exec(update(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"]).values(last_ok_ms=last_ok))
+    with get_session() as db:  # 건강한 기기는 전에 받은 적이 있고, 실패 기기는 없다
+        db.exec(update(PushSubscription).where(PushSubscription.endpoint == healthy["endpoint"]).values(last_ok_ms=base - 1_000))
         db.commit()
-    event = _event(user_id, "fill:turns", base)
-    service = Service()
+    for index in range(5):
+        _event(_user_id(failing_account), f"fill:failing-{index}", base)
+    event = _event(_user_id(healthy_account), "fill:healthy", base)
+    service = Service({sub["endpoint"]: [web_push.RETRY] * 20 for sub in failing})
     first = push_alerts.dispatch(now_ms=base, send=service)
-    assert first["more"] and {item["endpoint"] for item in service.log} == {subs[2]["endpoint"], subs[1]["endpoint"]}, \
-        "오래 못 받은 기기부터"
+    assert first["more"] and service.sent_to(healthy) == [], "첫 바퀴는 id 순으로 실패 기기 둘"
     push_alerts.dispatch(now_ms=base + 1_000, send=service)
-    assert service.sent_to(subs[0]) == [event], "나머지도 다음 바퀴에"
+    assert service.sent_to(healthy) == [event], "실패 기기의 밀린 줄이 남아 있어도 다음 바퀴에 건강한 기기 차례"
+    with get_session() as db:
+        served = db.exec(select(PushSubscription.served_ms).where(PushSubscription.endpoint == healthy["endpoint"])).one()
+    assert served == base + 1_000, "배정될 때 그 바퀴 시각을 적는다"
 
 
 def test_a_big_expired_backlog_never_blocks_new_alerts(vapid_on, monkeypatch):
@@ -1264,10 +1269,11 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
     state = current_schema()
     for table, column in (("pushsubscription", "version"), ("pushsubscription", "next_send_ms"),
                           ("pushsubscription", "send_token"), ("pushsubscription", "send_lease_ms"),
-                          ("pushoutbox", "expires_ms"), ("pushoutbox", "result")):
+                          ("pushsubscription", "served_ms"), ("pushoutbox", "expires_ms"), ("pushoutbox", "result")):
         state["columns"].pop((table, column))
-    state["indexes"].discard("ix_pushdelivery_live")
+    state["indexes"].discard("ix_pushdelivery_live_gen")
     state["indexes"].discard("ix_pushdelivery_live_expiry")
+    state["indexes"].add("ix_pushdelivery_live")  # dfb55abe 가 (subscription_id, id) 로 만든 옛 이름
     statements = db_mod._pg_migration_statements(state)
     assert [s for s in statements if "push" in s] == [
         "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS expires_ms BIGINT NOT NULL DEFAULT 0",
@@ -1276,11 +1282,44 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_token VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_lease_ms BIGINT NOT NULL DEFAULT 0",
-        "CREATE INDEX IF NOT EXISTS ix_pushdelivery_live ON pushdelivery (subscription_id, sub_version, id) "
+        "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS served_ms BIGINT NOT NULL DEFAULT 0",
+        "CREATE INDEX IF NOT EXISTS ix_pushdelivery_live_gen ON pushdelivery (subscription_id, sub_version, id) "
         "WHERE state IN ('pending', 'sending')",
         "CREATE INDEX IF NOT EXISTS ix_pushdelivery_live_expiry ON pushdelivery (expires_ms, id) "
         "WHERE state IN ('pending', 'sending')",
-    ]
+        "DROP INDEX IF EXISTS ix_pushdelivery_live",
+    ], "정의가 바뀐 인덱스는 새 이름으로 만든 뒤 옛 것을 지운다(같은 이름의 IF NOT EXISTS 는 정의를 바꾸지 않는다)"
+    assert not [s for s in db_mod._pg_migration_statements(current_schema()) if "push" in s], "다 옮긴 DB 에는 할 일이 없다"
+
+
+def test_an_index_whose_definition_changed_is_replaced_on_boot(tmp_path, monkeypatch, vapid_on):
+    """dfb55abe 로 만든 DB(SQLite) — 옛 ix_pushdelivery_live (subscription_id, id) 가 있고 served_ms 가 없다. 기동 보정이
+    새 이름의 인덱스(세대까지 키) · 만료 인덱스 · 칸을 만들고 옛 인덱스를 지운다. 두 번 돌려도 같다."""
+    from sqlalchemy import create_engine, inspect
+    from app import db as db_mod
+    engine = create_engine(f"sqlite:///{tmp_path / 'dfb55abe-push.db'}")
+    monkeypatch.setattr(db_mod, "_engine", engine)
+    SQLModel.metadata.create_all(engine, tables=[PushSubscription.__table__, PushOutbox.__table__, PushDelivery.__table__])
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP INDEX ix_pushdelivery_live_gen")
+        conn.exec_driver_sql("DROP INDEX ix_pushdelivery_live_expiry")
+        conn.exec_driver_sql("CREATE INDEX ix_pushdelivery_live ON pushdelivery (subscription_id, id) "
+                             "WHERE state IN ('pending', 'sending')")
+        conn.exec_driver_sql("ALTER TABLE pushsubscription DROP COLUMN served_ms")
+
+    def indexes():
+        with engine.connect() as conn:
+            return dict(conn.exec_driver_sql("SELECT name, sql FROM sqlite_master WHERE type = 'index' "
+                                             "AND tbl_name = 'pushdelivery' AND name LIKE 'ix_pushdelivery_live%'").all())
+    try:
+        for _ in range(2):
+            db_mod.init_db()
+            found = indexes()
+            assert set(found) == {"ix_pushdelivery_live_gen", "ix_pushdelivery_live_expiry"}, found
+            assert "subscription_id, sub_version, id" in found["ix_pushdelivery_live_gen"]
+            assert "served_ms" in {col["name"] for col in inspect(engine).get_columns("pushsubscription")}
+    finally:
+        engine.dispose()
 
 
 def test_leaving_the_service_removes_devices_and_history(vapid_on):

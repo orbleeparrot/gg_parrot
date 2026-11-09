@@ -1174,6 +1174,7 @@ def run_cycle(*, now_ms: Optional[int] = None, claim: bool = True, **sources) ->
 
 _FAILURES: dict[int, int] = {}
 # 앱 알림을 쌓지 못해 말풍선까지 되돌린 횟수(세션마다) — 이만큼이면 채팅은 남긴다(바퀴 10초 · 약 30초).
+# 그 알림은 다시 만들지 않고 뺀다(복구 대기 기록 없음) — 2026-11-09 사용자 결정: "저장이 3번 연속 실패하면 그냥 빼버려".
 PUSH_RETRY_CYCLES = 3
 _PUSH_FAILURES: dict[int, int] = {}
 

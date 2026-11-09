@@ -237,17 +237,31 @@ def test_bad_subscriptions_are_refused(vapid_on):
                            headers=_auth(token)).status_code == 400
 
 
-def test_an_account_keeps_at_most_ten_devices(vapid_on):
+def test_an_account_keeps_at_most_three_devices(vapid_on):
+    """계정당 기기는 3대(11/09 결정) — 넷째를 켜면 가장 오래 안 쓴(마지막 등록 · 갱신이 가장 오래된) 기기가 꺼진다."""
+    assert push_alerts.MAX_DEVICES == 3
     token = _signup()
-    endpoints = []
-    for index in range(push_alerts.MAX_DEVICES + 2):
-        sub = public_sub(device())
-        endpoints.append(sub["endpoint"])
-        push_alerts.subscribe(_user_id(token), sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"],
-                              now_ms=1_000 + index)
-    with get_session() as db:
-        kept = set(db.exec(select(PushSubscription.endpoint).where(PushSubscription.user_id == _user_id(token))).all())
-    assert kept == set(endpoints[2:]), "가장 오래 안 쓴 두 대가 빠진다"
+    user_id = _user_id(token)
+    subs = [public_sub(device()) for _ in range(5)]
+
+    def register(index, at):
+        sub = subs[index]
+        push_alerts.subscribe(user_id, sub["endpoint"], sub["keys"]["p256dh"], sub["keys"]["auth"], now_ms=at)
+
+    def kept():
+        with get_session() as db:
+            endpoints = set(db.exec(select(PushSubscription.endpoint).where(PushSubscription.user_id == user_id)).all())
+        return {index for index, sub in enumerate(subs) if sub["endpoint"] in endpoints}
+
+    for index in range(3):
+        register(index, 1_000 + index)
+    assert kept() == {0, 1, 2}
+    register(0, 2_000)  # 첫 기기가 다시 맞춘다(앱의 12시간 갱신) — 가장 최근에 쓴 기기가 된다
+    register(3, 3_000)
+    assert kept() == {0, 2, 3}, "넷째를 켜면 가장 오래 안 쓴 둘째가 빠진다"
+    register(4, 4_000)
+    assert kept() == {0, 3, 4}
+    assert _status(token, subs[1]) == {"subscribed": False, "version": 0}, "빠진 기기는 꺼짐으로 보인다"
 
 
 # --- 중계 소식 → 알림 이벤트 → 기기별 전송 ------------------------------------------------
@@ -738,7 +752,7 @@ def test_a_regenerated_subscription_never_reuses_its_generation(vapid_on):
 
 def test_registrations_for_one_account_take_turns_on_postgres(monkeypatch):
     """기기 수 상한은 계정마다 한 줄로 — Postgres 에서는 등록 · 상한 처리를 계정 잠금(pg_advisory_xact_lock) 안에서 한다
-    (동시 등록 두 건이 각자 '아직 10대'로 보고 11대가 남던 것). SQLite 는 쓰기가 원래 한 줄."""
+    (동시 등록 두 건이 각자 '아직 3대'로 보고 4대가 남던 것). SQLite 는 쓰기가 원래 한 줄."""
     seen = []
 
     class Bind:
@@ -899,12 +913,12 @@ def test_push_db_use_stays_within_its_share_of_the_pool(vapid_on, monkeypatch):
                 holding["now"] -= 1
             return result
     monkeypatch.setattr(push_alerts, "get_session", lambda: Counted())
-    token = _signup()
-    user_id = _user_id(token)
-    subs = [_on(token) for _ in range(6)]
+    tokens = [_signup(), _signup()]  # 계정당 3대까지 — 두 계정에 나눠 6대
+    subs = [_on(token) for token in tokens for _ in range(push_alerts.MAX_DEVICES)]
     base = _base()
-    for index in range(3):
-        _event(user_id, f"fill:pool-{index}", base)
+    for token in tokens:
+        for index in range(3):
+            _event(_user_id(token), f"fill:pool-{index}", base)
 
     def slow(subscription, data, **kwargs):
         time.sleep(0.01)

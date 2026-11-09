@@ -44,7 +44,7 @@ from .db import PushDelivery, PushOutbox, PushSubscription, get_session
 
 log = logging.getLogger(__name__)
 
-MAX_DEVICES = 10                    # 한 계정의 기기 수 — 넘으면 가장 오래 안 쓴 기기부터 지운다
+MAX_DEVICES = 3                     # 한 계정의 기기 수 — 넘으면 가장 오래 안 쓴 기기부터 지운다(11/09 사용자 결정: 3대)
 MAX_ENDPOINT = 2048
 EVENT_TTL_MS = 60 * 60_000          # 쌓은 뒤 한 시간 — 그 뒤로는 어느 기기에도 보내지 않는다(쌓을 때 고정)
 TEST_TTL_MS = 5 * 60_000            # 시험 알림은 5분
@@ -136,8 +136,8 @@ _DEVICE_LOCK = 0x70757368  # 'push' — 계정마다 등록 · 상한 처리를 
 
 
 def _lock_account(db, user_id: int) -> None:
-    """같은 계정의 기기 등록을 트랜잭션 끝까지 한 줄로 세운다(Postgres). 두 등록이 동시에 '아직 10대'로 보고 둘 다 남겨
-    11대가 되던 것. SQLite 는 쓰기가 원래 한 줄이라 필요 없다."""
+    """같은 계정의 기기 등록을 트랜잭션 끝까지 한 줄로 세운다(Postgres). 두 등록이 동시에 '아직 3대'로 보고 둘 다 남겨
+    4대가 되던 것. SQLite 는 쓰기가 원래 한 줄이라 필요 없다."""
     if db.get_bind().dialect.name == "postgresql":
         db.execute(sql_text("SELECT pg_advisory_xact_lock(:space, :user_id)"),
                    {"space": _DEVICE_LOCK, "user_id": int(user_id)})

@@ -1,8 +1,10 @@
 """앱(PWA) 알림 — 암호화(RFC 8291 예시) · VAPID · 구독 세대 · 중계 소식 → 알림 이벤트 → 기기별 전송."""
 from __future__ import annotations
 
+import asyncio
 import itertools
 import json
+import logging
 import os
 import random
 import threading
@@ -17,11 +19,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import func
-from sqlmodel import select
+from sqlalchemy import create_engine, event, func, update
+from sqlmodel import Session, SQLModel, select
 
 from app import agent_commentary as ac
-from app import push_alerts, web_push
+from app import push_alerts, push_runtime, web_push
 from app.db import PushDelivery, PushOutbox, PushSubscription, get_session
 from app.main import app
 from tests.test_runner import _auth, _signup
@@ -857,6 +859,27 @@ def test_an_endpoint_with_nothing_assigned_is_released_at_once(vapid_on, monkeyp
             PushSubscription.send_token != "")).one() == 0, "맡은 것이 없으면 권한을 바로 돌려준다"
 
 
+def test_endpoints_take_turns_when_more_are_due_than_a_pass_takes(vapid_on, monkeypatch):
+    """보낼 것이 있는 엔드포인트가 한 바퀴 몫(ENDPOINT_BATCH)보다 많으면 마지막으로 받은 시각이 오랜 기기부터 — 방금 받은
+    기기가 다시 앞자리를 차지해 다른 기기가 밀려나지 않는다."""
+    monkeypatch.setattr(push_alerts, "ENDPOINT_BATCH", 2)
+    token = _signup()
+    user_id = _user_id(token)
+    subs = [_on(token) for _ in range(3)]
+    base = _base()
+    with get_session() as db:  # 앞의 두 기기는 방금 받았다
+        for sub, last_ok in zip(subs, (base - 1_000, base - 2_000, 0)):
+            db.exec(update(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"]).values(last_ok_ms=last_ok))
+        db.commit()
+    event = _event(user_id, "fill:turns", base)
+    service = Service()
+    first = push_alerts.dispatch(now_ms=base, send=service)
+    assert first["more"] and {item["endpoint"] for item in service.log} == {subs[2]["endpoint"], subs[1]["endpoint"]}, \
+        "오래 못 받은 기기부터"
+    push_alerts.dispatch(now_ms=base + 1_000, send=service)
+    assert service.sent_to(subs[0]) == [event], "나머지도 다음 바퀴에"
+
+
 def test_a_big_expired_backlog_never_blocks_new_alerts(vapid_on, monkeypatch):
     """오래 멈췄다 켜져 만료 전송이 잔뜩 쌓여도 — 정리는 한 번에 CLEANUP_BATCH 건씩 따로 하고, 새 알림은 그대로 나간다.
     정리가 실패해도 마찬가지(리뷰 재현: 만료 7만 건이 IN 파라미터 상한 65,535 를 넘겨 발송까지 매번 실패)."""
@@ -926,6 +949,174 @@ def test_push_db_use_stays_within_its_share_of_the_pool(vapid_on, monkeypatch):
     result = push_alerts.dispatch(now_ms=base, send=slow)
     assert result["sent"] == 18 and len(subs) == 6
     assert holding["max"] <= 2, f"푸시 DB 동시 사용 {holding['max']}개"
+
+
+def _history(user_id: int, sub: dict, count: int, created_ms: int, *, state: str, sent_ms: int,
+             expires_ms: int | None = None, lease_ms: int = 0, tag: str = "") -> list[int]:
+    """지난 알림 기록을 바로 넣는다(이벤트 + 이 기기 전송) — 정리 시험용."""
+    with get_session() as db:
+        row = db.exec(select(PushSubscription).where(PushSubscription.endpoint == sub["endpoint"])).one()
+        ids = push_alerts._queue(db, user_id, [(row.id, row.version, row.endpoint)], [
+            {"user_id": user_id, "dedupe_key": f"history:{tag}:{created_ms}:{index}", "created_ms": created_ms,
+             "expires_ms": created_ms + push_alerts.EVENT_TTL_MS if expires_ms is None else expires_ms,
+             "sent_ms": sent_ms, "result": "accepted" if sent_ms else "", "payload_json": "{}"}
+            for index in range(count)], now_ms=created_ms)
+        db.exec(update(PushDelivery).where(PushDelivery.event_id.in_(ids)).values(
+            state=state, lease_ms=lease_ms, finished_ms=0 if state in push_alerts.LIVE else created_ms))
+        db.commit()
+    return ids
+
+
+def _count(model, ids) -> int:
+    column = PushOutbox.id if model is PushOutbox else PushDelivery.event_id
+    with get_session() as db:
+        return db.exec(select(func.count()).select_from(model).where(column.in_(list(ids)))).one()
+
+
+def test_hourly_cleanup_runs_in_short_slices_outside_dispatch(vapid_on, monkeypatch, send_clock, caplog):
+    """한 시간 정리는 발송 바퀴 밖(push_runtime 의 정리 작업)에서 — 발송은 정리를 기다리지 않는다. 정리는 한 번 부를 때
+    CLEANUP_BUDGET_S 초까지만 하고 남은 일은 다음 부름이 멈춘 자리부터 이어 한다(리뷰: 정리가 dispatch 안에서 돌아 다음
+    발송이 기다림). 사흘 지난 기록만 지우고, 시간당 상한 없이 쌓인 만큼 따라간다."""
+    monkeypatch.setattr(push_alerts, "CLEANUP_BATCH", 5)
+    monkeypatch.setattr(push_alerts, "_cleanup_cycle", None)
+    monkeypatch.setattr(push_alerts, "_last_cleanup_ms", 0)
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    long_ago = base - push_alerts.KEEP_MS - 60_000
+    old = _history(user_id, sub, 12, long_ago, state="accepted", sent_ms=long_ago, tag="old")
+    recent = _history(user_id, sub, 3, base - 60_000, state="accepted", sent_ms=base - 60_000, tag="recent")
+    fresh = _event(user_id, "fill:during-cleanup", base)
+    service = Service()
+    push_alerts.dispatch(now_ms=base, send=service)
+    assert service.sent_to(sub) == [fresh]
+    assert _count(PushOutbox, old) == 12 and _count(PushDelivery, old) == 12, "발송 바퀴는 정리하지 않는다"
+
+    def slow(step):
+        def run(cycle, now_ms):
+            send_clock["s"] += 0.6  # 한 묶음에 0.6초 — 예산 1초면 한 번 부를 때 두 묶음
+            return step(cycle, now_ms)
+        return run
+    monkeypatch.setattr(push_alerts, "_CLEANUP_STEPS", tuple(slow(step) for step in push_alerts._CLEANUP_STEPS))
+    spent = []
+    with caplog.at_level(logging.INFO, logger="app.push_alerts"):
+        while True:
+            before = send_clock["s"]
+            result = push_alerts.maintain(now_ms=base)
+            spent.append(send_clock["s"] - before)
+            if not result["active"]:
+                break
+            assert len(spent) < 5000
+    assert len(spent) > 1 and max(spent) <= 1.2 + 1e-9, "한 번은 예산(1초) 안팎 — 남은 일은 다음 부름이 이어 한다"
+    assert _count(PushOutbox, old) == 0 and _count(PushDelivery, old) == 0, "사흘 지난 기록은 지운다"
+    assert _count(PushOutbox, recent) == 3 and _count(PushDelivery, recent) == 3 and _count(PushOutbox, [fresh]) == 1
+    assert any("push deliveries last hour" in record.getMessage() for record in caplog.records), "끝나면 집계를 남긴다"
+    assert push_alerts.maintain(now_ms=base + 60_000) == {"active": False}, "한 시간에 한 바퀴"
+
+
+def test_cleanup_moves_past_events_it_cannot_close_yet(vapid_on, monkeypatch, send_clock):
+    """끝나지 않은 채 남은 이벤트 마무리는 id 로 이어 읽는다 — 아직 보내는 중인 전송이 남아 못 닫는 이벤트가 한 묶음을 다
+    채워도 같은 묶음만 되풀이해 읽지 않고 그 뒤 이벤트까지 닫는다(리뷰: 진전 없는 같은 페이지 반복)."""
+    monkeypatch.setattr(push_alerts, "CLEANUP_BATCH", 2)
+    monkeypatch.setattr(push_alerts, "_cleanup_cycle", None)
+    monkeypatch.setattr(push_alerts, "_last_cleanup_ms", 0)
+    token = _signup()
+    user_id = _user_id(token)
+    sub = _on(token)
+    base = _base()
+    ended = base - push_alerts.LEASE_MS - 60_000  # 만료 뒤 맡은 시간까지 지났다
+    born = ended - push_alerts.EVENT_TTL_MS
+    stuck = _history(user_id, sub, 2, born, state="sending", sent_ms=0, expires_ms=ended, lease_ms=base + 600_000,
+                     tag="stuck")
+    done = _history(user_id, sub, 1, born, state="expired", sent_ms=0, expires_ms=ended, tag="done")
+
+    def timed(step):
+        def run(cycle, now_ms):
+            send_clock["s"] += 0.6  # 한 번 부를 때 두 묶음 — 진전이 없으면 아래 횟수 상한에 걸린다
+            return step(cycle, now_ms)
+        return run
+    monkeypatch.setattr(push_alerts, "_CLEANUP_STEPS", tuple(timed(step) for step in push_alerts._CLEANUP_STEPS))
+    calls = 0
+    while push_alerts.maintain(now_ms=base)["active"]:
+        calls += 1
+        assert calls < 1000
+    assert _event_row(done[0]).result == "expired", "못 닫는 이벤트 뒤의 이벤트도 닫는다"
+    assert all(_event_row(event).sent_ms == 0 for event in stuck), "아직 보내는 중이면 닫지 않는다"
+
+
+def test_expiry_reads_only_the_expired_part_of_the_index(monkeypatch):
+    """만료 정리는 '안 끝난 전송의 만료 시각' 부분 인덱스에서 지난 범위만 읽는다 — 만료가 0건이어도 끝난 기록 · 살아 있는
+    전송을 PK 순으로 훑지 않는다(리뷰: 종료 27만 + live 3만에서 PK 순 30만 행 검사). 시도를 다 쓴 채 버려진 전송은
+    '보내는 중'(state, next_ms 인덱스 앞부분)에서만 찾는다. 상태 값을 SQL 에 그대로 적어야 부분 인덱스 조건과 맞는다."""
+    engine = create_engine("sqlite://")
+    SQLModel.metadata.create_all(engine)
+    now = 10**13
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            "INSERT INTO pushdelivery (id, event_id, user_id, subscription_id, sub_version, endpoint, state, attempts, "
+            "next_ms, lease_ms, claim_token, expires_ms, created_ms, finished_ms, last_outcome) "
+            "VALUES (?, ?, 1, ?, 1, 'e', ?, 0, 0, 0, '', ?, ?, ?, '')",
+            [(index, index, index % 300, "accepted" if index <= 2700 else "pending",
+              now - 9_000_000 if index <= 2700 else now + 3_600_000, now, now) for index in range(1, 3001)])
+        conn.exec_driver_sql("ANALYZE")
+    seen = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def grab(conn, cursor, statement, parameters, context, executemany):
+        seen.append((statement, parameters))
+
+    class Gate:
+        def __enter__(self):
+            self.session = Session(engine)
+            return self.session
+
+        def __exit__(self, *exc):
+            self.session.close()
+    monkeypatch.setattr(push_alerts, "_session", lambda: Gate())
+    assert push_alerts._expire(now) == 0
+    plans = []
+    with engine.connect() as conn:
+        raw = conn.connection.dbapi_connection
+        for statement, parameters in seen:
+            if statement.startswith("UPDATE pushdelivery"):
+                plans.append(" | ".join(row[-1] for row in raw.execute("EXPLAIN QUERY PLAN " + statement, parameters)))
+    engine.dispose()
+    assert len(plans) == 2
+    assert "ix_pushdelivery_live_expiry (expires_ms<?)" in plans[0] and "TEMP B-TREE" not in plans[0], \
+        "만료 시각 순서 그대로 읽고 LIMIT 에서 멈춘다(따로 정렬하면 지난 것 전부를 읽는다)"
+    assert "ix_pushdelivery_state_next (state=?)" in plans[1], plans[1]
+    assert all("SCAN pushdelivery" not in plan for plan in plans), plans
+
+
+def test_runtime_keeps_sending_while_cleanup_runs():
+    """정리는 발송과 따로 돈다 — 정리 한 번이 오래 걸려도 발송 바퀴는 계속 돌고, 정리는 남았으면 짧게 · 끝나면 긴 간격으로."""
+    release = threading.Event()
+    sends, upkeep = [], []
+
+    def dispatch():
+        sends.append(time.monotonic())
+        return {"claimed": 0}
+
+    def maintain():
+        upkeep.append(time.monotonic())
+        if len(upkeep) == 1:
+            release.wait(5)  # 첫 정리가 오래 걸린다
+        return {"active": len(upkeep) < 3}
+
+    async def main():
+        runtime = push_runtime.PushRuntime(dispatch=dispatch, scan_seconds=0.02, maintain=maintain,
+                                           maintain_seconds=60, busy_seconds=0.02, start_delay=0)
+        runtime.start()
+        await asyncio.sleep(0.3)
+        during = len(sends)
+        release.set()
+        await asyncio.sleep(0.3)
+        await runtime.stop()
+        return during
+    during = asyncio.run(main())
+    assert during >= 5, "정리가 오래 걸려도 발송 바퀴는 계속 돈다"
+    assert len(upkeep) == 3, "남았으면 짧게 이어 하고, 끝나면 긴 간격(60초)"
 
 
 def test_a_success_never_clears_a_newer_wait(vapid_on):
@@ -1076,6 +1267,7 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
                           ("pushoutbox", "expires_ms"), ("pushoutbox", "result")):
         state["columns"].pop((table, column))
     state["indexes"].discard("ix_pushdelivery_live")
+    state["indexes"].discard("ix_pushdelivery_live_expiry")
     statements = db_mod._pg_migration_statements(state)
     assert [s for s in statements if "push" in s] == [
         "ALTER TABLE pushoutbox ADD COLUMN IF NOT EXISTS expires_ms BIGINT NOT NULL DEFAULT 0",
@@ -1084,7 +1276,9 @@ def test_an_older_schema_is_upgraded_on_boot(tmp_path, monkeypatch, vapid_on):
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS version BIGINT NOT NULL DEFAULT 0",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_token VARCHAR NOT NULL DEFAULT ''",
         "ALTER TABLE pushsubscription ADD COLUMN IF NOT EXISTS send_lease_ms BIGINT NOT NULL DEFAULT 0",
-        "CREATE INDEX IF NOT EXISTS ix_pushdelivery_live ON pushdelivery (subscription_id, id) "
+        "CREATE INDEX IF NOT EXISTS ix_pushdelivery_live ON pushdelivery (subscription_id, sub_version, id) "
+        "WHERE state IN ('pending', 'sending')",
+        "CREATE INDEX IF NOT EXISTS ix_pushdelivery_live_expiry ON pushdelivery (expires_ms, id) "
         "WHERE state IN ('pending', 'sending')",
     ]
 

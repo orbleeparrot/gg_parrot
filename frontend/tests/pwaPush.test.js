@@ -627,6 +627,45 @@ test("서버에 못 물은 답은 캐시하지 않는다 — 연결이 돌아온
   assert.ok(server);
 });
 
+test("서버가 계속 503 이어도 — 시작 확인은 상태를 한 번만 묻고, 연결 복구 · 돌아옴이 몰려도 도는 것 뒤에 한 번만 더 묻는다", async (t) => {
+  signIn(t, 7);
+  fakeServer(t);
+  const { win } = fakeBrowser();
+  const events = new EventTarget();
+  win.addEventListener = events.addEventListener.bind(events);
+  const doc = new EventTarget();
+  doc.visibilityState = "visible";
+  await enablePush({ userId: 7, config: CONFIG, win });
+  forgetPushStatus();
+  const real = api.pushStatus;
+  let gate = null;
+  t.mock.method(api, "pushStatus", async () => {
+    if (gate) await gate;
+    throw Object.assign(new Error("busy"), { status: 503 });
+  });
+  const controller = createPushController({ ...push, loadPushConfig: async () => CONFIG }, { win, doc });
+  t.after(() => controller.dispose());
+  controller.setUser("7");
+  await until(() => controller.snapshot().state === "unknown");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(api.pushStatus.mock.callCount(), 1, "맞추기가 못 물었으면 다시 읽을 때 또 묻지 않는다");
+  let open;
+  gate = new Promise((resolve) => { open = resolve; });
+  events.dispatchEvent(new Event("online"));
+  await until(() => api.pushStatus.mock.callCount() === 2);
+  for (let index = 0; index < 9; index += 1) events.dispatchEvent(new Event("online"));
+  for (let index = 0; index < 3; index += 1) doc.dispatchEvent(new Event("visibilitychange"));
+  open();
+  gate = null;
+  await until(() => api.pushStatus.mock.callCount() >= 3);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(api.pushStatus.mock.callCount(), 3, "이벤트 13번이 몰려도 도는 중인 것 + 뒤따르는 한 번");
+  assert.equal(controller.snapshot().state, "unknown");
+  t.mock.method(api, "pushStatus", real);
+  events.dispatchEvent(new Event("online"));
+  await until(() => controller.snapshot().state === "on");
+});
+
 test("서버 세대가 바뀌었으면(같은 계정) 기록을 서버에 맞춘다", async (t) => {
   signIn(t, 7);
   const server = fakeServer(t);

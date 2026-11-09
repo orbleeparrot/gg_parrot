@@ -761,7 +761,13 @@ class PushDelivery(SQLModel, table=True):
         Index("ux_pushdelivery_event_sub", "event_id", "subscription_id", "sub_version", unique=True),
         Index("ix_pushdelivery_state_next", "state", "next_ms"),
         # 아직 안 끝난 전송만 담는 부분 인덱스 — 엔드포인트마다 차례 20건을 끝난 기록 · 밀린 줄 전체를 훑지 않고 찾는다.
-        Index("ix_pushdelivery_live", "subscription_id", "id",
+        # 세대(sub_version)까지 키에 둔다 — 빼면 Postgres 가 '구독 = 세대' 조건의 선택도를 곱해 맞는 행이 거의 없다고 보고
+        # 대기 전체를 비트맵으로 훑는다(11/09 PG16 실측: 끝난 27만 + 대기 3만 · 엔드포인트 100개에서 50ms → 1.0ms).
+        Index("ix_pushdelivery_live", "subscription_id", "sub_version", "id",
+              postgresql_where=sql_text("state IN ('pending', 'sending')"),
+              sqlite_where=sql_text("state IN ('pending', 'sending')")),
+        # 같은 부분 인덱스를 만료 시각 순으로 — 만료 정리가 지난 것만 읽는다(끝난 기록 · 살아 있는 전송을 PK 순으로 훑지 않는다).
+        Index("ix_pushdelivery_live_expiry", "expires_ms", "id",
               postgresql_where=sql_text("state IN ('pending', 'sending')"),
               sqlite_where=sql_text("state IN ('pending', 'sending')")),
         Index("ix_pushdelivery_sub", "subscription_id"),
@@ -1784,7 +1790,9 @@ _PG_ADDED_COLUMNS = {
 # 부분 인덱스(조건이 쿼리 조건에 들어맞아야 쓰인다) — 마이그레이션과 같은 정의.
 _PG_PARTIAL_INDEXES = {
     # 앱 알림 — 엔드포인트별 차례 찾기(push_alerts.dispatch 의 LATERAL). 마이그레이션 20261109180000.
-    "ix_pushdelivery_live": ("pushdelivery", "subscription_id, id", "state IN ('pending', 'sending')"),
+    "ix_pushdelivery_live": ("pushdelivery", "subscription_id, sub_version, id", "state IN ('pending', 'sending')"),
+    # 앱 알림 — 만료 정리(push_alerts._expire 의 expires_ms, id 순). 마이그레이션 20261109180000.
+    "ix_pushdelivery_live_expiry": ("pushdelivery", "expires_ms, id", "state IN ('pending', 'sending')"),
 }
 _PG_INDEXES = {
     "ix_trendarticle_feed": ("trendarticle", "region, content_type, published_ms, id"),

@@ -38,11 +38,11 @@ export function createPushController(ops = pushOps, { win, doc = globalThis.docu
   }
 
   // 늦게 온 옛 읽기는 버린다(순번) — 계정이 바뀌었거나 그 뒤에 다시 읽기 시작했으면.
-  async function refresh({ reloadConfig = false } = {}) {
+  async function refresh({ reloadConfig = false, askServer = true } = {}) {
     const seq = ++reads;
     const userId = snapshot.userId;
     const current = await loadConfig(reloadConfig);
-    const state = await ops.readPushState({ userId, config: current, win }).catch(() => "unknown");
+    const state = await ops.readPushState({ userId, config: current, win, askServer }).catch(() => "unknown");
     if (seq === reads && userId === snapshot.userId) emit({ state });
     return state;
   }
@@ -70,11 +70,34 @@ export function createPushController(ops = pushOps, { win, doc = globalThis.docu
   }
 
   // 기기 기록을 서버와 맞추고(로그인했을 때만) 상태를 다시 읽는다. 기록이 바뀌었으면 다른 창에도 알린다.
-  // 서버에 못 물었으면(unverified) 그 결과를 그대로 '확인 못 함'으로 — 다시 읽은 값이 그보다 단정적(꺼짐)이면 덮지 않는다.
-  async function reconcile() {
+  // 서버에 못 물었으면(unverified) 그 결과를 그대로 '확인 못 함'으로 — 다시 읽을 때 서버에 또 묻지 않고, 다시 읽은 값이
+  // 그보다 단정적(꺼짐)이면 덮지 않는다.
+  // 한 번에 하나만 — 도는 중에 시작 · 로그인 · 연결 복구 · 돌아옴이 몰려 와도 끝난 뒤 한 번만 더 돈다(그때의 계정으로).
+  // 서버가 계속 실패해도 이벤트마다 묻지 않는다. 실패를 오래 들고 있지는 않는다 — 다음 이벤트는 다시 묻는다.
+  let running = null;
+  let again = false;
+  function reconcile() {
+    if (running) {
+      again = true;
+      return running;
+    }
+    running = (async () => {
+      let result;
+      do {
+        again = false;
+        result = await reconcileOnce();
+      } while (again);
+      return result;
+    })().finally(() => {
+      running = null;
+    });
+    return running;
+  }
+
+  async function reconcileOnce() {
     const userId = snapshot.userId;
     const result = userId ? await ops.syncPush({ userId, win }).catch(() => "unverified") : "skip";
-    const state = await refresh({ reloadConfig: true });
+    const state = await refresh({ reloadConfig: true, askServer: result !== "unverified" });
     if (result === "unverified" && userId === snapshot.userId && ["off", "loading"].includes(state)) emit({ state: "unknown" });
     if (["dropped", "migrated", "confirmed", "adopted", "none"].includes(result)) announce();
     return result;

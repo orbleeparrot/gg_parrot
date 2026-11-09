@@ -98,11 +98,13 @@ export function loadPushConfig({ refresh = false } = {}) {
 
 // 서버가 이 기기(엔드포인트)를 이 계정으로 보내고 있는지와 그 세대 — { subscribed, version } | null(못 물음).
 // 같은 순간 여러 곳이 읽으면 잠깐(STATUS_FRESH_MS) 같은 답을 나눠 쓴다. 못 물은 답(null)은 나눠 쓰지 않는다 —
-// 연결이 돌아온 직후의 확인이 옛 실패를 다시 쓰지 않고 바로 서버에 묻게.
+// 연결이 돌아온 직후의 확인이 옛 실패를 다시 쓰지 않고 바로 서버에 묻게. cachedOnly 면 새로 묻지 않는다(나눠 쓸 답이
+// 없으면 null) — 방금 서버에 못 물은 맞추기 뒤에 상태를 다시 읽을 때 같은 실패를 한 번 더 묻지 않게.
 let statusMemo = null;
-function serverStatus(userId, endpoint, { force = false, now = Date.now() } = {}) {
+function serverStatus(userId, endpoint, { force = false, cachedOnly = false, now = Date.now() } = {}) {
   const key = `${userId}|${endpoint}`;
   if (!force && statusMemo?.key === key && now - statusMemo.at < STATUS_FRESH_MS) return statusMemo.promise;
+  if (cachedOnly) return Promise.resolve(null);
   const memo = { key, at: now, promise: null };
   memo.promise = api.pushStatus(endpoint).then(
     (body) => ({ subscribed: Boolean(body?.subscribed), version: Number(body?.version) || 0 }),
@@ -238,7 +240,8 @@ async function pushRegistration(win) {
 
 // 이 기기의 상태(읽기만 한다 — 저장소를 바꾸지 않는다):
 // loading | on | off | denied | unconfigured | unknown(확인 못 함 — '꺼짐'과 다르다) | desktop | needs-install | in-app | unsupported
-export async function readPushState({ userId, config, win = globalThis.window } = {}) {
+// askServer=false — 서버에 새로 묻지 않는다(나눠 쓸 답이 없으면 'unknown'). 방금 서버에 못 물은 맞추기 뒤에 쓴다.
+export async function readPushState({ userId, config, win = globalThis.window, askServer = true } = {}) {
   const support = pushSupport(win);
   if (support !== "supported") return support;
   if (!config) return "loading";
@@ -256,7 +259,7 @@ export async function readPushState({ userId, config, win = globalThis.window } 
     return inflight.has(record.op) ? "off" : "unknown";
   }
   if (!owns(record, userId, subscription.endpoint)) return "off";
-  const server = await serverStatus(userId, subscription.endpoint);
+  const server = await serverStatus(userId, subscription.endpoint, { cachedOnly: !askServer });
   if (server === null) return "unknown";
   return server.subscribed ? "on" : "off";
 }

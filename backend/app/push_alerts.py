@@ -36,7 +36,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, delete as sql_delete, func, literal, or_, text as sql_text, true, tuple_, update
+from sqlalchemy import (and_, case, delete as sql_delete, func, literal, literal_column, or_, text as sql_text, true, tuple_,
+                        update)
 from sqlmodel import select
 
 from . import web_push
@@ -53,8 +54,9 @@ FAIL_LIMIT = 10                     # 연달아 이만큼 거절되면(키 바�
 ENDPOINT_BATCH = 100                # 한 바퀴에 맡는 엔드포인트 수
 PER_ENDPOINT = 20                   # 엔드포인트 하나에서 한 바퀴에 맡는 전송 수 — 한 기기의 밀린 알림이 바퀴를 다 차지하지 않게
 CLEANUP_BATCH = 500                 # 만료 · 보관 정리를 한 번에 이만큼씩(긴 잠금 · 드라이버 파라미터 상한 65,535 를 피한다)
-CLEANUP_ROUNDS = 20                 # 한 시간 정리에서 돌리는 묶음 수 상한 — 남으면 다음 시간에
-ID_CHUNK = 500                      # IN 목록 한 번의 크기
+CLEANUP_EVERY_MS = 3_600_000        # 보관 정리 · 집계를 한 시간에 한 번 시작한다
+CLEANUP_BUDGET_S = 1.0              # 정리를 한 번 부를 때 쓰는 시간 — 넘으면 멈추고 다음 부름(몇 초 뒤)이 이어 한다
+ID_CHUNK = 500                     # IN 목록 한 번의 크기
 LEASE_MS = 5 * 60_000               # 맡은 바퀴가 이 안에 끝내지 못하면(죽음 · 멈춤) 다른 바퀴가 다시 맡는다
 MAX_ATTEMPTS = 5                    # 기기 하나에 보내 보는 횟수(첫 시도 포함) — 그 기기의 전송에만 센다
 RETRY_WAIT_MS = (30_000, 60_000, 120_000, 300_000)  # n 번째 시도가 막혔을 때 다음 시도까지(Retry-After 가 더 길면 그만큼)
@@ -70,6 +72,10 @@ LIVE = (PENDING, SENDING)
 
 _cleanup_lock = threading.Lock()
 _last_cleanup_ms = 0
+_cleanup_cycle: Optional[dict] = None  # 진행 중인 한 시간 정리 — 단계 · 이어 할 자리 · 센 수(다음 부름이 이어 한다)
+# 안 끝난 전송 — 부분 인덱스(ix_pushdelivery_live · ix_pushdelivery_live_expiry)의 조건과 같은 꼴로 써야 그 인덱스를 쓴다.
+# 값을 SQL 에 그대로 적는다 — 바인드 파라미터면 SQLite 는 부분 인덱스를 못 쓰고, Postgres 도 일반 계획(prepared)에서는 못 쓴다.
+_LIVE_ROWS = PushDelivery.state.in_([literal_column(f"'{state}'") for state in LIVE])
 _test_lock = threading.Lock()
 _last_test_ms: dict[int, int] = {}
 
@@ -362,15 +368,19 @@ def _finish_events(db, event_ids, *, now_ms: int) -> None:
 def _expire(now_ms: int, *, limit: Optional[int] = None) -> int:
     """만료 시각이 지난 전송을 expired 로, 마지막 시도를 쥔 채 죽은 바퀴의 전송을 gave_up 으로 끝낸다 — 한 번에 limit 건까지,
     따로 커밋한다(맡은 바퀴가 아직 쥐고 있는 것은 그 바퀴가 끝낸다). 대량으로 쌓여도 정상 발송을 막지 않는다:
-    발송은 만료되지 않은 전송만 맡고, 이 정리가 실패해도 그 바퀴는 그대로 돈다. 끝낸 수를 돌려준다."""
+    발송은 만료되지 않은 전송만 맡고, 이 정리가 실패해도 그 바퀴는 그대로 돈다. 끝낸 수를 돌려준다.
+    찾는 범위도 좁게 — 만료는 '안 끝난 전송의 만료 시각' 부분 인덱스(ix_pushdelivery_live_expiry)를 그 순서대로 읽어 지난
+    것만 본다(끝난 기록 · 아직 살아 있는 전송을 PK 순으로 훑지 않는다). 시도를 다 쓴 채 버려진 전송은 '보내는 중'
+    (state, next_ms 인덱스의 앞부분)에서만 찾는다 — 그 수는 바퀴들이 쥔 만큼뿐이다."""
     limit = limit or CLEANUP_BATCH
     lapsed = and_(PushDelivery.state == SENDING, PushDelivery.lease_ms <= now_ms)
+    expired = and_(_LIVE_ROWS, PushDelivery.expires_ms <= now_ms,
+                   or_(PushDelivery.state == PENDING, PushDelivery.lease_ms <= now_ms))
     finished = 0
     with _session() as db:
-        for condition, state in ((and_(PushDelivery.expires_ms <= now_ms, or_(PushDelivery.state == PENDING, lapsed)),
-                                  EXPIRED),
-                                 (and_(lapsed, PushDelivery.attempts >= MAX_ATTEMPTS), GAVE_UP)):
-            ids = select(PushDelivery.id).where(condition).order_by(PushDelivery.id).limit(limit)
+        for condition, order, state in ((expired, (PushDelivery.expires_ms, PushDelivery.id), EXPIRED),
+                                        (and_(lapsed, PushDelivery.attempts >= MAX_ATTEMPTS), (), GAVE_UP)):
+            ids = select(PushDelivery.id).where(condition).order_by(*order).limit(limit)
             rows = db.exec(update(PushDelivery).where(PushDelivery.id.in_(ids), condition)
                            .values(state=state, finished_ms=now_ms, lease_ms=0, claim_token="")
                            .returning(PushDelivery.event_id)).all()
@@ -511,10 +521,13 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
     with _session() as db:
         # ① 보낼 차례인 전송이 있는 엔드포인트의 발송 권한부터 — 다른 바퀴(일반 · 시험 · 다른 프로세스)가 쥐고 있거나
         #    푸시 서비스가 기다리라고 한 엔드포인트는 건너뛴다. 조건부 UPDATE 라 두 바퀴가 같은 엔드포인트를 함께 쥐지 못한다.
-        live = PushDelivery.state.in_(LIVE)  # 부분 인덱스(ix_pushdelivery_live) 조건과 맞춘다
-        wanted = (select(PushSubscription.id).join(PushDelivery, generation)
-                  .where(live, _claimable(now_ms), PushDelivery.expires_ms > now_ms, free, *scope).distinct()
-                  .limit(ENDPOINT_BATCH))
+        #    엔드포인트마다 보낼 것이 '있는지'만 본다(EXISTS — 첫 한 건에서 멈춘다. 밀린 줄을 다 읽지 않는다). 고르는 차례는
+        #    마지막으로 받은 시각이 오랜 순 — 밀린 엔드포인트가 ENDPOINT_BATCH 를 넘어도 같은 엔드포인트만 계속 뽑히지 않게.
+        live = _LIVE_ROWS  # 부분 인덱스(ix_pushdelivery_live) 조건과 맞춘다
+        due_here = (select(PushDelivery.id)
+                    .where(generation, live, _claimable(now_ms), PushDelivery.expires_ms > now_ms, *scope).exists())
+        wanted = (select(PushSubscription.id).where(free, due_here)
+                  .order_by(PushSubscription.last_ok_ms, PushSubscription.id).limit(ENDPOINT_BATCH))
         owned = db.exec(update(PushSubscription).where(PushSubscription.id.in_(wanted.scalar_subquery()), free)
                         .values(send_token=token, send_lease_ms=now_ms + LEASE_MS)
                         .returning(PushSubscription.id, PushSubscription.version, PushSubscription.endpoint,
@@ -544,7 +557,6 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
                     PushOutbox.id.in_({item["event_id"] for item in claimed}))).all())
         db.commit()
     if not claimed:
-        _cleanup(now_ms)
         return {"claimed": 0}
 
     plan: dict[int, dict] = {}       # 전송 id → 쓸 값
@@ -683,7 +695,6 @@ def dispatch(*, now_ms: Optional[int] = None, send: Callable = web_push.send,
         log.warning("push dispatch could not record %s deliveries (taken over by another pass or cancelled)", lost)
     if counts["gave_up"] or counts["expired"]:
         log.warning("push deliveries ended undelivered: gave_up=%s expired=%s", counts["gave_up"], counts["expired"])
-    _cleanup(now_ms)  # 한 시간 정리는 보낸 뒤에 — 맡아 둔 알림의 발송을 늦추지 않게
     # more — 이 바퀴가 다 맡지 못한 차례가 남았을 수 있다(엔드포인트 · 엔드포인트당 상한) — push_runtime 이 바로 다음 바퀴를 돈다.
     return {"claimed": len(claimed), "jobs": jobs, "lost": lost, "more": more, **counts}
 
@@ -721,44 +732,91 @@ def _device_results(db, *, accepted: dict, holds: dict, failed: dict, gone: dict
     return touched
 
 
-def _cleanup(now_ms: int) -> None:
-    """한 시간에 한 번 — 끝나지 않은 채 남은 이벤트를 마무리하고, 사흘 지난 기록을 지우고, 지난 한 시간 동안 끝난 전송의
-    상태별 개수와 가장 오래 기다리는 전송의 나이를 남긴다('알림이 안 왔다' 문의를 가를 때).
-    모두 CLEANUP_BATCH 건씩 나눠 커밋하고 CLEANUP_ROUNDS 번까지만 — 오래 멈췄다 켜져 많이 쌓였어도 긴 잠금 · 큰 IN 없이
-    여러 시간에 걸쳐 줄인다. 정리가 실패해도 발송은 막지 않는다(호출자가 예외를 삼킨다)."""
-    global _last_cleanup_ms
-    with _cleanup_lock:
-        if now_ms - _last_cleanup_ms < 3_600_000:
-            return
-        _last_cleanup_ms = now_ms
+def maintain(*, now_ms: Optional[int] = None, budget_s: Optional[float] = None) -> dict:
+    """한 시간 정리 — 발송 바퀴 밖(push_runtime 의 정리 작업)에서 부른다. 발송은 정리를 기다리지 않는다.
+
+    한 시간에 한 번 한 바퀴를 시작해 단계별로 CLEANUP_BATCH 건씩 커밋한다: 만료 → 끝나지 않은 채 남은 이벤트 마무리 →
+    사흘 지난 전송 · 이벤트 삭제 → 집계 로그('알림이 안 왔다' 문의 · 정리가 유입을 따라가는지 볼 때). 한 번 부를 때
+    budget_s(기본 CLEANUP_BUDGET_S) 초까지만 하고, 남은 일은 멈춘 자리부터 다음 부름이 이어 한다 — 오래 멈췄다 켜져
+    많이 쌓였어도 한 번이 길어지지 않고, 처리량은 시간당 상한 없이 쌓인 만큼 따라간다(부르는 간격이 짧아진다).
+    실패하면 그 바퀴를 접고 다음 시간에 다시. {"active": 이어 할 일이 남았는지} 를 돌려준다."""
+    global _cleanup_cycle, _last_cleanup_ms
+    now_ms = _now_ms() if now_ms is None else now_ms
+    if not _cleanup_lock.acquire(blocking=False):  # 다른 스레드가 하는 중 — 그쪽이 이어 한다
+        return {"active": False}
     try:
-        for _ in range(CLEANUP_ROUNDS):  # 만료 — 발송 바퀴도 한 묶음씩 하지만, 많이 쌓였으면 여기서 더
-            if _expire(now_ms) < CLEANUP_BATCH:
-                break
-        for _ in range(CLEANUP_ROUNDS):
-            with _session() as db:
-                lingering = db.exec(select(PushOutbox.id).where(PushOutbox.sent_ms == 0,
-                                                                PushOutbox.expires_ms < now_ms - LEASE_MS)
-                                    .order_by(PushOutbox.id).limit(CLEANUP_BATCH)).all()
-                _finish_events(db, lingering, now_ms=now_ms)
-                db.commit()
-            if len(lingering) < CLEANUP_BATCH:
-                break
-        for model in (PushDelivery, PushOutbox):
-            for _ in range(CLEANUP_ROUNDS):
-                with _session() as db:
-                    old = select(model.id).where(model.created_ms < now_ms - KEEP_MS).order_by(model.id).limit(CLEANUP_BATCH)
-                    removed = db.exec(sql_delete(model).where(model.id.in_(old))).rowcount
-                    db.commit()
-                if removed < CLEANUP_BATCH:
+        cycle = _cleanup_cycle
+        if cycle is None:
+            if now_ms - _last_cleanup_ms < CLEANUP_EVERY_MS:
+                return {"active": False}
+            _last_cleanup_ms = now_ms
+            cycle = {"step": 0, "after": 0, "expired": 0, "checked": 0, "removed": {"pushdelivery": 0, "pushoutbox": 0},
+                     "started_ms": now_ms}
+        deadline = _monotonic() + (CLEANUP_BUDGET_S if budget_s is None else budget_s)
+        try:
+            while cycle["step"] < len(_CLEANUP_STEPS):
+                if _CLEANUP_STEPS[cycle["step"]](cycle, now_ms):
+                    cycle["step"] += 1
+                    cycle["after"] = 0
+                if _monotonic() >= deadline:
                     break
+        except Exception:
+            log.warning("push cleanup failed; retrying next hour", exc_info=True)
+            cycle = None
+        _cleanup_cycle = cycle if cycle is not None and cycle["step"] < len(_CLEANUP_STEPS) else None
+        return {"active": _cleanup_cycle is not None}
+    finally:
+        _cleanup_lock.release()
+
+
+def _sweep_expired(cycle: dict, now_ms: int) -> bool:
+    count = _expire(now_ms)
+    cycle["expired"] += count
+    return count < CLEANUP_BATCH
+
+
+def _close_lingering(cycle: dict, now_ms: int) -> bool:
+    """만료 뒤에도 끝난 시각이 비어 있는 이벤트를 마무리한다. 아직 안 끝난 전송이 남아 못 닫는 이벤트가 있어도 id 로
+    이어 읽어(after) 같은 묶음을 되풀이해 읽지 않는다 — 안 보낸 이벤트만 담는 (sent_ms, id) 인덱스의 앞부분만 읽는다."""
+    with _session() as db:
+        ids = db.exec(select(PushOutbox.id).where(PushOutbox.sent_ms == 0, PushOutbox.id > cycle["after"],
+                                                  PushOutbox.expires_ms < now_ms - LEASE_MS)
+                      .order_by(PushOutbox.id).limit(CLEANUP_BATCH)).all()
+        _finish_events(db, ids, now_ms=now_ms)
+        db.commit()
+    if ids:
+        cycle["after"] = max(ids)
+    cycle["checked"] += len(ids)
+    return len(ids) < CLEANUP_BATCH
+
+
+def _remove_old(model):
+    """사흘 지난 기록을 지운다 — id 순 맨 앞 CLEANUP_BATCH 행만 읽고 그중 지난 것만(id 는 쌓은 순서라 오래된 것이 앞에 있다).
+    지울 것이 없어도 표 전체를 훑지 않는다. 맨 앞에 아직 안 지난 행이 끼면 이번 바퀴는 거기서 멈추고 다음 시간에 이어 한다."""
+    def step(cycle: dict, now_ms: int) -> bool:
         with _session() as db:
-            counts = dict(db.exec(select(PushDelivery.state, func.count()).where(
-                PushDelivery.finished_ms >= now_ms - 3_600_000).group_by(PushDelivery.state)).all())
-            oldest = db.exec(select(func.min(PushDelivery.created_ms)).where(PushDelivery.state.in_(LIVE))).first()
-        log.info("push deliveries last hour: %s · oldest live %ss", counts, (now_ms - oldest) // 1000 if oldest else 0)
-    except Exception:
-        log.warning("push cleanup failed", exc_info=True)
+            head = select(model.id).order_by(model.id).limit(CLEANUP_BATCH).scalar_subquery()
+            removed = db.exec(sql_delete(model).where(model.id.in_(head), model.created_ms < now_ms - KEEP_MS)).rowcount
+            db.commit()
+        cycle["removed"][model.__tablename__] += removed
+        return removed < CLEANUP_BATCH
+    return step
+
+
+def _report(cycle: dict, now_ms: int) -> bool:
+    with _session() as db:
+        counts = dict(db.exec(select(PushDelivery.state, func.count()).where(
+            PushDelivery.finished_ms >= now_ms - CLEANUP_EVERY_MS).group_by(PushDelivery.state)).all())
+        oldest_live = db.exec(select(func.min(PushDelivery.created_ms)).where(_LIVE_ROWS)).first()
+        oldest_kept = db.exec(select(PushDelivery.created_ms).order_by(PushDelivery.id).limit(1)).first()
+    log.info("push deliveries last hour: %s · oldest live %ss · cleanup expired=%s events_checked=%s removed=%s "
+             "took=%ss · oldest kept %sh", counts, (now_ms - oldest_live) // 1000 if oldest_live else 0,
+             cycle["expired"], cycle["checked"], cycle["removed"], (now_ms - cycle["started_ms"]) // 1000,
+             (now_ms - oldest_kept) // 3_600_000 if oldest_kept else 0)
+    return True
+
+
+_CLEANUP_STEPS = (_sweep_expired, _close_lingering, _remove_old(PushDelivery), _remove_old(PushOutbox), _report)
 
 
 def send_test(user_id: int, *, now_ms: Optional[int] = None, send: Callable = web_push.send) -> dict:

@@ -2,7 +2,6 @@ import { MoonIcon as PhosphorMoon } from "@phosphor-icons/react/dist/csr/Moon";
 import { SunIcon as PhosphorSun } from "@phosphor-icons/react/dist/csr/Sun";
 import { UserIcon as PhosphorUser } from "@phosphor-icons/react/dist/csr/User";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
-import { QuestionIcon } from "@phosphor-icons/react/dist/csr/Question";
 import { CaretDownIcon } from "@phosphor-icons/react/dist/csr/CaretDown";
 import { ListIcon } from "@phosphor-icons/react/dist/csr/List";
 import { KeyIcon as PhosphorKey } from "@phosphor-icons/react/dist/csr/Key";
@@ -25,7 +24,6 @@ export function MoonIcon() { return <PhosphorMoon {...glyphProps} />; }
 export function SunIcon() { return <PhosphorSun {...glyphProps} />; }
 export function UserIcon() { return <PhosphorUser {...glyphProps} />; }
 export function DownloadIcon() { return <DownloadSimpleIcon {...iconProps} />; }
-export function HelpIcon() { return <QuestionIcon {...iconProps} />; }
 export function ChevronDownIcon() { return <CaretDownIcon {...iconProps} />; }
 export function MenuIcon() { return <ListIcon {...iconProps} />; }
 export function KeyIcon() { return <PhosphorKey {...iconProps} />; }

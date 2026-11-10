@@ -954,7 +954,7 @@ test("워커 — ping 에 답하고, 열린 창이 둘 이상이면 새 워커�
 });
 
 // --- 설치 안내(시안 B안) · 처음 묻기 ------------------------------------------------
-import { installGuide, iosVersion } from "../src/lib/pwaGuide.js";
+import { chromeIntentUrl, installGuide, iosVersion } from "../src/lib/pwaGuide.js";
 import { shouldAskPush } from "../src/lib/push.js";
 
 const text = (parts) => parts.map((part) => (typeof part === "string" ? part : part.br ? " " : part.b || `[${part.icon}]`)).join("");
@@ -966,8 +966,12 @@ test("안드로이드는 설치 창을 띄울 수 있으면 버튼 하나, 못 �
   assert.equal(chrome.button, null);
   assert.deepEqual(chrome.steps.map((s) => s.title), ["⋮ 누르기", "앱 설치", "설치"]);
   assert.equal(chrome.steps[0].hint, null);
-  const samsung = installGuide({ tab: "android", platform: "android", browser: "samsung", canPrompt: false });
-  assert.deepEqual(samsung.steps.map((s) => s.title), ["메뉴", "현재 페이지 추가", "홈 화면"]);
+  for (const canPrompt of [false, true]) {
+    const samsung = installGuide({ tab: "android", platform: "android", browser: "samsung", canPrompt });
+    assert.equal(samsung.button, "chrome", "삼성 인터넷은 '바로 설치'가 돼도 크롬으로 넘긴다(삼성 방식은 '안전하지 않은 앱' 경고)");
+    assert.deepEqual(samsung.steps, []);
+    assert.deepEqual(samsung.fallback.map((s) => s.title), ["메뉴", "현재 페이지 추가", "홈 화면"], "고르면 삼성 방식 3단계");
+  }
   const tablet = installGuide({ tab: "android", platform: "ios", browser: "safari", canPrompt: false, host: "gg-parrot.vercel.app" });
   assert.equal(text(tablet.steps[0].hint), "휴대폰 크롬에서 gg-parrot.vercel.app 을 먼저 열어요.", "다른 휴대폰 안내는 주소를 먼저 열게");
 });
@@ -1048,4 +1052,13 @@ test("처음 묻기는 로그인했고 · 앱으로 열었고 · 꺼져 있고 �
   assert.equal(shouldAskPush({ ...base, permission: "denied" }), false);
   assert.equal(shouldAskPush({ ...base, alreadyAsked: true }), false, "나중에 · 받기 둘 다 한 번 답하면 끝");
   assert.equal(shouldAskPush({ ...base, path: "/login" }), false);
+});
+
+test("크롬에서 설치 — 같은 주소를 크롬에서 열고(?install=1 로 안내가 바로 뜬다), 크롬이 없으면 표시 없이 같은 주소로", () => {
+  assert.equal(chromeIntentUrl("https://gg-parrot.vercel.app/?install=1"),
+    "intent://gg-parrot.vercel.app/?install=1#Intent;scheme=https;package=com.android.chrome;"
+    + "S.browser_fallback_url=https%3A%2F%2Fgg-parrot.vercel.app%2F;end");
+  const kept = chromeIntentUrl("https://gg-parrot.vercel.app/agents?tab=1");
+  assert.match(kept, /^intent:\/\/gg-parrot\.vercel\.app\/agents\?tab=1&install=1#Intent;scheme=https;package=com\.android\.chrome;/);
+  assert.match(kept, /S\.browser_fallback_url=https%3A%2F%2Fgg-parrot\.vercel\.app%2Fagents%3Ftab%3D1;end$/);
 });

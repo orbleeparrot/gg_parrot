@@ -85,12 +85,28 @@ function iosSteps({ browser, version, onPhone, host }) {
   ];
 }
 
+// 삼성 인터넷에서 크롬으로 넘기는 링크 — 같은 주소를 크롬에서 연다(?install=1 이라 설치 안내가 바로 뜬다).
+// 삼성 인터넷이 설치하면 기기 안에서 만든 앱 파일이라 '안전하지 않은 앱' 경고가 뜨고, 크롬은 구글 플레이를 거쳐 경고가 없다.
+// 크롬이 없으면 같은 주소(표시 없이)로 돌아온다 — 그때는 '삼성 인터넷으로 설치'.
+export function chromeIntentUrl(href) {
+  const target = new URL(href);
+  target.searchParams.set("install", "1");
+  const back = new URL(href);
+  back.searchParams.delete("install");
+  return `intent://${target.host}${target.pathname}${target.search}#Intent;scheme=https;package=com.android.chrome;`
+    + `S.browser_fallback_url=${encodeURIComponent(back.toString())};end`;
+}
+
 // 고른 기기(tab)의 안내. 안드로이드에서 브라우저가 설치 창을 띄울 수 있으면(canPrompt) 큰 버튼 하나만(button: "only").
 export function installGuide({ tab, platform, browser, version = 0, canPrompt = false, host = "gg-parrot.vercel.app" }) {
   const own = tab === platform;
   if (platform === "desktop") return { kind: tab, button: null, steps: fromPcSteps(tab), note: tab === "ios" ? "push" : "" };
   if (own && browser === "in-app") return { kind: "in-app", button: null, steps: inAppSteps(platform), note: "" };
   if (tab === "android") {
+    // 삼성 인터넷은 '바로 설치'가 되더라도 크롬으로 넘긴다(11/10 시안 A) — 삼성 방식 3단계는 고르면 보인다(fallback).
+    if (own && browser === "samsung") {
+      return { kind: "android", button: "chrome", steps: [], note: "", fallback: androidSteps({ browser, onPhone: true, host }) };
+    }
     if (own && canPrompt) return { kind: "android", button: "only", steps: [], note: "" };
     return { kind: "android", button: null, steps: androidSteps({ browser, onPhone: own, host }), note: "" };
   }

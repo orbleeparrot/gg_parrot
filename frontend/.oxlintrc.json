@@ -300,6 +300,7 @@
           "app-install-scrim",
           "app-install-steps",
           "app-install-ui",
+          "app-install-why",
           "ask-balance",
           "ask-balance-field",
           "ask-bcard",

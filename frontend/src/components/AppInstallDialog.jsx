@@ -10,13 +10,14 @@ import { DotsThreeIcon } from "@phosphor-icons/react/dist/csr/DotsThree";
 import { DotsThreeVerticalIcon } from "@phosphor-icons/react/dist/csr/DotsThreeVertical";
 import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
 import { ExportIcon } from "@phosphor-icons/react/dist/csr/Export";
+import { GoogleChromeLogoIcon } from "@phosphor-icons/react/dist/csr/GoogleChromeLogo";
 import { ListIcon } from "@phosphor-icons/react/dist/csr/List";
 import { PlusSquareIcon } from "@phosphor-icons/react/dist/csr/PlusSquare";
 import { XIcon } from "@phosphor-icons/react/dist/csr/X";
 import { useModalLayer } from "../hooks/useModalLayer.js";
 import { closeAppInstall, useAppInstallOpen } from "../lib/installDialog.js";
 import { currentDevice, installState, promptInstall, subscribeInstall } from "../lib/pwa.js";
-import { DEVICES, installGuide, iosVersion } from "../lib/pwaGuide.js";
+import { DEVICES, chromeIntentUrl, installGuide, iosVersion } from "../lib/pwaGuide.js";
 import "./AppInstallDialog.css";
 
 const GLYPHS = { "dots-v": DotsThreeVerticalIcon, "dots-h": DotsThreeIcon, share: ExportIcon, add: PlusSquareIcon, menu: ListIcon };
@@ -49,13 +50,15 @@ function InstallSheet({ onClose }) {
   const [tab, setTab] = useState(device.platform === "ios" ? "ios" : "android");
   const [others, setOthers] = useState(device.platform === "desktop");
   const [busy, setBusy] = useState(false);
+  const [samsungWay, setSamsungWay] = useState(false); // 삼성 인터넷: 크롬 대신 삼성 방식 3단계를 골랐다
   const ref = useRef(null);
   const titleId = useId();
   useModalLayer({ open: true, ref, onEscape: onClose, busy, trap: true });
-  const guide = installGuide({
+  const picked = installGuide({
     tab, platform: device.platform, browser: device.browser, version,
     canPrompt: install.canPrompt, host: globalThis.location?.host || "gg-parrot.vercel.app",
   });
+  const guide = picked.button === "chrome" && samsungWay ? { ...picked, button: null, steps: picked.fallback } : picked;
 
   async function installNow() {
     setBusy(true);
@@ -97,6 +100,15 @@ function InstallSheet({ onClose }) {
                 ))}
               </div>
             ) : null}
+            {guide.button === "chrome" ? (
+              <>
+                <a className="btn btn-xl btn-primary app-install-now" href={chromeIntentUrl(globalThis.location?.href || "https://gg-parrot.vercel.app/")}>
+                  <GoogleChromeLogoIcon size={22} weight="bold" aria-hidden="true" />크롬에서 설치
+                </a>
+                <p className="app-install-why">크롬으로 설치하면 경고 없이 설치돼요.</p>
+                <button type="button" className="app-install-others" onClick={() => setSamsungWay(true)}>삼성 인터넷으로 설치</button>
+              </>
+            ) : null}
             {guide.button === "only" ? (
               <button type="button" className="btn btn-xl btn-primary app-install-now" disabled={busy} onClick={installNow}>
                 <DownloadSimpleIcon size={22} weight="bold" aria-hidden="true" />바로 설치
@@ -123,7 +135,7 @@ function InstallSheet({ onClose }) {
             {guide.note === "push" ? (
               <p className="app-install-foot"><BellIcon size={16} weight="bold" aria-hidden="true" />알림은 홈 화면의 껄무새에서 켜요</p>
             ) : null}
-            {!others ? <button type="button" className="app-install-others" onClick={() => setOthers(true)}>다른 기기 설치 방법</button> : null}
+            {!others && guide.button !== "chrome" ? <button type="button" className="app-install-others" onClick={() => setOthers(true)}>다른 기기 설치 방법</button> : null}
           </>
         )}
       </div>

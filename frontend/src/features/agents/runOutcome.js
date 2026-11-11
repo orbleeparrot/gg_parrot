@@ -1,5 +1,5 @@
 // 실행 종료 결과와 종료 확인 문구 — 화면 컴포넌트가 아니라 순수 함수로 두어 테스트한다.
-import { GROSS_TAG, exitRules, positionPnl, realizedPnl } from "../../lib/positionExits.js";
+import { GROSS_TAG, exitRules, positionPnl, realizedPnl, shownMoney, shownPct } from "../../lib/positionExits.js";
 import { formatQuoteAmount, practiceModeLabel } from "../../lib/exchanges.js";
 import { quoteOf } from "../../lib/format.js";
 
@@ -19,19 +19,20 @@ function baseAsset(symbol) {
   return quote ? value.slice(0, -quote.length) : value;
 }
 
-export function toneOf(value) {
-  const n = Number(value) || 0;
+// 손익 색 — 금액이면 symbol 을 넘겨 그 통화의 자릿수로, 아니면 % 자릿수로 0 을 가른다('+0원'이 초록이 되지 않게).
+export function toneOf(value, symbol) {
+  const n = symbol === undefined ? shownPct(value) : shownMoney(value, symbol);
   return n > 0 ? "up" : n < 0 ? "down" : "flat";
 }
 
 // 금액은 세션 종목의 통화로 쓴다 — 원화 종목(KRW-)이면 원화, 아니면 USDT.
 export function formatSignedMoney(value, symbol) {
-  const n = Number(value) || 0;
+  const n = shownMoney(value, symbol);
   return `${signOf(n)}${formatQuoteAmount(Math.abs(n), symbol, { fixed: true })}`;
 }
 
 export function formatSignedPct(value) {
-  const n = Number(value) || 0;
+  const n = shownPct(value);
   return `${signOf(n)}${Math.abs(n).toFixed(2)}%`;
 }
 
@@ -131,7 +132,8 @@ export function describeRunOutcome(session) {
   const realized = realizedPnl(s);
   const realizedTag = !realized.feesIncluded && realized.money !== 0 ? ` · ${GROSS_TAG}` : "";
   const returnTag = s.fees_included === false ? ` · ${GROSS_TAG}` : "";
-  const resultSign = keptPosition ? Math.sign(resultPct || 0) : Math.sign(realized.money);
+  // 화면에 0 으로 보이는 손익은 0 — 0원에 판 실행을 환호하는 얼굴로 끝내지 않는다.
+  const resultSign = keptPosition ? Math.sign(shownPct(resultPct)) : Math.sign(shownMoney(realized.money, s.symbol));
   if (!stopping && !uncertain && !failed) {
     if (resultSign < 0) avatar = "critical";
     else if (keptPosition) avatar = "warning";
@@ -184,9 +186,9 @@ export function describeRunOutcome(session) {
             label: `투입금 대비 총수익률${returnTag}`,
             sub: `${formatSignedMoney(realized.money, s.symbol)} · 투입 ${formatQuoteAmount(s.invested_usdt, s.symbol)}`,
             // 결과 화면이 번 돈 · 투입금을 따로 크게 그린다.
-            money: formatSignedMoney(realized.money, s.symbol), moneyTone: toneOf(realized.money),
+            money: formatSignedMoney(realized.money, s.symbol), moneyTone: toneOf(realized.money, s.symbol),
             invested: formatQuoteAmount(s.invested_usdt, s.symbol) }
-        : { value: realized.money, text: formatSignedMoney(realized.money, s.symbol), tone: toneOf(realized.money), sub: "",
+        : { value: realized.money, text: formatSignedMoney(realized.money, s.symbol), tone: toneOf(realized.money, s.symbol), sub: "",
             label: `총 실현손익${realizedTag}` },
     rows,
   };

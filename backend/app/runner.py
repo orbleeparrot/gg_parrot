@@ -25,6 +25,7 @@ import os
 import re
 import secrets
 import threading
+import uuid
 from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -60,6 +61,7 @@ SESSION_STREAM_RESYNC_SECONDS = max(
 # Web -> local runner handoff tickets are deliberately short-lived bearer
 # credentials. Only their SHA-256 digest is persisted.
 LAUNCH_TICKET_TTL_SECONDS = 120
+RECOVERY_MIN_VERSION = "24"
 _LAUNCH_TICKET_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 # 활성으로 취급하는 종료 명령 값.
 _STOP_MODES = {"stop_only", "close_and_stop"}
@@ -461,7 +463,10 @@ def launch_ticket_status(user_id: int, launch_id: int, *, min_runner_version: st
                 pass
         if status == "rejected":
             payload["runner_version"] = rejected_version
-            payload["min_runner_version"] = _required_version_for(db, row.user_macro_id, min_runner_version)
+            payload["min_runner_version"] = (RECOVERY_MIN_VERSION if row.session_id is not None
+                                             else _required_version_for(db, row.user_macro_id, min_runner_version))
+        if row.session_id is not None:
+            payload["recovery"] = {"session_id": row.session_id}
         return payload
 
 
@@ -578,6 +583,29 @@ def claim_launch_ticket(
         if candidate.expires_ms <= now_ms:
             raise _ticket_error(410, "실행 연결 요청이 만료됐어요. 웹에서 다시 시도해 주세요.")
 
+        if candidate.session_id is not None:
+            if not _version_at_least(runner_version, RECOVERY_MIN_VERSION):
+                db.rollback()
+                mark_launch_ticket_rejected(raw_ticket, runner_version)
+                raise _ticket_error(426, "이전 실행을 복구하려면 실행기를 최신 버전으로 업데이트해 주세요.")
+            session = db.get(RunSession, candidate.session_id)
+            if session is None or session.user_id != candidate.user_id:
+                raise _ticket_error(404, "복구할 실행 기록을 찾을 수 없어요.")
+            available = _recovery_view(session)
+            if not available["available"]:
+                raise _ticket_error(409, available["reason"])
+            result = db.exec(update(RunnerLaunchTicket).where(
+                RunnerLaunchTicket.id == candidate.id, RunnerLaunchTicket.claimed_at == "",
+                RunnerLaunchTicket.expires_ms > now_ms,
+            ).values(claimed_at=claimed_at))
+            if result.rowcount != 1:
+                raise _ticket_error(409, "이미 사용한 실행 연결 요청이에요.")
+            runner_key = _get_or_create_key_row(db, candidate.user_id)
+            response = {"launch_id": candidate.id, "runner_key": runner_key.key,
+                        "recovery": {"session_id": session.id}}
+            db.commit()
+            return response
+
         macro_row = db.get(UserMacro, candidate.user_macro_id)
         if macro_row is None or macro_row.user_id != candidate.user_id:
             raise _ticket_error(404, "연결할 내 매크로를 찾을 수 없어요.")
@@ -684,6 +712,194 @@ def environment_label(row: RunSession) -> str:
     return _MODE_LABELS.get(_run_mode(getattr(row, "mode", "")), "테스트넷")
 
 
+def _locked_session(db, session_id: int) -> RunSession | None:
+    """Serialize a resume with reports and remote controls, across processes."""
+    if db.get_bind().dialect.name == "sqlite":
+        # sqlite's legacy SELECT does not begin a write transaction.
+        if not db.connection().connection.driver_connection.in_transaction:
+            from sqlalchemy import text as sql_text
+            db.exec(sql_text("BEGIN IMMEDIATE"))
+    return db.exec(select(RunSession).where(RunSession.id == session_id).with_for_update()).first()
+
+
+def _recovery_view(row: RunSession) -> dict:
+    if not row.recovery_id:
+        return {"available": False, "reason": "이 실행은 이전 실행기로 시작해 복구 정보가 없어요. 최신 실행기에서 새로 시작해 주세요."}
+    if row.stop_mode:
+        return {"available": False, "reason": "종료가 요청된 실행은 복구할 수 없어요."}
+    stale_ended = row.status == "stopped" and row.note == runner_engine.STALE_RUNNER_NOTE
+    if row.status != "running" and not stale_ended:
+        return {"available": False, "reason": "이미 종료하거나 오류로 멈춘 실행은 복구할 수 없어요."}
+    if row.status == "running" and _is_connected(row):
+        return {"available": False, "reason": "실행기가 아직 연결되어 있어요. 기존 실행기에서 계속해 주세요."}
+    return {"available": True, "reason": "같은 PC의 실행기를 열어 마지막 실행 상태와 거래소 보유 내역을 확인한 뒤 이어가요."}
+
+
+def create_recovery_ticket(user_id: int, session_id: int, launch_environment: str = "production") -> dict:
+    if launch_environment not in {"local", "production"}:
+        raise _ticket_error(422, "지원하지 않는 실행기 연결 환경이에요.")
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=LAUNCH_TICKET_TTL_SECONDS)
+    raw_ticket = secrets.token_urlsafe(32)
+    with get_session() as db:
+        _active_account(db, user_id)
+        session = db.get(RunSession, session_id)
+        if session is None or session.user_id != user_id:
+            raise _ticket_error(404, "복구할 실행 기록을 찾을 수 없어요.")
+        recovery = _recovery_view(session)
+        if not recovery["available"]:
+            raise _ticket_error(409, recovery["reason"])
+        # Zero also works with old SQLite copies whose library ID is NOT NULL.
+        row = RunnerLaunchTicket(user_id=user_id, session_id=session_id, user_macro_id=session.user_macro_id or 0,
+                                 token_hash=_ticket_digest(raw_ticket), testnet=session.testnet,
+                                 created_at=_now_iso(), expires_at=_iso_utc(expires),
+                                 expires_ms=int(expires.timestamp() * 1000))
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {"launch_id": row.id, "status": "ready", "expires_at": row.expires_at,
+                "launch_url": f"ggparrot://launch/?v=2&env={launch_environment}&ticket={raw_ticket}"}
+
+
+_RECOVERY_SNAPSHOT_FIELDS = ("in_position", "position_uncertain", "last_price", "entry_price", "position_qty",
+                             "realized_pnl", "unrealized_pct", "unrealized_net", "unrealized_net_pct", "realized_net")
+
+
+def _recovery_payload(row: RunSession) -> dict:
+    try:
+        macro = json.loads(row.macro_json)
+        state = json.loads(row.state_json) if row.state_json else None
+    except (TypeError, ValueError):
+        raise _ticket_error(409, "저장된 실행 상태를 읽지 못했어요. 실행기 기록과 거래소 보유 내역을 확인해 주세요.")
+    recovery = _recovery_view(row)
+    return {"session_id": row.id, "generation": row.generation, "macro": macro,
+            "macro_digest": row.macro_digest, "mode": row.mode, "testnet": row.testnet,
+            "decides": "local" if row.decides_locally else "server", "engine_version": row.engine_version,
+            "runner_version": row.runner_version, "stop_mode": row.stop_mode,
+            "snapshot": {field: getattr(row, field) for field in _RECOVERY_SNAPSHOT_FIELDS},
+            "strategy_state": state, "recoverable": recovery["available"], "reason": recovery["reason"]}
+
+
+def _bound_recovery_session(db, user_id: int, session_id: int, recovery_id: str) -> RunSession:
+    try:
+        recovery_id = str(uuid.UUID(recovery_id))
+    except (ValueError, TypeError):
+        raise _ticket_error(404, "이 PC에서 복구할 실행 기록을 찾을 수 없어요.")
+    row = _locked_session(db, session_id)
+    if row is None or row.user_id != user_id or not row.recovery_id or not secrets.compare_digest(row.recovery_id, recovery_id):
+        raise _ticket_error(404, "이 PC에서 복구할 실행 기록을 찾을 수 없어요.")
+    return row
+
+
+def recovery_session(user: User, session_id: int, recovery_id: str) -> dict:
+    with get_session() as db:
+        _active_account(db, user.id)
+        row = _bound_recovery_session(db, user.id, session_id, recovery_id)
+        return _recovery_payload(row)
+
+
+def _resume_result(row: RunSession) -> dict:
+    return {"session_id": row.id, "generation": row.generation, "poll_seconds": POLL_SECONDS,
+            "macro_origin": row.macro_origin,
+            "macro_origin_label": macro_signing.ORIGIN_LABELS.get(row.macro_origin, row.macro_origin),
+            "macro_digest": row.macro_digest, "decides": "local" if row.decides_locally else "server",
+            "macro": json.loads(row.macro_json), "mode": row.mode, "testnet": row.testnet}
+
+
+def resume_session(user: User, payload: dict) -> dict:
+    """Reattach only after the desktop reconciles its durable checkpoint with its broker.
+
+    The generation is a fencing token, not permission to place an order. Unknown
+    pre-crash commands are cancelled, never reported as executed or replayed.
+    """
+    version = str(payload.get("runner_version") or "")
+    if not _version_at_least(version, RECOVERY_MIN_VERSION):
+        raise _ticket_error(426, "실행 복구를 지원하는 최신 실행기가 필요해요.")
+    try:
+        resume_id = str(uuid.UUID(payload.get("resume_id", "")))
+    except (ValueError, TypeError):
+        raise _ticket_error(422, "실행 복구 요청 번호가 올바르지 않아요.")
+    sid = int(payload["session_id"])
+    with get_session() as db:
+        _active_account(db, user.id)
+        row = _bound_recovery_session(db, user.id, sid, str(payload["recovery_id"]))
+        # Persisting this operation ID before the request lets the same desktop
+        # recover a lost success response without taking ownership a second time.
+        if (row.last_resume_id == resume_id and row.generation == payload["generation"] + 1
+                and row.status == "running" and not row.stop_mode):
+            return _resume_result(row)
+        recovery = _recovery_view(row)
+        if not recovery["available"]:
+            raise _ticket_error(409, recovery["reason"])
+        if row.generation != payload["generation"]:
+            raise _ticket_error(409, "다른 실행기가 먼저 복구했어요. 실행 상태를 다시 확인해 주세요.")
+        if row.macro_digest != payload.get("macro_digest"):
+            raise _ticket_error(409, "실행 설정이 바뀌었어요. 저장된 설정을 다시 불러와 복구해 주세요.")
+        macro = Macro.model_validate_json(row.macro_json)
+        engine_version = str(payload.get("engine_version") or "")
+        _require_engine_version(macro, engine_version)
+        if row.decides_locally and (not engine_version or engine_version != row.engine_version):
+            raise _ticket_error(426, "실행 판단 엔진 버전이 달라 이전 상태를 복구할 수 없어요.")
+        snapshot = payload.get("snapshot") or {}
+        required = {"in_position", "position_uncertain", "last_price", "entry_price", "position_qty", "realized_pnl", "unrealized_pct"}
+        if not required.issubset(snapshot) or snapshot.get("position_uncertain"):
+            raise _ticket_error(409, "거래소 보유 상태를 확인한 뒤 복구해 주세요.")
+        normalized = {}
+        for field in _RECOVERY_SNAPSHOT_FIELDS:
+            value = snapshot.get(field)
+            if field in {"in_position", "position_uncertain"}:
+                normalized[field] = bool(value)
+            elif value is None and field in NET_PNL_FIELDS:
+                normalized[field] = None
+            else:
+                try:
+                    normalized[field] = float(value)
+                except (TypeError, ValueError):
+                    raise _ticket_error(422, "복구할 포지션 값이 올바르지 않아요.")
+                if not math.isfinite(normalized[field]):
+                    raise _ticket_error(422, "복구할 포지션 값이 올바르지 않아요.")
+        if (normalized["position_qty"] < 0 or normalized["entry_price"] < 0
+                or normalized["in_position"] != (normalized["position_qty"] > 0)
+                or (normalized["in_position"] and normalized["entry_price"] <= 0)):
+            raise _ticket_error(409, "보유 수량과 매입 가격을 확인한 뒤 복구해 주세요.")
+        if row.decides_locally:
+            if not runner_engine.store_local_state(row, payload.get("strategy_state")):
+                raise _ticket_error(409, "이 PC에 저장된 매매 판단 상태를 읽지 못했어요.")
+        else:
+            state = json.loads(row.state_json) if row.state_json else {}
+            if bool(state.get("in_position", False)) != normalized["in_position"]:
+                raise _ticket_error(409, "서버 판단 상태와 거래소 보유 내역이 달라요. 미확정 주문을 먼저 확인해 주세요.")
+        # The row lock fences heartbeats, stop requests and old driver writes.
+        generation = row.generation + 1
+        changed = db.exec(update(RunSession).where(RunSession.id == sid, RunSession.generation == row.generation)
+                          .values(generation=generation))
+        if changed.rowcount != 1:
+            raise _ticket_error(409, "다른 실행기가 먼저 복구했어요.")
+        row.generation = generation
+        row.last_resume_id = resume_id
+        row.status, row.stopped_at, row.note = "running", None, ""
+        row.runner_version = version
+        row.last_heartbeat_at = _now_iso()
+        for field, value in normalized.items():
+            setattr(row, field, value)
+        _track_invested(row)
+        db.exec(update(RunnerCommand).where(RunnerCommand.session_id == sid, RunnerCommand.status == "pending")
+                .values(status="cancelled", error="실행기 재접속으로 취소 — 중단 전 실행 여부는 로컬 기록과 거래소에서 확인"))
+        _append_events(db, row, [{"kind": "info", "event_name": "session.resumed", "severity": "INFO",
+                                 "event_key": f"session:{sid}:resumed:{generation}",
+                                 "operation_id": f"session:{sid}",
+                                 "message": "PC 실행 상태와 보유 내역을 확인하고 기존 실행에 다시 연결했어요.",
+                                 "details": {"generation": generation}}], component="server")
+        db.add(row)
+        result = _resume_result(row)
+        local = row.decides_locally
+        db.commit()
+    if not local:
+        runner_engine.schedule_restart(sid)
+    notify_sessions_changed(user.id)
+    return result
+
+
 # --- 실행기용: 세션 시작/하트비트/종료확정 -----------------------------
 def start_session(user: User, payload: dict) -> dict:
     """실행기가 매크로 구동을 시작할 때 세션을 만든다. session_id 를 돌려준다."""
@@ -706,6 +922,14 @@ def start_session(user: User, payload: dict) -> dict:
     summary = str(payload.get("human_summary", ""))[:300]
     # 시작 요청에 실린 실행기 버전. 예전 실행기는 보내지 않는다(빈 문자열).
     runner_version = str(payload.get("runner_version") or "").strip()[:12]
+    recovery_id = str(payload.get("recovery_id") or "")
+    if recovery_id:
+        try:
+            recovery_id = str(uuid.UUID(recovery_id))
+        except (ValueError, TypeError):
+            raise HTTPException(status_code=422, detail="실행 복구 식별자가 올바르지 않아요.")
+        if not _version_at_least(runner_version, RECOVERY_MIN_VERSION):
+            raise HTTPException(status_code=426, detail="실행 복구를 지원하는 최신 실행기가 필요해요.")
     # 실행기에 묶여 있는 판단 엔진의 세대. 지금 배포된 실행기는 보내지 않는다(빈 문자열).
     engine_version = str(payload.get("engine_version") or "").strip()[:12]
     # 실행기가 스스로 판단하는 세션인가 — 그렇다면 서버는 드라이버를 돌리지 않고 비추기만 한다.
@@ -851,6 +1075,7 @@ def start_session(user: User, payload: dict) -> dict:
             last_heartbeat_at=now,
             runner_version=runner_version,
             engine_version=engine_version,
+            recovery_id=recovery_id,
             decides_locally=decides_locally,
             macro_origin=macro_origin,
             macro_digest=macro_digest,
@@ -896,7 +1121,12 @@ def start_session(user: User, payload: dict) -> dict:
             # 이 세션의 판단을 누가 하는가. 실행기는 이 값을 보고 로컬 엔진을 켠다 —
             # 서버가 거절했는데 실행기가 혼자 판단하면 서버 명령과 겹쳐 두 번 산다.
             "decides": "local" if decides_locally else "server",
+            "generation": row.generation,
         }
+        if recovery_id:
+            # Checkpoints compare this normalized execution macro on restart,
+            # including server defaults and any authoritative bundle splitting.
+            result["macro"] = json.loads(macro_json)
         if bundle_size:
             # 실행기가 봇을 세울 매크로는 **이 레그**다. 실행기가 스스로 쪼개면 자금
             # 반올림이 서버와 갈려 레그 금액의 합이 묶음 금액과 어긋난다 — 나누기는
@@ -932,10 +1162,12 @@ def heartbeat(user: User, session_id: int, snapshot: dict, *, db: Session | None
     # reading user.id afterwards would start a second transaction/checkout.
     user_id = user.id
     with (nullcontext(db) if db is not None else get_session()) as db:
-        row = db.get(RunSession, session_id)
+        row = _locked_session(db, session_id)
         if row is None or row.user_id != user_id:
             # 세션이 없어졌으면 실행기가 안전하게 멈추도록 종료 지시.
             return {"action": "stop_only", "reason": "세션을 찾을 수 없어요.", "commands": []}
+        if row.recovery_id and snapshot.get("generation") != row.generation:
+            return {"action": "stop_only", "reason": "다른 실행기가 이 실행을 복구했어요. 이전 실행을 종료해요.", "commands": []}
         if row.status != "running":
             return {"action": row.stop_mode or "stop_only", "reason": "이미 종료 처리된 세션이에요.", "commands": []}
         _append_events(db, row, events)
@@ -1078,12 +1310,15 @@ def mark_stopped(
     *,
     snapshot: dict | None = None,
     events: list | None = None,
+    generation: int | None = None,
 ) -> dict:
     """실행기가 종료(또는 오류 종료)를 확정 보고한다."""
     with get_session() as db:
-        row = db.get(RunSession, session_id)
+        row = _locked_session(db, session_id)
         if row is None or row.user_id != user.id:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        if row.recovery_id and generation != row.generation:
+            raise HTTPException(status_code=409, detail="다른 실행기가 이 실행을 복구했어요. 이전 종료 보고는 반영하지 않아요.")
         already_final = row.status != "running"
         _append_events(db, row, events)
         if not already_final and row.in_position:
@@ -1638,6 +1873,7 @@ def _session_view(row: RunSession) -> dict:
         "macro_origin_label": macro_signing.ORIGIN_LABELS.get(getattr(row, "macro_origin", "") or "", ""),
         "macro_digest": getattr(row, "macro_digest", "") or "",
         "connected": connected,
+        "recovery": _recovery_view(row),
         "in_position": row.in_position,
         "position_uncertain": row.position_uncertain,
         "last_price": row.last_price,
@@ -1975,7 +2211,8 @@ def _activate_macro(row: RunSession, after: Macro) -> None:
 
 
 def request_settings_change(user_id: int, session_id: int, changes: dict, *,
-                            source: str = "web", apply_mode: str = "immediate") -> dict:
+                            source: str = "web", apply_mode: str = "immediate",
+                            generation: int | None = None) -> dict:
     """구동 중인 매크로의 금액·조건을 바꾼다. 실행기 화면도 웹도 이 길 하나만 쓴다.
 
     실행기가 혼자 바꾸면 서버 전략과 실행기 설정이 갈라지고, 그러면 어느 쪽이 진짜인지
@@ -1991,9 +2228,11 @@ def request_settings_change(user_id: int, session_id: int, changes: dict, *,
     if apply_mode not in _APPLY_MODES:
         raise HTTPException(status_code=400, detail="적용 방식이 올바르지 않아요.")
     with get_session() as db:
-        row = db.get(RunSession, session_id)
+        row = _locked_session(db, session_id)
         if row is None or row.user_id != user_id:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
+        if source == "runner" and row.recovery_id and generation != row.generation:
+            raise HTTPException(status_code=409, detail="다른 실행기가 이 실행을 복구했어요. 이전 설정 요청은 반영하지 않아요.")
         if row.status != "running":
             raise HTTPException(status_code=409, detail="끝난 실행은 설정을 바꿀 수 없어요.")
         if row.stop_mode in _STOP_MODES:
@@ -2137,10 +2376,16 @@ def request_stop(user_id: int, session_id: int, mode: str) -> dict:
     if mode not in _STOP_MODES:
         raise HTTPException(status_code=400, detail="종료 방식이 올바르지 않아요.")
     with get_session() as db:
-        row = db.get(RunSession, session_id)
+        row = _locked_session(db, session_id)
         if row is None or row.user_id != user_id:
             raise HTTPException(status_code=404, detail="세션을 찾을 수 없어요.")
         if row.status != "running":
+            if row.recovery_id and row.status == "stopped" and row.note == runner_engine.STALE_RUNNER_NOTE:
+                # A user stop also revokes recovery after the stale-session
+                # sweeper has already ended the server strategy.
+                row.stop_mode = mode
+                db.add(row)
+                db.commit()
             return {"ok": True, "already_stopped": True}
         row.stop_mode = mode
         db.add(row)

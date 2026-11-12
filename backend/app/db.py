@@ -439,7 +439,9 @@ class RunnerLaunchTicket(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(index=True)
-    user_macro_id: int = Field(index=True)
+    user_macro_id: Optional[int] = Field(default=None, index=True)
+    # A reconnect ticket names a session, never a fresh macro launch.
+    session_id: Optional[int] = None
     token_hash: str = Field(index=True, unique=True)
     testnet: bool = True
     created_at: str
@@ -515,6 +517,10 @@ class RunSession(SQLModel, table=True):
     # 맡기는 실행기는 보내지 않아 빈 문자열이다. 실행기가 스스로 판단하게 되면, "왜 내 봇만
     # 다른 자리에서 샀나" 를 이 값 없이는 답할 수 없다.
     engine_version: str = ""
+    # Local checkpoint identity and fencing generation. Empty preserves legacy runners.
+    recovery_id: str = ""
+    generation: int = 0
+    last_resume_id: str = ""
     # "이 포지션 정리된 뒤부터" 로 예약한 변경 — 새 매크로 JSON 과 그 증빙 줄의 번호.
     # 포지션이 비는 첫 heartbeat 에서 적용하고 둘 다 비운다.
     pending_macro_json: str = ""
@@ -1594,6 +1600,7 @@ def _migrate() -> None:
         },
     }
     added.setdefault("runnerlaunchticket", {}).update({
+        "session_id": "ALTER TABLE runnerlaunchticket ADD COLUMN session_id INTEGER",
         "rejected_at": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_at TEXT DEFAULT ''",
         "rejected_version": "ALTER TABLE runnerlaunchticket ADD COLUMN rejected_version TEXT DEFAULT ''",
         "setup_progress": "ALTER TABLE runnerlaunchticket ADD COLUMN setup_progress TEXT DEFAULT ''",
@@ -1603,6 +1610,9 @@ def _migrate() -> None:
         "rollback_state": "ALTER TABLE runnercommand ADD COLUMN rollback_state TEXT NOT NULL DEFAULT ''",
     })
     added.setdefault("runsession", {}).update({
+        "recovery_id": "ALTER TABLE runsession ADD COLUMN recovery_id TEXT NOT NULL DEFAULT ''",
+        "generation": "ALTER TABLE runsession ADD COLUMN generation INTEGER NOT NULL DEFAULT 0",
+        "last_resume_id": "ALTER TABLE runsession ADD COLUMN last_resume_id TEXT NOT NULL DEFAULT ''",
         "runner_version": "ALTER TABLE runsession ADD COLUMN runner_version TEXT DEFAULT ''",
         "engine_version": "ALTER TABLE runsession ADD COLUMN engine_version TEXT DEFAULT ''",
         "decides_locally": "ALTER TABLE runsession ADD COLUMN decides_locally BOOLEAN DEFAULT FALSE",
@@ -1755,6 +1765,8 @@ _PG_ADDED_COLUMNS = {
         "is_notice": "BOOLEAN NOT NULL DEFAULT FALSE",
     },
     "runsession": {
+        "recovery_id": "TEXT NOT NULL DEFAULT ''", "generation": "INTEGER NOT NULL DEFAULT 0",
+        "last_resume_id": "TEXT NOT NULL DEFAULT ''",
         "macro_json": "TEXT DEFAULT ''", "position_uncertain": "BOOLEAN DEFAULT FALSE",
         "user_macro_id": "INTEGER",
         "runner_version": "TEXT DEFAULT ''",
@@ -1795,6 +1807,7 @@ _PG_ADDED_COLUMNS = {
     },
     "runnercommand": {"rollback_state": "TEXT NOT NULL DEFAULT ''"},
     "runnerlaunchticket": {
+        "session_id": "INTEGER",
         "rejected_at": "TEXT DEFAULT ''",
         "rejected_version": "TEXT DEFAULT ''",
         "setup_progress": "TEXT DEFAULT ''",

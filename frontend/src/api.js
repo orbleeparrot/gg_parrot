@@ -549,8 +549,6 @@ export const api = {
     }),
   runnerLaunchTicketStatus: (launchId) =>
     req(`/api/me/runner/launch-tickets/${encodeURIComponent(launchId)}`),
-  runnerReconnect: (sessionId) =>
-    req(`/api/me/runner/sessions/${encodeURIComponent(sessionId)}/reconnect`, { method: "POST" }),
   runnerLaunchTicketClaim: (ticket, runnerVersion = "5") =>
     req("/api/runner/launch-tickets/claim", {
       method: "POST",

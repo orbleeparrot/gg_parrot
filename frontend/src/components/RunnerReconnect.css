@@ -1,9 +1,0 @@
-.runner-reconnect-dialog { display: grid; gap: 16px; width: min(100%, 480px); padding: 24px; max-height: calc(100dvh - 32px); overflow-y: auto; }
-.runner-reconnect-dialog p,
-.runner-reconnect-dialog [role="status"] { margin: 0; font-size: 14px; line-height: 1.65; color: rgb(var(--c-slate-700)); }
-.runner-reconnect-dialog .runner-reconnect-note { padding: 12px; border-radius: 8px; background: rgb(var(--c-slate-100)); }
-.runner-reconnect-dialog [role="alert"] { color: rgb(var(--c-red-600)); }
-.agent-macro-dock-actions:has(.runner-reconnect-button) { flex-wrap: wrap; }
-@media (max-width: 479px) {
-  .agent-macro-dock-actions .runner-reconnect-button { grid-column: 1 / -1; }
-}

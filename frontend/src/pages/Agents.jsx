@@ -22,7 +22,6 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import { Loading } from "../components/Page.jsx";
 import ConfirmDialog from "../components/ConfirmDialog.jsx";
 import RunnerSettingsDialog from "../components/RunnerSettingsDialog.jsx";
-import RunnerReconnect from "../components/RunnerReconnect.jsx";
 import AppToast from "../components/AppToast.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import { AgentHistoryList, AgentIdle, AgentViewTabs } from "../components/AgentHistory.jsx";
@@ -102,7 +101,6 @@ function MacroDock({ sessions, selected, busy, onChange, onStop, onDelete, onEdi
 
       {/* 실행 상태·실행기 버전·매크로 출처는 오른쪽 열 위 포지션 블록(PositionStrip)이 맡는다. */}
       <div className="agent-macro-dock-actions">
-        <RunnerReconnect key={selected.session_id} session={selected} busy={busy} />
         <button
           type="button"
           disabled={busy || !settingsEditable}
@@ -145,7 +143,6 @@ function HistoryDock({ session, busy, pinBusy, onBack, onTogglePin, onDelete }) 
         </span>
       </div>
       <div className="agent-macro-dock-actions">
-        <RunnerReconnect key={session.session_id} session={session} busy={busy} />
         <button type="button" className="btn btn-m btn-secondary" aria-pressed={!!session.pinned} disabled={pinBusy === session.session_id} onClick={() => onTogglePin(session)}>
           {session.pinned ? "보관 풀기" : "보관하기"}
         </button>

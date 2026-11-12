@@ -391,6 +391,7 @@ class UserMacroSaveRequest(BaseModel):
 
 # --- 매크로 실행기(로컬 exe) 연동 모델 ---------------------------------
 class RunnerStartRequest(BaseModel):
+    recovery_id: str = Field(default="", max_length=36)
     # Stable ID of the signed-in account's saved macro. None keeps old runners
     # compatible; when supplied, the backend verifies ownership and exact
     # normalized macro equality before creating the session.
@@ -432,6 +433,7 @@ class RunnerStartRequest(BaseModel):
 
 class RunnerHeartbeatRequest(BaseModel):
     session_id: int
+    generation: Optional[int] = Field(default=None, ge=0)
     position_uncertain: bool = False
     in_position: bool = False
     last_price: float = 0.0
@@ -460,6 +462,7 @@ class RunnerHeartbeatRequest(BaseModel):
 
 class RunnerStoppedRequest(BaseModel):
     session_id: int
+    generation: Optional[int] = Field(default=None, ge=0)
     status: str = "stopped"  # stopped | error
     note: str = ""
     snapshot: Optional[dict] = None
@@ -468,6 +471,21 @@ class RunnerStoppedRequest(BaseModel):
 
 class RunnerEventBatchRequest(BaseModel):
     events: list[dict] = Field(default_factory=list, max_length=100)
+
+
+class RunnerRecoveryRequest(BaseModel):
+    session_id: int
+    recovery_id: str = Field(min_length=36, max_length=36)
+
+
+class RunnerResumeRequest(RunnerRecoveryRequest):
+    resume_id: str = Field(min_length=36, max_length=36)
+    generation: int = Field(ge=0)
+    runner_version: str
+    engine_version: str = ""
+    macro_digest: str
+    snapshot: dict
+    strategy_state: Optional[dict] = None
 
 
 class RunnerStopRequest(BaseModel):
@@ -497,6 +515,7 @@ class RunnerSelfSettingsRequest(RunnerSettingsRequest):
     """
 
     session_id: int
+    generation: Optional[int] = Field(default=None, ge=0)
 
 
 class RunnerLaunchTicketCreateRequest(BaseModel):
@@ -2748,7 +2767,8 @@ def runner_self_change_settings(
     것이 이 설계의 요점이다. 출처는 요청이 뭐라 하든 "runner" 로 못 박는다.
     """
     return runner_mod.request_settings_change(
-        user.id, req.session_id, req.changes, source="runner", apply_mode=req.apply_mode)
+        user.id, req.session_id, req.changes, source="runner", apply_mode=req.apply_mode,
+        generation=req.generation)
 
 
 @app.post("/api/runner/heartbeat")
@@ -2776,8 +2796,21 @@ def runner_entry_preview(req: RunnerEntryPreviewRequest, user: User = Depends(_r
 @app.post("/api/runner/stopped")
 def runner_stopped(req: RunnerStoppedRequest, user: User = Depends(_runner_user)) -> dict:
     return runner_mod.mark_stopped(
-        user, req.session_id, req.status, req.note, snapshot=req.snapshot, events=req.events
+        user, req.session_id, req.status, req.note, snapshot=req.snapshot, events=req.events,
+        generation=req.generation,
     )
+
+
+@app.post("/api/runner/recovery")
+def runner_recovery(req: RunnerRecoveryRequest, response: Response, user: User = Depends(_runner_user)) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.recovery_session(user, req.session_id, req.recovery_id)
+
+
+@app.post("/api/runner/resume")
+def runner_resume(req: RunnerResumeRequest, response: Response, user: User = Depends(_runner_user)) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.resume_session(user, req.model_dump())
 
 
 @app.post("/api/runner/sessions/{session_id}/events")
@@ -2917,6 +2950,15 @@ def runner_request_stop(
     session_id: int, req: RunnerStopRequest, user: User = Depends(auth_mod.current_user)
 ) -> dict:
     return runner_mod.request_stop(user.id, session_id, req.mode)
+
+
+@app.post("/api/me/runner/sessions/{session_id}/reconnect")
+def runner_reconnect(
+    session_id: int, request: Request, response: Response,
+    user: User = Depends(auth_mod.current_user),
+) -> dict:
+    response.headers["Cache-Control"] = "no-store"
+    return runner_mod.create_recovery_ticket(user.id, session_id, _runner_launch_environment(request))
 
 
 @app.post("/api/me/runner/sessions/{session_id}/settings")

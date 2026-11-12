@@ -13,6 +13,7 @@ import useAdaptivePolling from "../hooks/useAdaptivePolling.js";
 import ConfirmDialog from "./ConfirmDialog.jsx";
 import { describeDeleteConfirm, describeStopConfirm } from "../features/agents/runOutcome.js";
 import { RunnerKeyPanel } from "./RunnerKeyPanel.jsx";
+import RunnerReconnect from "./RunnerReconnect.jsx";
 import { Icon } from "./icons.jsx";
 
 // 내 매크로 실행 현황 — 실행기(exe)가 올리는 세션을 실시간으로 보여주고,
@@ -64,6 +65,7 @@ function SessionCard({ s, onStop, onDelete, busy }) {
           {stopped && <span className="badge badge-flat">{s.status === "error" ? "오류 종료" : "종료됨"}</span>}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <RunnerReconnect key={s.session_id} session={s} busy={busy} small />
           {!stopped && !stopping && (
             <>
               <button onClick={() => onStop(s.session_id, "stop_only")} disabled={busy}

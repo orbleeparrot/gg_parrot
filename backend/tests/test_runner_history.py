@@ -11,6 +11,15 @@ from app.db import RunnerCommand, RunSession, RunSessionEvent, User, get_session
 NOW = datetime(2026, 10, 2, 12, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _history_clock(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+    monkeypatch.setattr(runner_mod, "datetime", Clock)
+
+
 def _iso(dt):
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -133,7 +142,7 @@ def _ended_at(db, user_id, ended, pinned=False):
 
 
 def test_list_hides_expired_records_before_cleanup_runs(user_id):
-    real_now = datetime.now(timezone.utc)
+    real_now = NOW
     with get_session() as db:
         fresh = _ended_at(db, user_id, real_now - timedelta(days=2))
         expired = _ended_at(db, user_id, real_now - timedelta(days=31))

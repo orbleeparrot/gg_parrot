@@ -79,10 +79,11 @@ def _now_ms() -> int:
 class _Live:
     """돌고 있는 세션 하나 — 드라이버·틱 태스크·마감봉 구독."""
 
-    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved", "exchange", "rolled_back")
+    __slots__ = ("session_id", "driver", "task", "subs", "stop_flag", "last_checkpoint", "unsaved", "exchange", "rolled_back", "generation")
 
     def __init__(self, session_id: int, driver: StrategyDriver, exchange: str = "binance") -> None:
         self.session_id = session_id
+        self.generation = 0
         self.driver = driver
         # 시세·봉을 어느 거래소에서 읽을지. 세션 행에는 거래소 칸이 없어 매크로에서 가져온다 —
         # 안 넘기면 KRW 종목을 바이낸스에서 찾게 된다.
@@ -144,6 +145,8 @@ async def restart_driver(session_id: int) -> bool:
     마지막 체크포인트 뒤의 상태(이를테면 서 있던 진입 의도)가 사라진다. 체결은 ``_persist_fill``
     이 그때그때 저장하므로 포지션 자체는 잃지 않지만, 잃지 않아도 될 것을 잃을 이유가 없다.
     """
+    while session_id in _starting:
+        await asyncio.sleep(0.05)
     live = _drivers.get(session_id)
     if live is not None:
         try:
@@ -172,19 +175,20 @@ def _load_session(session_id: int) -> Optional[dict]:
         row = db.get(RunSession, session_id)
         if row is None or row.status != "running":
             return None
-        return {"symbol": row.symbol, "macro_json": row.macro_json, "state_json": row.state_json}
+        return {"symbol": row.symbol, "macro_json": row.macro_json, "state_json": row.state_json,
+                "generation": row.generation}
 
 
-def _note_start_failure(session_id: int) -> None:
+def _note_start_failure(session_id: int, generation: int | None = None) -> None:
     """드라이버를 못 만들었다는 걸 세션 note·error 이벤트로 남긴다(최선 노력 — 실패해도 호출자가 삼킨다).
 
     조용히 실패하면 실행기는 '연결됨' 인데 신호가 영영 안 오는 세션이 된다 — 사용자가 마이페이지에서 알아야 한다.
     """
-    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+    from .runner import _append_events, _locked_session
 
     with get_session() as db:
-        row = db.get(RunSession, session_id)
-        if row is None:
+        row = _locked_session(db, session_id)
+        if row is None or (generation is not None and row.generation != generation):
             return
         row.note = START_FAIL_NOTE
         db.add(row)
@@ -207,16 +211,16 @@ def _is_portfolio_session(session_id: int) -> bool:
         return False
 
 
-def _refuse_portfolio_session(session_id: int) -> None:
+def _refuse_portfolio_session(session_id: int, generation: int | None = None) -> None:
     """여러 종목 세션을 닫는다 — note·stop 이벤트로 이유를 남긴다(최선 노력).
 
     'running 인데 신호가 영영 안 오는 세션' 으로 남겨 두면 사용자는 실행기가 돌고 있다고 믿는다.
     """
-    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+    from .runner import _append_events, _locked_session
 
     with get_session() as db:
-        row = db.get(RunSession, session_id)
-        if row is None or row.status != "running":
+        row = _locked_session(db, session_id)
+        if row is None or row.status != "running" or (generation is not None and row.generation != generation):
             return
         row.status = "stopped"
         row.stopped_at = _now_iso()
@@ -257,7 +261,7 @@ async def _start_driver(session_id: int) -> bool:
     except Exception:
         log.exception("runner engine: session %s macro invalid", session_id)
         try:
-            await asyncio.to_thread(_note_start_failure, session_id)
+            await asyncio.to_thread(_note_start_failure, session_id, info.get("generation", 0))
         except Exception:
             log.exception("runner engine: session %s could not record start failure", session_id)
         return False
@@ -265,11 +269,12 @@ async def _start_driver(session_id: int) -> bool:
         # build_driver 는 레그 하나만 만든다 — 되살리면 매크로의 초기자본 전액이 첫 종목에 들어간다(실돈 주문).
         # 관문이 생기기 전에 시작한 세션이 재기동마다 여기로 오므로, 모든 시작 경로의 마지막 관문이 여기다.
         try:
-            await asyncio.to_thread(_refuse_portfolio_session, session_id)
+            await asyncio.to_thread(_refuse_portfolio_session, session_id, info.get("generation", 0))
         except Exception:
             log.exception("runner engine: session %s could not record portfolio refusal", session_id)
         return False
     live = _Live(session_id, driver, macro.exchange)
+    live.generation = info.get("generation", 0)
     # 국내 거래소는 거래소 인자를 실어 보낸다. 바이낸스는 인자 없이 부르는 옛 호출 모양을 그대로 둔다(candle_feed 와 같은 규칙).
     feed_kwargs = {} if live.exchange == "binance" else {"exchange": live.exchange}
     keys = driver.candle_keys()
@@ -374,7 +379,7 @@ async def _run(live: _Live) -> None:
         # 틱 한 번의 저장 실패는 _tick_once 가 삼킨다 — 여기까지 온 건 예상 못 한 오류. 세션에 흔적을 남긴다.
         log.exception("runner engine: session %s loop died", live.session_id)
         try:
-            await asyncio.to_thread(_note_loop_error, live.session_id)
+            await asyncio.to_thread(_note_loop_error, live.session_id, live.generation)
         except Exception:
             log.exception("runner engine: session %s could not record loop error", live.session_id)
     finally:
@@ -384,13 +389,13 @@ async def _run(live: _Live) -> None:
             await stop_driver(live.session_id)
 
 
-def _note_loop_error(session_id: int) -> None:
+def _note_loop_error(session_id: int, generation: int | None = None) -> None:
     """루프가 죽었다는 걸 세션 note·이벤트로 남긴다(최선 노력 — 실패해도 호출자가 삼킨다)."""
-    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+    from .runner import _append_events, _locked_session
 
     with get_session() as db:
-        row = db.get(RunSession, session_id)
-        if row is None:
+        row = _locked_session(db, session_id)
+        if row is None or (generation is not None and row.generation != generation):
             return
         row.note = LOOP_ERROR_NOTE
         db.add(row)
@@ -459,11 +464,11 @@ def _runner_is_stale(row: RunSession, now: datetime) -> bool:
 
 def _persist_state(live: _Live, state_json: str) -> None:
     """체크포인트. 실행기 heartbeat 가 오래 끊긴 세션은 여기서 닫고(stopped) 루프도 멈춘다."""
-    from .runner import _append_events, notify_sessions_changed  # 늦은 import: runner ↔ runner_engine 순환 방지
+    from .runner import _append_events, _locked_session, notify_sessions_changed
 
     with get_session() as db:
-        row = db.get(RunSession, live.session_id)
-        if row is None or row.status != "running":
+        row = _locked_session(db, live.session_id)
+        if row is None or row.status != "running" or row.generation != getattr(live, "generation", 0):
             live.stop_flag = True
             return
         row.state_json = state_json
@@ -505,11 +510,11 @@ def _rollback_json(driver: StrategyDriver, fill: Fill) -> str:
 
 
 def _persist_fill(live: _Live, fill: Fill, state_json: str, rollback_json: str = "") -> None:
-    from .runner import _append_events  # 늦은 import: runner ↔ runner_engine 순환 방지
+    from .runner import _append_events, _locked_session
 
     with get_session() as db:
-        row = db.get(RunSession, live.session_id)
-        if row is None or row.status != "running":
+        row = _locked_session(db, live.session_id)
+        if row is None or row.status != "running" or row.generation != getattr(live, "generation", 0):
             live.stop_flag = True
             return
         cmd, created = upsert_command(db, row, command_from_fill(fill, live.driver.initial), _now_ms(),
